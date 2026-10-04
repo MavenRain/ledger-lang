@@ -154,11 +154,31 @@ test('invalid source UTF-8 is diagnosed in the reactor at the first bad byte', (
   assert.equal(JSON.parse(compile(Uint8Array.from([...prefix, 0xff, 0x22]))).error.byte, prefix.length);
 });
 
-test('checker fuel bounds deep nesting at the token where fuel runs out', () => {
+test('checker fuel bounds deep nesting at the token where fuel runs out', async () => {
   const source = 'def a : Nat := ' + '('.repeat(600) + '0' + ')'.repeat(600);
   const error = reject(source, /fuel exhausted/);
   assert.ok(error.byte > 'def a : Nat := '.length);
   assert.equal(source[error.byte], '(');
+  // Pin the measured limits stated in README.md. Each count includes the
+  // innermost form: the stated count compiles and one more exhausts fuel.
+  const readme = (await readFile(new URL('../README.md', import.meta.url), 'utf8')).replace(/\s+/g, ' ');
+  const limits = readme.match(/definition are (\d+) nested parentheses, (\d+) nested `Option` type formers, (\d+) nested `textByte` or `cons` terms, and (\d+) nested `attrsField` terms\./);
+  assert.ok(limits, 'README.md states the fuel limits');
+  const [parens, options, terms, attrs] = limits.slice(1).map(Number);
+  const nest = (outer, inner, count) => Array.from({ length: count - 1 }, (_, index) => outer(index)).join('')
+    + inner(count - 1) + ')'.repeat(count - 1);
+  const forms = [
+    [parens, count => 'def a : Nat := ' + '('.repeat(count) + '0' + ')'.repeat(count)],
+    [options, count => 'def a : ' + nest(() => 'Option (', () => 'Option Text', count) + ' := none'],
+    [terms, count => 'def a : Text := ' + nest(() => 'textByte 97 (', () => 'textByte 97 textEnd', count)],
+    [terms, count => 'def a : List Nat := ' + nest(() => 'cons 0 (', () => 'cons 0 nil', count)],
+    [attrs, count => 'def a : Attrs := ' + nest(index => `attrsField "k${index}" (valueNat 0) (`,
+      index => `attrsField "k${index}" (valueNat 0) attrsEnd`, count)],
+  ];
+  for (const [limit, form] of forms) {
+    assert.equal(values(form(limit)).length, 1, form(limit).slice(0, 40));
+    reject(form(limit + 1), /fuel exhausted/);
+  }
 });
 
 const sharedValues = () => {

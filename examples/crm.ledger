@@ -1,0 +1,31 @@
+-- M0 constructs these values. Entry hashing and projection belong to M1.
+def orgKind : Kind := kindParty
+def orgHash : Hash := hashOf "org-entry"
+def org : Ref orgKind := refTo orgHash
+def person : Ref kindParty := refTo (hashOf "person-entry")
+def deal : Ref kindCommercial := refTo (hashOf "deal-entry")
+def evidence : Ref kindArtifact := refTo (hashOf "email-entry")
+
+def company : Party := makeParty partyOrg "Acme" (some "Acme Ltd")
+  (cons (makeIdentifier systemDomain "acme.example" none) nil)
+  attrsEnd none none
+def provenance : Provenance := makeProvenance (some evidence) none (some 95)
+def membership : Membership := makeMembership person org (some "Buyer")
+  flagYes none provenance attrsEnd
+def commercial : Commercial := makeCommercial commercialDeal "Annual plan" org
+  "negotiation" (some 250000) "USD" (some "2026-12-01") statusOpen attrsEnd none
+def commitment : Commitment := makeCommitment deal commitmentTerm "Payment terms"
+  (valueText "net_30") none commitmentProposed none provenance
+def artifact : Artifact := makeArtifact artifactEmail "content-digest"
+  "file:///mail/quote.eml" "message/rfc822"
+  (cons (accountParty org) (cons (accountCommercial deal) nil)) attrsEnd
+def event : Event := makeEvent eventNoteAdded (subjectCommercial deal)
+  (some evidence) none (attrsField "note" (valueText "Quote received") attrsEnd) none
+def assignment : Assignment := makeAssignment (accountCommercial deal) person
+  roleOwner none none provenance
+def requirement : Requirement := makeRequirement (some (cons "buyer" nil))
+  (some (cons commitmentTerm nil)) none (some 15)
+def rule : AclRule := makeAclRule "sales" (cons permissionRead (cons permissionWrite nil)) none
+def policy : Policy := makePolicy "Deal approval" (scopeCommercial commercialDeal)
+  (some "negotiation") (some "closed") requirement (cons rule nil) flagYes
+def entry : Entry := makeEntry none (actorAgent "crm-import") (createsParty company)

@@ -40,7 +40,7 @@ def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
           case (expectMark 58 tail) as colon in Parsed return Parsed Binding with
           | parseError at message => parseError at message
           | parsed ignored rest => (
-            case (parseType fuel 0 rest) as declared in Parsed return Parsed Binding with
+            case (parseType fuel 0 environment rest) as declared in Parsed return Parsed Binding with
             | parseError at message => parseError at message
             | parsed ty afterType => (
               case (expectMark 61 afterType) as assign in Parsed return Parsed Binding with

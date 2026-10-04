@@ -3,36 +3,48 @@
 Date: 2026-10-04. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
-`make check test` passes in 8.0 seconds: the host checks the complete
-compiler, builds the Wasm reactor, and runs 61 integration tests with zero
-failures. Alone, `make check` takes 0.56 seconds and `make build` takes 1.23
-seconds.
+`make check test` passes: the host checks the complete compiler, builds the
+Wasm reactor, and runs 156 integration tests with zero failures. The current
+gate took 10.1 seconds; the test runner reported 6.2 seconds. In the
+isolated checkout the host was selected with
+`MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
-The tests cover the supported type and constructor forms, earlier definition
-references, declaration and attribute order, Option presence for `Option`
-and `Value` payloads, UTF-8 validation, string escaping, control and DEL
-bytes, Nat boundaries, comment ends, parenthesized arguments, malformed and
-forbidden input, and duplicate names and keys. They also exercise the
-65,536-byte input boundary, parsing depth fuel, and the output budget per
-emitted byte, also for shared values. Error tests check the reported byte
-for invalid UTF-8, fuel exhaustion, and errors found during output. The
-command-line tests run both `sh bin/ledgerc` and `node bin/ledgerc.mjs`.
+The original 61 tests still cover scalar and container constructors, earlier
+definition references, declaration and attribute order, Option presence for
+`Option` and `Value` payloads, UTF-8, escaping, control and DEL bytes, Nat
+boundaries, comments, parenthesized arguments, malformed and forbidden input,
+and duplicate names and keys. They exercise the 65,536-byte source boundary,
+parsing depth fuel, the byte output budget, and shared values. The fuel test
+reads the measured limits from README.md and checks that each stated count
+compiles and that one more form exhausts fuel. Error tests check source byte
+positions. CLI tests run both `sh bin/ledgerc` and `node bin/ledgerc.mjs`.
 
-In one run, the slowest tests were the command-line test (5.4 seconds),
-long names and keys (2.1 seconds), and a 65,536-byte source in the reactor
-(1.0 second). Long names and keys that share a long tail compile in linear
-time.
+The 95 schema tests add coverage for Hash, all eight Ref indices, and every
+constructor of the remaining 28 schema families. Conformance cases read
+`core/schema.mech`, independently of compiler metadata, and verify:
 
-The review inputs also ran through `bin/ledgerc`: 169 sources, including
-65,536-byte shapes for long names, keys, strings, escapes, comments, and
-shared values. Each gave the expected result or diagnostic. The slowest
-took 2.5 seconds. Inputs whose output exceeds the budget stop with
-`output budget exceeded` in 1.7 seconds or less.
+- All 87 record, enum, and variant constructors, including fieldless
+  constructors in mixed families.
+- Exact field names and order, nested values, argument types, and rejection
+  of missing and extra arguments.
+- Ref kind mismatches in record fields, including Option fields and Refs
+  inside the List fields `Artifact.subjects` and `Party.identifiers`.
+- Kind alias normalization, all pairs of different Ref kinds, and Ref types
+  nested in Option, List, Prod, and Sum.
+- Rejection of non-Kind, unknown, and forward indices; byte diagnostics and
+  bounded deeply parenthesized indices.
+- Reservation of implemented schema names, nominal record aliases, Hash's
+  distinct type, nested Option presence, and invalid UTF-8 inside a record.
+- `examples/crm.ledger` through the public CLI, covering all eight business
+  record families and a nested Entry. The test compares all 18 instances,
+  including field order, with literal expected JSON.
 
-The full design in `SPEC.md` is not implemented by this slice. See
-[STATUS.md](STATUS.md) for remaining M0 work and [README.md](../README.md)
-for supported syntax and resource limits.
+Historical measurements for the initial slice included 169 review inputs
+through the CLI and a Bend 2 Wasm generation timeout at 600 seconds. Those
+external review inputs were not rerun for this slice. The committed source
+and resource-boundary regression tests were rerun as part of the full gate.
+Neither mechanism-lang compiler checkout was edited.
 
-The Bend 2 compiler passed an earlier host check, but its Wasm generation
-reached a 600-second timeout. The installed OCaml compiler built a reactor
-in 0.85 seconds. Both compiler checkouts were used without source edits.
+The full design in `SPEC.md` is not implemented. See [STATUS.md](STATUS.md)
+for remaining M0 work and [README.md](../README.md) for supported syntax and
+resource limits. Entry hashing and projection remain M1 work.

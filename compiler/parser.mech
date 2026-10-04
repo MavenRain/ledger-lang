@@ -23,11 +23,48 @@ def closeParsed : (0 A : Type 0) -> A -> List Token -> Parsed A :=
 
 def typeFormer : Text -> Nat := fun (name : Text) =>
   boolOr (sameText name sOption) (boolOr (sameText name sList)
-    (boolOr (sameText name sProd) (sameText name sSum)))
+    (boolOr (sameText name sProd) (boolOr (sameText name sSum) (sameText name sRef))))
+
+-- Only Kind constants and checked earlier Kind bindings can index Ref.
+def kindBinding : Binding -> Option Text := fun (item : Binding) =>
+  case item as self in Binding return Option Text with
+  | binding name ty value => (
+      case (natEq (sameType ty tyKind) 1) as isKind return Option Text with
+      | 0 (x : prod ()) => none
+      | 1 (x : prod ()) => asText value)
+
+def rec parseKindIndex : Fuel -> List Binding -> List Token -> Parsed Text :=
+  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Text with
+  | fuelEnd => parseError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case tokens as self in List return Parsed Text with
+    | nil => parseError 0 eIndex
+    | cons head tail => (
+      case head as token in Token return Parsed Text with
+      | numberToken position number => parseError position eIndex
+      | stringToken position text => parseError position eIndex
+      | punctuation position mark => (
+          case (natEq mark 40) as opening return Parsed Text with
+          | 0 (x : prod ()) => parseError position eIndex
+          | 1 (x : prod ()) => (
+              case (parseKindIndex more environment tail) as inside in Parsed return Parsed Text with
+              | parseError at message => parseError at message
+              | parsed kind rest => closeParsed Text kind rest))
+      | identifier position name => (
+          case (lookup name environment) as found in Option return Parsed Text with
+          | some item => (
+              case (kindBinding item) as checked in Option return Parsed Text with
+              | none => parseError position eIndex
+              | some kind => parsed kind tail)
+          | none => (
+              case (constructorPlan tyKind name) as constant in Option return Parsed Text with
+              | none => parseError position eIndex
+              | some selected => parsed name tail))))
 
 -- An argument (atom = 1) is a nullary type name or a parenthesized type.
-def rec parseType : Fuel -> Nat -> List Token -> Parsed LType :=
-  fun (fuel : Fuel) (atom : Nat) (tokens : List Token) =>
+def rec parseType : Fuel -> Nat -> List Binding -> List Token -> Parsed LType :=
+  fun (fuel : Fuel) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Parsed LType with
   | fuelEnd => parseError (firstPosition tokens) eFuel
   | fuelMore more => (
@@ -41,7 +78,7 @@ def rec parseType : Fuel -> Nat -> List Token -> Parsed LType :=
           case (natEq mark 40) as opening return Parsed LType with
           | 0 (x : prod ()) => parseError position eType
           | 1 (x : prod ()) => (
-              case (parseType more 0 tail) as inside in Parsed return Parsed LType with
+              case (parseType more 0 environment tail) as inside in Parsed return Parsed LType with
               | parseError at message => parseError at message
               | parsed value rest => closeParsed LType value rest))
       | identifier position name => (
@@ -71,32 +108,40 @@ def rec parseType : Fuel -> Nat -> List Token -> Parsed LType :=
                     | 0 (x : prod ()) => (
                       case (natEq (sameText name sOption) 1) as named return Parsed LType with
                       | 1 (x : prod ()) => (
-                        case (parseType more 1 tail) as first in Parsed return Parsed LType with
+                        case (parseType more 1 environment tail) as first in Parsed return Parsed LType with
                         | parseError at message => parseError at message
                         | parsed a rest => parsed (tyOption a) rest)
                       | 0 (x : prod ()) => (
                         case (natEq (sameText name sList) 1) as named return Parsed LType with
                         | 1 (x : prod ()) => (
-                          case (parseType more 1 tail) as first in Parsed return Parsed LType with
+                          case (parseType more 1 environment tail) as first in Parsed return Parsed LType with
                           | parseError at message => parseError at message
                           | parsed a rest => parsed (tyList a) rest)
                         | 0 (x : prod ()) => (
                           case (natEq (sameText name sProd) 1) as named return Parsed LType with
                           | 1 (x : prod ()) => (
-                            case (parseType more 1 tail) as first in Parsed return Parsed LType with
+                            case (parseType more 1 environment tail) as first in Parsed return Parsed LType with
                             | parseError at message => parseError at message
                             | parsed a rest => (
-                                case (parseType more 1 rest) as second in Parsed return Parsed LType with
+                                case (parseType more 1 environment rest) as second in Parsed return Parsed LType with
                                 | parseError at message => parseError at message
                                 | parsed b after => parsed (tyProd a b) after))
                           | 0 (x : prod ()) => (
                             case (natEq (sameText name sSum) 1) as named return Parsed LType with
                             | 1 (x : prod ()) => (
-                              case (parseType more 1 tail) as first in Parsed return Parsed LType with
+                              case (parseType more 1 environment tail) as first in Parsed return Parsed LType with
                               | parseError at message => parseError at message
                               | parsed a rest => (
-                                  case (parseType more 1 rest) as second in Parsed return Parsed LType with
+                                  case (parseType more 1 environment rest) as second in Parsed return Parsed LType with
                                   | parseError at message => parseError at message
                                   | parsed b after => parsed (tySum a b) after))
                             | 0 (x : prod ()) => (
-                              parseError position eType)))))))))))))))
+                              case (natEq (sameText name sRef) 1) as indexed return Parsed LType with
+                              | 1 (x : prod ()) => (
+                                  case (parseKindIndex more environment tail) as index in Parsed return Parsed LType with
+                                  | parseError at message => parseError at message
+                                  | parsed kind rest => parsed (tyRef kind) rest)
+                              | 0 (x : prod ()) => (
+                                  case (schemaType name) as schema in Option return Parsed LType with
+                                  | none => parseError position eType
+                                  | some ty => parsed ty tail))))))))))))))))

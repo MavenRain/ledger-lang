@@ -116,10 +116,17 @@ mu LType : Type 0 with
 | tyValues : LType
 | tyAttrs : LType
 | tyKind : LType
+| tyHash : LType
+| tyRef : Text -> LType
+| tySchema : Text -> LType
 | tyOption : LType -> LType
 | tyList : LType -> LType
 | tyProd : LType -> LType -> LType
 | tySum : LType -> LType -> LType
+
+mu Plan : Type 0 with
+| plan : List LType -> Nat -> Text -> Plan
+| recordPlan : List LType -> List Text -> Option Text -> Plan
 
 def rec fuelAppend : Fuel -> Fuel -> Fuel := fun (done : Fuel) (fuel : Fuel) =>
   case fuel as self in Fuel return Fuel with

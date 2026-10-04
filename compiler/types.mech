@@ -1,6 +1,3 @@
-mu Plan : Type 0 with
-| plan : List LType -> Nat -> Text -> Plan
-
 -- Option and Value are the only types whose JSON form can be null.
 def encodesNull : LType -> Nat := fun (ty : LType) =>
   case ty as self in LType return Nat with
@@ -11,6 +8,9 @@ def encodesNull : LType -> Nat := fun (ty : LType) =>
   | tyValues => 0
   | tyAttrs => 0
   | tyKind => 0
+  | tyHash => 0
+  | tyRef kind => 0
+  | tySchema name => 0
   | tyOption a => 1
   | tyList a => 0
   | tyProd a b => 0
@@ -21,9 +21,19 @@ def hasArguments : List LType -> Nat := fun (types : List LType) =>
   | nil => 0
   | cons head tail => 1
 
+def planArguments : Plan -> List LType := fun (selected : Plan) =>
+  case selected as self in Plan return List LType with
+  | plan arguments mode label => arguments
+  | recordPlan arguments fields tag => arguments
+
 def constructorPlan : LType -> Text -> Option Plan := fun (ty : LType) (name : Text) =>
   case ty as self in LType return Option Plan with
   | tyNat => none
+  | tyHash => select (Option Plan) (sameText name sHashOf)
+      (some (plan (cons tyText nil) 5 sHashOf)) none
+  | tyRef kind => select (Option Plan) (sameText name sRefTo)
+      (some (plan (cons tyHash nil) 15 kind)) none
+  | tySchema family => schemaConstructorPlan family name
   | tyText => select (Option Plan) (sameText name stextEnd) (some (plan (nil) (3) stextEnd)) (select (Option Plan) (sameText name stextByte) (some (plan (cons tyNat (cons tyText (nil))) (4) stextByte)) (none))
   | tyFlag => select (Option Plan) (sameText name sflagNo) (some (plan (nil) (1) sflagNo)) (select (Option Plan) (sameText name sflagYes) (some (plan (nil) (2) sflagYes)) (none))
   | tyValue => select (Option Plan) (sameText name svalueNull) (some (plan (nil) (0) svalueNull)) (select (Option Plan) (sameText name svalueFlag) (some (plan (cons tyFlag (nil)) (5) svalueFlag)) (select (Option Plan) (sameText name svalueNat) (some (plan (cons tyNat (nil)) (5) svalueNat)) (select (Option Plan) (sameText name svalueText) (some (plan (cons tyText (nil)) (5) svalueText)) (select (Option Plan) (sameText name svalueItems) (some (plan (cons tyValues (nil)) (5) svalueItems)) (select (Option Plan) (sameText name svalueAttrs) (some (plan (cons tyAttrs (nil)) (5) svalueAttrs)) (none))))))
@@ -50,6 +60,9 @@ def rec typeName : LType -> Text := fun (ty : LType) =>
   | tyValues => sValues
   | tyAttrs => sAttrs
   | tyKind => sKind
+  | tyHash => sHash
+  | tyRef kind => unaryTypeName sRef kind
+  | tySchema name => name
   | tyOption a => unaryTypeName sOption (typeName a)
   | tyList a => unaryTypeName sList (typeName a)
   | tyProd a b => binaryTypeName sProd (typeName a) (typeName b)
@@ -60,5 +73,8 @@ def rec typeName : LType -> Text := fun (ty : LType) =>
 def sameType : LType -> LType -> Nat := fun (a : LType) (b : LType) =>
   sameText (typeName a) (typeName b)
 
-def reservedName : Text -> Nat := fun (name : Text) =>
+def primitiveReservedName : Text -> Nat := fun (name : Text) =>
   boolOr (sameText name sNat) (boolOr (sameText name sText) (boolOr (sameText name sFlag) (boolOr (sameText name sValue) (boolOr (sameText name sValues) (boolOr (sameText name sAttrs) (boolOr (sameText name sKind) (boolOr (sameText name sOption) (boolOr (sameText name sList) (boolOr (sameText name sProd) (boolOr (sameText name sSum) (boolOr (sameText name sdef) (boolOr (sameText name srec) (boolOr (sameText name smu) (boolOr (sameText name saxiom) (boolOr (sameText name spoly) (boolOr (sameText name sspecialize) (boolOr (sameText name stextEnd) (boolOr (sameText name stextByte) (boolOr (sameText name sflagNo) (boolOr (sameText name sflagYes) (boolOr (sameText name snone) (boolOr (sameText name ssome) (boolOr (sameText name snil) (boolOr (sameText name scons) (boolOr (sameText name svalueNull) (boolOr (sameText name svalueFlag) (boolOr (sameText name svalueNat) (boolOr (sameText name svalueText) (boolOr (sameText name svalueItems) (boolOr (sameText name svalueAttrs) (boolOr (sameText name svaluesEnd) (boolOr (sameText name svaluesItem) (boolOr (sameText name sattrsEnd) (boolOr (sameText name sattrsField) (boolOr (sameText name spair) (boolOr (sameText name sinl) (boolOr (sameText name sinr) (boolOr (sameText name skindParty) (boolOr (sameText name skindMembership) (boolOr (sameText name skindCommercial) (boolOr (sameText name skindCommitment) (boolOr (sameText name skindArtifact) (boolOr (sameText name skindEvent) (boolOr (sameText name skindAssignment) (boolOr (sameText name skindPolicy) (0))))))))))))))))))))))))))))))))))))))))))))))
+
+def reservedName : Text -> Nat := fun (name : Text) =>
+  boolOr (schemaReservedName name) (primitiveReservedName name)

@@ -126,4 +126,33 @@ def applyPlan : Nat -> Text -> List Value -> Result Value :=
                               case (natEq mode 14) as branch return Result Value with
                               | 1 (x : prod ()) => success (valueText label)
                               | 0 (x : prod ()) => (
-                                failure 0 eTerm)))))))))))))))
+                                case (natEq mode 15) as branch return Result Value with
+                                | 1 (x : prod ()) => success (objectTwo kRefKind (valueText label) kRefHash (argumentHead args))
+                                | 0 (x : prod ()) => failure 0 eTerm)))))))))))))))
+
+def rec recordFields : List Text -> List Value -> Result Attrs :=
+  fun (fields : List Text) (values : List Value) =>
+  case fields as self in List return Result Attrs with
+  | nil => (
+      case values as args in List return Result Attrs with
+      | nil => success attrsEnd
+      | cons head tail => failure 0 eTerm)
+  | cons field rest => (
+      case values as args in List return Result Attrs with
+      | nil => failure 0 eTerm
+      | cons value tail => (
+          case (recordFields rest tail) as remaining in Result return Result Attrs with
+          | failure at message => failure at message
+          | success attrs => success (attrsField field value attrs)))
+
+def evaluatePlan : Plan -> List Value -> Result Value :=
+  fun (selected : Plan) (values : List Value) =>
+  case selected as self in Plan return Result Value with
+  | plan arguments mode label => applyPlan mode label values
+  | recordPlan arguments fields tag => (
+      case (recordFields fields values) as built in Result return Result Value with
+      | failure at message => failure at message
+      | success attrs => (
+          case tag as variant in Option return Result Value with
+          | none => success (valueAttrs attrs)
+          | some name => success (valueAttrs (attrsField kSchemaTag (valueText name) attrs))))

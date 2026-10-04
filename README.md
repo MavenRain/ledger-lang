@@ -4,7 +4,7 @@ ledger-lang compiles business data definitions to one JSON document. The
 language has a fixed core schema. Its compiler runs in mechanism-lang and
 the Node launcher only transfers source and result bytes to a Wasm reactor.
 
-This is the first executable slice of M0. See [SPEC.md](SPEC.md) for the full
+This M0 slice supports construction of the complete core schema. See [SPEC.md](SPEC.md) for the full
 design and [docs/STATUS.md](docs/STATUS.md) for the implementation boundary.
 
 ## Build and run
@@ -14,13 +14,15 @@ a Node runtime supporting Wasm GC. The reactor is tested on Node v23.10.0.
 The default host is the OCaml executable in the sibling `../mechanism-lang` checkout. Set
 `MECH_BIN` to use another installed host executable.
 
-Use the OCaml host for this slice. The tested reactor build took 0.85 seconds.
-The Bend 2 Wasm build reached a ten-minute timeout during development.
+Use the OCaml host for this slice. Current validation is recorded in
+[docs/VALIDATION.md](docs/VALIDATION.md). The Bend 2 Wasm build reached a
+ten-minute timeout during the initial probe.
 
 ```sh
 make check
 make test
 bin/ledgerc examples/values.ledger > values.json
+bin/ledgerc examples/crm.ledger > crm.json
 ```
 
 `make test` builds `build/ledgerc.wasm` and runs the integration suite.
@@ -48,10 +50,32 @@ or a constructor with arguments needs parentheses: write `Option (Option Text)`
 and `cons "a" (cons "b" nil)`. `--` starts a comment that ends at a line feed
 or a carriage return. A name or keyword cannot start directly after a number.
 
-Implemented types are `Nat`, `Text`, `Flag`, `Value`, `Values`, `Attrs`,
-`Kind`, `Option A`, `List A`, `Prod A B`, and `Sum A B`. Their constructors
-follow `core/schema.mech`, plus `pair`, `inl`, and `inr` from the specification.
-Products and sums currently support construction only.
+Implemented types are `Nat`, every family in `core/schema.mech`, `Prod A B`,
+and `Sum A B`. This includes all business records, enums, and variants, plus
+`Hash`, indexed `Ref k`, `Option A`, and `List A`. Constructors follow the
+schema, plus `pair`, `inl`, and `inr` from the specification. Products and sums
+currently support construction only.
+
+```text
+def companyKind : Kind := kindParty
+def companyRef : Ref companyKind := refTo (hashOf "company-entry")
+def company : Party := makeParty partyOrg "Acme" none nil attrsEnd none none
+def entry : Entry := makeEntry none (actorSystem "import") (createsParty company)
+```
+
+Ref indices accept Kind constants and earlier Kind definitions, including
+parenthesized aliases. `Ref companyKind` normalizes to `Ref (kindParty)` in
+the output type. References of different kinds cannot be interchanged,
+including in record fields and nested containers. Ref JSON is
+`{"kind":"kindParty","hash":"company-entry"}`.
+
+Records encode as objects with schema field names in schema order. Enums
+encode as constructor names. Other variants encode as objects with `tag`
+followed by their fields, including fieldless variants of mixed families
+such as `scopeAll` and `systemEmail`. `Hash` encodes as its digest Text;
+M0 accepts that text as supplied. Hash computation, reference resolution,
+and record projection are later work. See [examples/crm.ledger](examples/crm.ledger)
+for a program constructing all eight business record families.
 
 `Option` presence is preserved. `none` is `null`. When the payload type can
 encode `null` (an `Option` or a `Value`), `some v` is `{"some":v}`. For other
@@ -79,10 +103,11 @@ while the output is written reports the first byte of that definition.
   controls U+0080 through U+009F.
 - Parsing and checking fuel is one step per source byte, at most 512 steps
   on a path. Each definition has its own fuel. The measured limits for one
-  definition are 511 nested parentheses, 255 nested `Option` type formers,
+  definition are 511 nested parentheses, 256 nested `Option` type formers,
   127 nested `textByte` or `cons` terms, and 102 nested `attrsField` terms.
-  The error reports the token where the fuel ran out. Split a longer list or
-  attribute object across definitions, for example
+  Each count includes the innermost form. The error reports the token where
+  the fuel ran out. Split a longer list or attribute object across
+  definitions, for example
   `def rest : List Text := ...` and `def all : List Text := cons "a" rest`.
 - Serialization shares a budget of 32 steps per source byte plus 128 steps
   across all instances. Each emitted byte costs one step. Thus the output is
