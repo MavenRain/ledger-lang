@@ -1,0 +1,48 @@
+-- Probe: the byte path between a host driver and a compiled reactor module.
+-- The driver builds a Text with consText, calls transform, and reads the
+-- result with textIsEnd, textHead and textTail. Load after core/schema.mech.
+
+def emptyText : Text := textEnd
+
+def consText : Nat -> Text -> Text := fun (byte : Nat) (rest : Text) =>
+  textByte byte rest
+
+def textIsEnd : Text -> Nat := fun (text : Text) =>
+  case text as self in Text return Nat with
+  | textEnd => 1
+  | textByte byte rest => 0
+
+def textHead : Text -> Nat := fun (text : Text) =>
+  case text as self in Text return Nat with
+  | textEnd => 0
+  | textByte byte rest => byte
+
+def textTail : Text -> Text := fun (text : Text) =>
+  case text as self in Text return Text with
+  | textEnd => textEnd
+  | textByte byte rest => rest
+
+def rec textLength : Text -> Nat := fun (text : Text) =>
+  case text as self in Text return Nat with
+  | textEnd => 0
+  | textByte byte rest => natAdd 1 (textLength rest)
+
+-- Work with the shape of a compiler pass: two accumulator passes, then one
+-- pass that is not a tail call and that compares and adds on every byte.
+def rec reverseOnto : Text -> Text -> Text := fun (done : Text) (text : Text) =>
+  case text as self in Text return Text with
+  | textEnd => done
+  | textByte byte rest => reverseOnto (textByte byte done) rest
+
+def bump : Nat -> Nat := fun (byte : Nat) =>
+  case (natLt byte 250) as small return Nat with
+  | 0 (x : prod ()) => 0
+  | 1 (t : prod ()) => natAdd byte 1
+
+def rec mapBump : Text -> Text := fun (text : Text) =>
+  case text as self in Text return Text with
+  | textEnd => textEnd
+  | textByte byte rest => textByte (bump byte) (mapBump rest)
+
+def transform : Text -> Text := fun (text : Text) =>
+  mapBump (reverseOnto textEnd (reverseOnto textEnd text))

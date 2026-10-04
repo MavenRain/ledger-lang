@@ -1,0 +1,48 @@
+-- Probe: dependent constructors in user code. This file needs no other file
+-- and no prelude file.
+
+mu Count : Type 0 with
+| countZero : Count
+| countSucc : Count -> Count
+
+-- An indexed family.
+mu Vec (0 A : Type 0) : (0 n : Count) -> Type 0 with
+| vecNil : Vec A countZero
+| vecCons : (0 n : Count) -> (head : A) -> (tail : Vec A n) -> Vec A (countSucc n)
+
+def rec vecLength : (0 A : Type 0) -> (0 n : Count) -> Vec A n -> Nat :=
+  fun (0 A : Type 0) (0 n : Count) (items : Vec A n) =>
+    case items as self in Vec index return Nat with
+    | vecNil => 0
+    | vecCons 0 m head tail => natAdd 1 (vecLength A m tail)
+
+-- Existential quantification: a Sigma type with a dependent second leg.
+def Sized : Type 0 := (n : Count) * Vec Nat n
+
+def sizedOne : Sized := (countSucc countZero, vecCons countZero 7 vecNil)
+
+-- Type equality with erased endpoints, and transport along it.
+mu Same (0 A : Type 0) (0 x : A) : (0 y : A) -> Prop with
+| sameRefl : Same A x x
+
+def transport : (0 A : Type 0) -> (0 B : A -> Type 0) -> (0 x : A) -> (0 y : A) ->
+    Same A x y -> B x -> B y :=
+  fun (0 A : Type 0) (0 B : A -> Type 0) (0 x : A) (0 y : A)
+    (e : Same A x y) (value : B x) =>
+      case e as self in Same right return B right with
+      | sameRefl => value
+
+def oneIsOne : Same Count (countSucc countZero) (countSucc countZero) := sameRefl
+
+def moved : Vec Nat (countSucc countZero) :=
+  transport Count (fun (n : Count) => Vec Nat n)
+    (countSucc countZero) (countSucc countZero) oneIsOne sizedOne.2
+
+-- Universal quantification over a type, and a definition at Type 1.
+def Family : Type 1 := Count -> Type 0
+
+def identity : (0 A : Type 0) -> A -> A := fun (0 A : Type 0) (value : A) => value
+
+def depLength : Nat :=
+  natAdd (vecLength Nat (countSucc countZero) moved)
+    (identity Nat (vecLength Nat sizedOne.1 sizedOne.2))
