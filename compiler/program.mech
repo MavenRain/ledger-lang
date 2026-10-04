@@ -1,0 +1,116 @@
+def fuel16 : Fuel := fuelAppend fuelTen (fuelMore (fuelMore (fuelMore (fuelMore (fuelMore (fuelMore fuelEnd))))))
+def fuel32 : Fuel := fuelAppend fuel16 fuel16
+def fuel64 : Fuel := fuelAppend fuel32 fuel32
+def fuel128 : Fuel := fuelAppend fuel64 fuel64
+-- Derive checking fuel from source bytes and cap the depth at 512 steps.
+def rec depthFuelFrom : Nat -> Fuel -> Text -> Fuel :=
+  fun (count : Nat) (done : Fuel) (source : Text) =>
+  case source as self in Text return Fuel with
+  | textEnd => select Fuel (numberLt count 512) (fuelMore done) done
+  | textByte byte rest => (
+      case (natLt count 512) as bounded return Fuel with
+      | 0 (x : prod ()) => done
+      | 1 (x : prod ()) => depthFuelFrom (natAdd count 1) (fuelMore done) rest)
+
+def rec outputFuelFrom : Fuel -> Text -> Fuel := fun (done : Fuel) (source : Text) =>
+  case source as self in Text return Fuel with
+  | textEnd => fuelAppend done fuel128
+  | textByte byte rest => outputFuelFrom (fuelAppend done fuel32) rest
+
+-- A checked instance keeps the source byte of its definition for print errors.
+mu Located : Type 0 with
+| located : Nat -> Value -> Located
+
+def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
+  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
+  case tokens as self in List return Parsed Binding with
+  | nil => parseError 0 eDef
+  | cons head tail => (
+    case head as nameToken in Token return Parsed Binding with
+    | numberToken position number => parseError position eDef
+    | stringToken position text => parseError position eDef
+    | punctuation position mark => parseError position eDef
+    | identifier position name => (
+      case (natEq (reservedName name) 1) as reserved return Parsed Binding with
+      | 1 (x : prod ()) => parseError position eReserved
+      | 0 (x : prod ()) => (
+        case (lookup name environment) as previous in Option return Parsed Binding with
+        | some item => parseError position eDuplicate
+        | none => (
+          case (expectMark 58 tail) as colon in Parsed return Parsed Binding with
+          | parseError at message => parseError at message
+          | parsed ignored rest => (
+            case (parseType fuel 0 rest) as declared in Parsed return Parsed Binding with
+            | parseError at message => parseError at message
+            | parsed ty afterType => (
+              case (expectMark 61 afterType) as assign in Parsed return Parsed Binding with
+              | parseError at message => parseError at message
+              | parsed ignored afterAssign => (
+                case (parseTerm fuel 0 ty environment afterAssign) as checked in Parsed return Parsed Binding with
+                | parseError at message => parseError at message
+                | parsed value after => parsed (binding name ty value) after)))))))
+
+def instanceValue : Binding -> Value := fun (item : Binding) =>
+  case item as self in Binding return Value with
+  | binding name ty value => valueAttrs (attrsField kName (valueText name)
+      (attrsField kType (valueText (typeName ty)) (attrsField kValue value attrsEnd)))
+
+def rec parseProgram : Fuel -> Fuel -> List Binding -> List Located -> List Token -> Result (List Located) :=
+  fun (fuel : Fuel) (checkingFuel : Fuel) (environment : List Binding) (done : List Located) (tokens : List Token) =>
+  case fuel as guard in Fuel return Result (List Located) with
+  | fuelEnd => failure (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case tokens as self in List return Result (List Located) with
+    | nil => failure 0 eDef
+    | cons head tail => (
+      case head as token in Token return Result (List Located) with
+      | numberToken position number => failure position eDef
+      | stringToken position text => failure position eDef
+      | punctuation position mark => select (Result (List Located)) (numberEq mark 0)
+          (success (reverseListOnto Located nil done)) (failure position eDef)
+      | identifier position word => (
+          case (natEq (sameText word sdef) 1) as definition return Result (List Located) with
+          | 0 (x : prod ()) => failure position eDef
+          | 1 (x : prod ()) => (
+              case (parseDefinition checkingFuel environment tail) as next in Parsed return Result (List Located) with
+              | parseError at message => failure at message
+              | parsed item rest => parseProgram more checkingFuel (cons item environment)
+                  (cons (located position (instanceValue item)) done) rest))))
+
+-- A print error reports the first byte of the definition being printed.
+def rec printInstances : Fuel -> Text -> Nat -> List Located -> Printed :=
+  fun (fuel : Fuel) (done : Text) (first : Nat) (instances : List Located) =>
+  case instances as self in List return Printed with
+  | nil => emitText fuel done jEnd
+  | cons head rest => (
+      case head as item in Located return Printed with
+      | located position value => (
+          case (emitText fuel done (separator first)) as comma in Printed return Printed with
+          | printError at message => printError position message
+          | printed more output => (
+              case (printValue more output 0 value) as instance in Printed return Printed with
+              | printError at message => printError position message
+              | printed remaining next => printInstances remaining next 0 rest)))
+
+def errorText : Nat -> Text -> Text := fun (position : Nat) (message : Text) =>
+  case (quoteBytes (fuelFor message) (textByte 34 textEnd) message) as quoted in Printed return Text with
+  | printError at ignored => jNull
+  | printed remaining reversed => appendText jError (appendText (numberText position)
+      (appendText jMessage (appendText (reverseText reversed) jErrorEnd)))
+
+def compile : Text -> Text := fun (source : Text) =>
+  case (utf8Error source) as invalid in Option return Text with
+  | some position => errorText position eUtf8
+  | none => (
+      case (lex (fuelFor source) source) as tokens in Result return Text with
+      | failure at message => errorText at message
+      | success tokens => (
+          case (parseProgram (fuelFor source) (depthFuelFrom 0 fuelEnd source) nil nil tokens) as program in Result return Text with
+          | failure at message => errorText at message
+          | success instances => (
+              case (emitText (outputFuelFrom fuelEnd source) textEnd jHeader) as header in Printed return Text with
+              | printError at message => errorText at message
+              | printed fuel output => (
+                  case (printInstances fuel output 1 instances) as document in Printed return Text with
+                  | printError at message => errorText at message
+                  | printed remaining reversed => reverseText reversed))))

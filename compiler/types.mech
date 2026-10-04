@@ -1,0 +1,64 @@
+mu Plan : Type 0 with
+| plan : List LType -> Nat -> Text -> Plan
+
+-- Option and Value are the only types whose JSON form can be null.
+def encodesNull : LType -> Nat := fun (ty : LType) =>
+  case ty as self in LType return Nat with
+  | tyNat => 0
+  | tyText => 0
+  | tyFlag => 0
+  | tyValue => 1
+  | tyValues => 0
+  | tyAttrs => 0
+  | tyKind => 0
+  | tyOption a => 1
+  | tyList a => 0
+  | tyProd a b => 0
+  | tySum a b => 0
+
+def hasArguments : List LType -> Nat := fun (types : List LType) =>
+  case types as self in List return Nat with
+  | nil => 0
+  | cons head tail => 1
+
+def constructorPlan : LType -> Text -> Option Plan := fun (ty : LType) (name : Text) =>
+  case ty as self in LType return Option Plan with
+  | tyNat => none
+  | tyText => select (Option Plan) (sameText name stextEnd) (some (plan (nil) (3) stextEnd)) (select (Option Plan) (sameText name stextByte) (some (plan (cons tyNat (cons tyText (nil))) (4) stextByte)) (none))
+  | tyFlag => select (Option Plan) (sameText name sflagNo) (some (plan (nil) (1) sflagNo)) (select (Option Plan) (sameText name sflagYes) (some (plan (nil) (2) sflagYes)) (none))
+  | tyValue => select (Option Plan) (sameText name svalueNull) (some (plan (nil) (0) svalueNull)) (select (Option Plan) (sameText name svalueFlag) (some (plan (cons tyFlag (nil)) (5) svalueFlag)) (select (Option Plan) (sameText name svalueNat) (some (plan (cons tyNat (nil)) (5) svalueNat)) (select (Option Plan) (sameText name svalueText) (some (plan (cons tyText (nil)) (5) svalueText)) (select (Option Plan) (sameText name svalueItems) (some (plan (cons tyValues (nil)) (5) svalueItems)) (select (Option Plan) (sameText name svalueAttrs) (some (plan (cons tyAttrs (nil)) (5) svalueAttrs)) (none))))))
+  | tyValues => select (Option Plan) (sameText name svaluesEnd) (some (plan (nil) (6) svaluesEnd)) (select (Option Plan) (sameText name svaluesItem) (some (plan (cons tyValue (cons tyValues (nil))) (7) svaluesItem)) (none))
+  | tyAttrs => select (Option Plan) (sameText name sattrsEnd) (some (plan (nil) (8) sattrsEnd)) (select (Option Plan) (sameText name sattrsField) (some (plan (cons tyText (cons tyValue (cons tyAttrs (nil)))) (9) sattrsField)) (none))
+  | tyKind => select (Option Plan) (sameText name skindParty) (some (plan (nil) (14) skindParty)) (select (Option Plan) (sameText name skindMembership) (some (plan (nil) (14) skindMembership)) (select (Option Plan) (sameText name skindCommercial) (some (plan (nil) (14) skindCommercial)) (select (Option Plan) (sameText name skindCommitment) (some (plan (nil) (14) skindCommitment)) (select (Option Plan) (sameText name skindArtifact) (some (plan (nil) (14) skindArtifact)) (select (Option Plan) (sameText name skindEvent) (some (plan (nil) (14) skindEvent)) (select (Option Plan) (sameText name skindAssignment) (some (plan (nil) (14) skindAssignment)) (select (Option Plan) (sameText name skindPolicy) (some (plan (nil) (14) skindPolicy)) (none))))))))
+  | tyOption a => select (Option Plan) (sameText name snone) (some (plan (nil) (0) snone)) (select (Option Plan) (sameText name ssome) (some (plan (cons a (nil)) (select Nat (encodesNull a) 13 5) ssome)) (none))
+  | tyList a => select (Option Plan) (sameText name snil) (some (plan (nil) (6) snil)) (select (Option Plan) (sameText name scons) (some (plan (cons a (cons (tyList a) (nil))) (7) scons)) (none))
+  | tyProd a b => select (Option Plan) (sameText name spair) (some (plan (cons a (cons b (nil))) (10) spair)) (none)
+  | tySum a b => select (Option Plan) (sameText name sinl) (some (plan (cons a (nil)) (11) sinl)) (select (Option Plan) (sameText name sinr) (some (plan (cons b (nil)) (12) sinr)) (none))
+
+def unaryTypeName : Text -> Text -> Text := fun (head : Text) (arg : Text) =>
+  appendText head (textByte 32 (textByte 40 (appendText arg (textByte 41 textEnd))))
+
+def binaryTypeName : Text -> Text -> Text -> Text := fun (head : Text) (a : Text) (b : Text) =>
+  appendText (unaryTypeName head a) (textByte 32 (textByte 40 (appendText b (textByte 41 textEnd))))
+
+def rec typeName : LType -> Text := fun (ty : LType) =>
+  case ty as self in LType return Text with
+  | tyNat => sNat
+  | tyText => sText
+  | tyFlag => sFlag
+  | tyValue => sValue
+  | tyValues => sValues
+  | tyAttrs => sAttrs
+  | tyKind => sKind
+  | tyOption a => unaryTypeName sOption (typeName a)
+  | tyList a => unaryTypeName sList (typeName a)
+  | tyProd a b => binaryTypeName sProd (typeName a) (typeName b)
+  | tySum a b => binaryTypeName sSum (typeName a) (typeName b)
+
+-- The current type grammar has unique canonical names, so equality of
+-- these names is structural type equality for this supported subset.
+def sameType : LType -> LType -> Nat := fun (a : LType) (b : LType) =>
+  sameText (typeName a) (typeName b)
+
+def reservedName : Text -> Nat := fun (name : Text) =>
+  boolOr (sameText name sNat) (boolOr (sameText name sText) (boolOr (sameText name sFlag) (boolOr (sameText name sValue) (boolOr (sameText name sValues) (boolOr (sameText name sAttrs) (boolOr (sameText name sKind) (boolOr (sameText name sOption) (boolOr (sameText name sList) (boolOr (sameText name sProd) (boolOr (sameText name sSum) (boolOr (sameText name sdef) (boolOr (sameText name srec) (boolOr (sameText name smu) (boolOr (sameText name saxiom) (boolOr (sameText name spoly) (boolOr (sameText name sspecialize) (boolOr (sameText name stextEnd) (boolOr (sameText name stextByte) (boolOr (sameText name sflagNo) (boolOr (sameText name sflagYes) (boolOr (sameText name snone) (boolOr (sameText name ssome) (boolOr (sameText name snil) (boolOr (sameText name scons) (boolOr (sameText name svalueNull) (boolOr (sameText name svalueFlag) (boolOr (sameText name svalueNat) (boolOr (sameText name svalueText) (boolOr (sameText name svalueItems) (boolOr (sameText name svalueAttrs) (boolOr (sameText name svaluesEnd) (boolOr (sameText name svaluesItem) (boolOr (sameText name sattrsEnd) (boolOr (sameText name sattrsField) (boolOr (sameText name spair) (boolOr (sameText name sinl) (boolOr (sameText name sinr) (boolOr (sameText name skindParty) (boolOr (sameText name skindMembership) (boolOr (sameText name skindCommercial) (boolOr (sameText name skindCommitment) (boolOr (sameText name skindArtifact) (boolOr (sameText name skindEvent) (boolOr (sameText name skindAssignment) (boolOr (sameText name skindPolicy) (0))))))))))))))))))))))))))))))))))))))))))))))

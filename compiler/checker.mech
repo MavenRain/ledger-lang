@@ -1,0 +1,58 @@
+-- Parsing, checking and constructor evaluation are fused in this M0 slice.
+-- An argument (atom = 1) is a literal, a reference, a nullary constructor or
+-- a parenthesized term.
+def rec parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
+  fun (fuel : Fuel) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case tokens as self in List return Parsed Value with
+    | nil => parseError 0 eTerm
+    | cons head tail => (
+      case head as token in Token return Parsed Value with
+      | numberToken position number => select (Parsed Value) (sameType expected tyNat)
+          (parsed (valueNat number) tail) (parseError position eTerm)
+      | stringToken position text => select (Parsed Value) (sameType expected tyText)
+          (parsed (valueText text) tail) (parseError position eTerm)
+      | punctuation position mark => (
+          case (natEq mark 40) as opening return Parsed Value with
+          | 0 (x : prod ()) => parseError position eTerm
+          | 1 (x : prod ()) => (
+              case (parseTerm more 0 expected environment tail) as inside in Parsed return Parsed Value with
+              | parseError at message => parseError at message
+              | parsed value rest => closeParsed Value value rest))
+      | identifier position name => (
+          case (lookup name environment) as found in Option return Parsed Value with
+          | some item => (
+              case item as known in Binding return Parsed Value with
+              | binding other ty value => select (Parsed Value) (sameType expected ty)
+                  (parsed value tail) (parseError position eTerm))
+          | none => (
+              case (constructorPlan expected name) as selected in Option return Parsed Value with
+              | none => parseError position eUnknown
+              | some selected => (
+                  case selected as schema in Plan return Parsed Value with
+                  | plan arguments mode label => (
+                      case (natEq (boolAnd atom (hasArguments arguments)) 1) as bare return Parsed Value with
+                      | 1 (x : prod ()) => parseError position eParen
+                      | 0 (x : prod ()) => (
+                          case (parseArguments more 1 arguments environment tail) as checked in Parsed return Parsed Value with
+                          | parseError at message => parseError at message
+                          | parsed values rest => (
+                              case (applyPlan mode label values) as evaluated in Result return Parsed Value with
+                              | failure at message => parseError position message
+                              | success value => parsed value rest))))))))
+and parseArguments : Fuel -> Nat -> List LType -> List Binding -> List Token -> Parsed (List Value) :=
+  fun (fuel : Fuel) (atom : Nat) (types : List LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed (List Value) with
+  | fuelEnd => parseError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case types as self in List return Parsed (List Value) with
+    | nil => parsed nil tokens
+    | cons head tail => (
+        case (parseTerm more atom head environment tokens) as first in Parsed return Parsed (List Value) with
+        | parseError at message => parseError at message
+        | parsed value rest => (
+            case (parseArguments more atom tail environment rest) as remaining in Parsed return Parsed (List Value) with
+            | parseError at message => parseError at message
+            | parsed values after => parsed (cons value values) after)))

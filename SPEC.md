@@ -70,7 +70,7 @@ Encoding rules:
 | `Nat` | number |
 | `Text` | string (the bytes must be valid UTF-8) |
 | `Flag` | `false` or `true` |
-| `Option A` | `null` or the value; `{"some": v}` when `A` is an `Option` |
+| `Option A` | `null` or the value; `{"some": v}` when `A` can encode `null` (an `Option` or `Value`) |
 | `List A`, `Values` | array |
 | `Attrs` | object, keys in source order; a repeated key is refused |
 | `Value` | the JSON value that it represents |
