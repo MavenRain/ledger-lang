@@ -62,6 +62,15 @@ a function type is not a data type. An application `f a` checks `a` against
 - **Filterable** gives `filter` with a predicate into `Flag`. Carriers:
   `Option`, `List`, `Text`, `Values`, `Attrs`.
 
+Surface forms in M0. The declared type selects the instance: `pure x`,
+`map f t`, `bind f t` and `filter f t` check against `Option B`, `List B` or
+`Sum E B`. `filter` has no `Sum E` instance. `f` is the name of a definition
+with one parameter. For `map`, `f : A -> B` and `t : F A`. For `bind`,
+`f : A -> F B` and `t : F A`. For `filter`, `f : B -> Flag` and `t : F B`.
+`either f g s` synthesizes `C` from `f : A -> C`, `g : B -> C` and
+`s : Sum A B`. A function body can use `pure`, but it cannot use a form that
+applies a function.
+
 ## 5. Instances and the target
 
 An instance is a top-level definition whose type is a data type. Definitions

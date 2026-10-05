@@ -50,9 +50,16 @@ def checkSynthesized : Nat -> LType -> Parsed Typed -> Parsed Value :=
           (parsed value rest) (parseError position eTerm))
 
 -- Forms that synthesize a type from one argument: 1 first, 2 second,
--- 3 symm. The form 4 trans takes two arguments.
+-- 3 symm. The form 4 trans takes two arguments, and 5 either takes three.
 def synthForm : Text -> Nat := fun (name : Text) =>
-  select Nat (sameText name ssymm) 3 (select Nat (sameText name strans) 4 (projectionIndex name))
+  select Nat (sameText name seither) 5 (select Nat (sameText name ssymm) 3
+    (select Nat (sameText name strans) 4 (projectionIndex name)))
+
+-- Forms that check against a declared structure type: 1 pure, 2 map,
+-- 3 bind, 4 filter.
+def structureForm : Text -> Nat := fun (name : Text) =>
+  select Nat (sameText name spure) 1 (select Nat (sameText name smap) 2
+    (select Nat (sameText name sbind) 3 (select Nat (sameText name sfilter) 4 0)))
 
 -- An equality type keeps its sides as canonical JSON text.
 mu EqSides : Type 0 with
@@ -134,9 +141,203 @@ def rec bindParams : List Param -> List Value -> List Binding -> List Binding :=
       | param name ty => bindParams tail (argumentTail values)
           (cons (binding name ty (argumentHead values)) environment))
 
+-- A function argument of a structure form names a function with one
+-- parameter. It keeps the parameter name and type, the result type and the
+-- body tokens.
+mu Unary : Type 0 with
+| unary : Text -> LType -> LType -> List Token -> Unary
+
+def unaryParam : Unary -> LType := fun (op : Unary) =>
+  case op as self in Unary return LType with
+  | unary name ty result body => ty
+
+def unaryResult : Unary -> LType := fun (op : Unary) =>
+  case op as self in Unary return LType with
+  | unary name ty result body => result
+
+def unaryBody : Unary -> List Token := fun (op : Unary) =>
+  case op as self in Unary return List Token with
+  | unary name ty result body => body
+
+def unaryEnvironment : Unary -> Value -> List Binding -> List Binding :=
+  fun (op : Unary) (value : Value) (environment : List Binding) =>
+  case op as self in Unary return List Binding with
+  | unary name ty result body => cons (binding name ty value) environment
+
+def unaryOf : Binding -> Option Unary := fun (item : Binding) =>
+  case item as self in Binding return Option Unary with
+  | binding name ty value => none
+  | typeBinding name universe defined => none
+  | funBinding name params result body => (
+      case params as list in List return Option Unary with
+      | nil => none
+      | cons head tail => (
+          case tail as others in List return Option Unary with
+          | cons next more => none
+          | nil => (
+              case head as first in Param return Option Unary with
+              | param label ty => some (unary label ty result body))))
+
+def unaryArgument : List Binding -> List Token -> Parsed Unary :=
+  fun (environment : List Binding) (tokens : List Token) =>
+  case tokens as self in List return Parsed Unary with
+  | nil => parseError 0 eUnary
+  | cons head tail => (
+      case head as token in Token return Parsed Unary with
+      | numberToken position number => parseError position eUnary
+      | stringToken position text => parseError position eUnary
+      | punctuation position mark => parseError position eUnary
+      | identifier position name => (
+          case (lookup name environment) as found in Option return Parsed Unary with
+          | none => parseError position eUnary
+          | some item => (
+              case (unaryOf item) as shaped in Option return Parsed Unary with
+              | none => parseError position eUnary
+              | some op => parsed op tail)))
+
+-- Structure forms act on the last type argument of Option, List and Sum.
+mu Shape : Type 0 with
+| shapeOption : LType -> Shape
+| shapeList : LType -> Shape
+| shapeSum : LType -> LType -> Shape
+| shapeNone : Shape
+
+def shapeOf : LType -> Shape := fun (ty : LType) =>
+  case ty as self in LType return Shape with
+  | tyNat => shapeNone
+  | tyText => shapeNone
+  | tyFlag => shapeNone
+  | tyValue => shapeNone
+  | tyValues => shapeNone
+  | tyAttrs => shapeNone
+  | tyKind => shapeNone
+  | tyHash => shapeNone
+  | tyRef kind => shapeNone
+  | tySchema name => shapeNone
+  | tyOption a => shapeOption a
+  | tyList a => shapeList a
+  | tyProd a b => shapeNone
+  | tySum a b => shapeSum a b
+  | tyUniverse level => shapeNone
+  | tyEq a x y => shapeNone
+
+-- 0 no instance, 1 Option, 2 List, 3 Sum E. Filter has no Sum instance.
+def shapeCode : Nat -> LType -> Nat := fun (form : Nat) (ty : LType) =>
+  case (shapeOf ty) as self in Shape return Nat with
+  | shapeOption a => 1
+  | shapeList a => 2
+  | shapeSum e a => select Nat (numberEq form 4) 0 3
+  | shapeNone => 0
+
+def shapeElement : LType -> LType := fun (ty : LType) =>
+  case (shapeOf ty) as self in Shape return LType with
+  | shapeOption a => a
+  | shapeList a => a
+  | shapeSum e a => a
+  | shapeNone => ty
+
+def shapeWith : LType -> LType -> LType := fun (ty : LType) (element : LType) =>
+  case (shapeOf ty) as self in Shape return LType with
+  | shapeOption a => tyOption element
+  | shapeList a => tyList element
+  | shapeSum e a => tySum e element
+  | shapeNone => ty
+
+def someValue : LType -> Value -> Value := fun (ty : LType) (value : Value) =>
+  select Value (encodesNull ty) (objectOne kSome value) value
+
+-- pure x is some x, the list with the one item x, or inr x.
+def pureValue : LType -> Value -> Value := fun (ty : LType) (value : Value) =>
+  case (shapeOf ty) as self in Shape return Value with
+  | shapeOption a => someValue a value
+  | shapeList a => valueItems (valuesItem value valuesEnd)
+  | shapeSum e a => objectOne kInr value
+  | shapeNone => value
+
+def isNull : Value -> Nat := fun (value : Value) =>
+  case value as self in Value return Nat with
+  | valueNull => 1
+  | valueFlag flag => 0
+  | valueNat number => 0
+  | valueText text => 0
+  | valueItems items => 0
+  | valueAttrs attrs => 0
+
+def isYes : Value -> Nat := fun (value : Value) =>
+  case value as self in Value return Nat with
+  | valueNull => 0
+  | valueFlag flag => (
+      case flag as answer in Flag return Nat with
+      | flagNo => 0
+      | flagYes => 1)
+  | valueNat number => 0
+  | valueText text => 0
+  | valueItems items => 0
+  | valueAttrs attrs => 0
+
+def sumLeft : Value -> Nat := fun (value : Value) =>
+  case value as self in Value return Nat with
+  | valueNull => 0
+  | valueFlag flag => 0
+  | valueNat number => 0
+  | valueText text => 0
+  | valueItems items => 0
+  | valueAttrs attrs => (
+      case attrs as fields in Attrs return Nat with
+      | attrsEnd => 0
+      | attrsField key item rest => sameText key kInl)
+
+def itemsOf : Value -> Values := fun (value : Value) =>
+  case value as self in Value return Values with
+  | valueNull => valuesEnd
+  | valueFlag flag => valuesEnd
+  | valueNat number => valuesEnd
+  | valueText text => valuesEnd
+  | valueItems items => items
+  | valueAttrs attrs => valuesEnd
+
+def rec appendValues : Values -> Values -> Values := fun (front : Values) (back : Values) =>
+  case front as self in Values return Values with
+  | valuesEnd => back
+  | valuesItem head tail => valuesItem head (appendValues tail back)
+
+-- The payload of some x or of inr x. The values none and inl e have none.
+def payloadOf : LType -> LType -> Value -> Option Value :=
+  fun (ty : LType) (element : LType) (value : Value) =>
+  case (shapeOf ty) as self in Shape return Option Value with
+  | shapeOption a => select (Option Value) (isNull value) none
+      (some (select Value (encodesNull element) (projectValue 1 value) value))
+  | shapeList a => none
+  | shapeSum e a => select (Option Value) (sumLeft value) none (some (projectValue 1 value))
+  | shapeNone => none
+
+-- Join a source value and the result of one application: 2 map wraps the
+-- result again, 3 bind keeps it, 4 filter keeps the source or gives none.
+def stepOne : Nat -> LType -> Value -> Value -> Value :=
+  fun (form : Nat) (ty : LType) (source : Value) (result : Value) =>
+  select Value (numberEq form 3) result (select Value (numberEq form 4)
+    (select Value (isYes result) source valueNull) (pureValue ty result))
+
+def stepItems : Nat -> Value -> Value -> Values -> Values :=
+  fun (form : Nat) (item : Value) (result : Value) (rest : Values) =>
+  select Values (numberEq form 3) (appendValues (itemsOf result) rest)
+    (select Values (numberEq form 4) (select Values (isYes result) (valuesItem item rest) rest)
+      (valuesItem result rest))
+
+-- map takes A -> B for F B, bind takes A -> F B, filter takes A -> Flag.
+def structureFits : Nat -> LType -> Unary -> Nat := fun (form : Nat) (ty : LType) (op : Unary) =>
+  select Nat (numberEq form 2) (sameType (unaryResult op) (shapeElement ty))
+    (select Nat (numberEq form 3) (sameType (unaryResult op) ty)
+      (boolAnd (sameType (unaryResult op) tyFlag) (sameType (unaryParam op) (shapeElement ty))))
+
+-- map and bind read F A for the parameter type A. Filter reads F A itself.
+def structureSource : Nat -> LType -> Unary -> LType := fun (form : Nat) (ty : LType) (op : Unary) =>
+  select LType (numberEq form 4) ty (shapeWith ty (unaryParam op))
+
 -- A synthesized argument is an earlier definition, a projection, symm,
--- trans, an application, or one of these in parentheses. An application
--- evaluates the checked body of the function with the argument values.
+-- trans, either, an application, or one of these in parentheses. An
+-- application evaluates the checked body of the function with the argument
+-- values.
 def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
   fun (fuel : Fuel) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Parsed Typed with
@@ -178,6 +379,9 @@ def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
                   case (natEq atom 1) as bare return Parsed Typed with
                   | 1 (x : prod ()) => parseError position eParen
                   | 0 (x : prod ()) => (
+                    case (natEq (synthForm name) 5) as choice return Parsed Typed with
+                    | 1 (x : prod ()) => eitherTerm more position environment tail
+                    | 0 (x : prod ()) => (
                       case (synthTerm more 1 environment tail) as argument in Parsed return Parsed Typed with
                       | parseError at message => parseError at message
                       | parsed found rest => (
@@ -189,7 +393,7 @@ def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
                               | 0 (x : prod ()) => (
                                   case (synthTerm more 1 environment rest) as second in Parsed return Parsed Typed with
                                   | parseError at message => parseError at message
-                                  | parsed other after => transProof position found other after)))))))))
+                                  | parsed other after => transProof position found other after))))))))))
 
 -- Parsing, checking and constructor evaluation are fused in this M0 slice.
 -- An argument (atom = 1) is a literal, a reference, a nullary constructor or
@@ -226,8 +430,11 @@ and parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Val
               case (constructorPlan expected name) as selected in Option return Parsed Value with
               | none => (
                   case (natEq (synthForm name) 0) as plain return Parsed Value with
-                  | 1 (x : prod ()) => select (Parsed Value) (sameText name srefl)
-                      (reflCheck position expected tail) (parseError position eUnknown)
+                  | 1 (x : prod ()) => (
+                      case (natEq (structureForm name) 0) as structural return Parsed Value with
+                      | 1 (x : prod ()) => select (Parsed Value) (sameText name srefl)
+                          (reflCheck position expected tail) (parseError position eUnknown)
+                      | 0 (x : prod ()) => structureTerm more position (structureForm name) atom expected environment tail)
                   | 0 (x : prod ()) => checkSynthesized position expected (synthTerm more atom environment tokens))
               | some selected => (
                       case (natEq (boolAnd atom (hasArguments (planArguments selected))) 1) as bare return Parsed Value with
@@ -254,3 +461,91 @@ and parseArguments : Fuel -> Nat -> List LType -> List Binding -> List Token -> 
             case (parseArguments more atom tail environment rest) as remaining in Parsed return Parsed (List Value) with
             | parseError at message => parseError at message
             | parsed values after => parsed (cons value values) after)))
+-- pure x lifts x. map, bind and filter name a function, then take the
+-- source as an argument. A function body can use pure, but it cannot use
+-- the forms that apply a function.
+and structureTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
+  fun (fuel : Fuel) (position : Nat) (form : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (natEq atom 1) as bare return Parsed Value with
+    | 1 (x : prod ()) => parseError position eParen
+    | 0 (x : prod ()) => (
+      case (natEq (shapeCode form expected) 0) as shapeless return Parsed Value with
+      | 1 (x : prod ()) => parseError position eStructure
+      | 0 (x : prod ()) => (
+        case (natEq form 1) as lifting return Parsed Value with
+        | 1 (x : prod ()) => (
+            case (parseTerm more 1 (shapeElement expected) environment tokens) as lifted in Parsed return Parsed Value with
+            | parseError at message => parseError at message
+            | parsed value rest => parsed (pureValue expected value) rest)
+        | 0 (x : prod ()) => (
+          case (natEq (checkingBody environment) 1) as nested return Parsed Value with
+          | 1 (x : prod ()) => parseError position eNested
+          | 0 (x : prod ()) => (
+            case (unaryArgument environment tokens) as named in Parsed return Parsed Value with
+            | parseError at message => parseError at message
+            | parsed op afterFunction => (
+              case (natEq (structureFits form expected op) 1) as fits return Parsed Value with
+              | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+              | 1 (x : prod ()) => (
+                case (parseTerm more 1 (structureSource form expected op) environment afterFunction) as argument in Parsed return Parsed Value with
+                | parseError at message => parseError at message
+                | parsed source rest => (
+                  case (natEq (shapeCode form expected) 2) as listed return Parsed Value with
+                  | 1 (x : prod ()) => (
+                      case (mapItems more position form op environment (itemsOf source)) as mapped in Parsed return Parsed Value with
+                      | parseError at message => parseError at message
+                      | parsed items ignored => parsed (valueItems items) rest)
+                  | 0 (x : prod ()) => (
+                      case (payloadOf expected (unaryParam op) source) as payload in Option return Parsed Value with
+                      | none => parsed source rest
+                      | some item => (
+                          case (parseTerm more 0 (unaryResult op) (unaryEnvironment op item environment) (unaryBody op)) as applied in Parsed return Parsed Value with
+                          | parseError at message => parseError at message
+                          | parsed value after => parsed (stepOne form expected source value) rest))))))))))
+-- Over a list, the function applies to each item in order: 2 map keeps
+-- each result, 3 bind joins the result lists, 4 filter keeps the items with
+-- the result flagYes. Each item uses one step of the depth fuel.
+and mapItems : Fuel -> Nat -> Nat -> Unary -> List Binding -> Values -> Parsed Values :=
+  fun (fuel : Fuel) (position : Nat) (form : Nat) (op : Unary) (environment : List Binding) (items : Values) =>
+  case fuel as guard in Fuel return Parsed Values with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case items as self in Values return Parsed Values with
+    | valuesEnd => parsed valuesEnd nil
+    | valuesItem item rest => (
+        case (parseTerm more 0 (unaryResult op) (unaryEnvironment op item environment) (unaryBody op)) as applied in Parsed return Parsed Values with
+        | parseError at message => parseError at message
+        | parsed value after => (
+            case (mapItems more position form op environment rest) as remaining in Parsed return Parsed Values with
+            | parseError at message => parseError at message
+            | parsed values ignored => parsed (stepItems form item value values) nil)))
+-- either f g s applies f to the payload of inl and g to the payload of inr.
+-- The two functions must have the same result type.
+and eitherTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
+  fun (fuel : Fuel) (position : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Typed with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (natEq (checkingBody environment) 1) as nested return Parsed Typed with
+    | 1 (x : prod ()) => parseError position eNested
+    | 0 (x : prod ()) => (
+      case (unaryArgument environment tokens) as left in Parsed return Parsed Typed with
+      | parseError at message => parseError at message
+      | parsed onLeft afterLeft => (
+        case (unaryArgument environment afterLeft) as right in Parsed return Parsed Typed with
+        | parseError at message => parseError at message
+        | parsed onRight afterRight => (
+          case (natEq (sameType (unaryResult onLeft) (unaryResult onRight)) 1) as agree return Parsed Typed with
+          | 0 (x : prod ()) => parseError (firstPosition afterLeft) eTerm
+          | 1 (x : prod ()) => (
+            case (parseTerm more 1 (tySum (unaryParam onLeft) (unaryParam onRight)) environment afterRight) as scrutinee in Parsed return Parsed Typed with
+            | parseError at message => parseError at message
+            | parsed source rest => (
+              case (parseTerm more 0 (unaryResult onLeft)
+                  (unaryEnvironment (select Unary (sumLeft source) onLeft onRight) (projectValue 1 source) environment)
+                  (unaryBody (select Unary (sumLeft source) onLeft onRight))) as applied in Parsed return Parsed Typed with
+              | parseError at message => parseError at message
+              | parsed value after => parsed (typed (unaryResult onLeft) value) rest))))))

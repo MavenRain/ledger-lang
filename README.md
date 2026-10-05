@@ -26,6 +26,7 @@ bin/ledgerc examples/crm.ledger > crm.json
 bin/ledgerc examples/formers.ledger > formers.json
 bin/ledgerc examples/equality.ledger > equality.json
 bin/ledgerc examples/functions.ledger > functions.json
+bin/ledgerc examples/structures.ledger > structures.json
 ```
 
 `make test` builds `build/ledgerc.wasm` and runs the integration suite.
@@ -135,12 +136,25 @@ in parentheses, it can be the argument of `first` or `second`, or a side of
 `Eq`. Functions are not instances, so the output does not contain them.
 
 In this slice, a function type is only the type of a definition. A function
-body cannot apply a function, and a function is not an argument. The body
+body cannot apply a function, and a function is an argument only of a
+structure form. The body
 check at the definition does not know the argument values. Thus a constructor
 error in the body, such as `textByte n textEnd` with `n` above 255, is
 reported at its byte in the body when an application supplies that value.
 Each application parses the body again with the fuel that remains at the
 application site. See [examples/functions.ledger](examples/functions.ledger).
+
+The structure forms `pure x`, `map f t`, `bind f t` and `filter f t` check
+against a declared `Option B`, `List B` or `Sum E B`. `filter` has no `Sum E`
+form. The argument `f` is the name of a function with one parameter: `map`
+needs `A -> B`, `bind` needs `A -> F B`, and `filter` needs `B -> Flag`.
+`map` and `bind` apply `f` to the payload of `some` and `inr` and to each list
+item. The values `none` and `inl e` stay as they are. `filter` keeps the
+payloads for which `f` gives `flagYes`. `either f g s` applies `f` to the
+payload of `inl` and `g` to the payload of `inr`, and its type is the result
+type of `f` and `g`. A function body can use `pure`, but it cannot use the
+other forms. Each list item uses one step of the depth fuel. See
+[examples/structures.ledger](examples/structures.ledger).
 
 `Option` presence is preserved. `none` is `null`. When the payload type can
 encode `null` (an `Option` or a `Value`), `some v` is `{"some":v}`. For other

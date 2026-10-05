@@ -42,20 +42,28 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
   instances. Name and key comparisons stop at the first different byte.
 - Wasm reactor build, byte transport, command-line launcher, values and CRM
   examples, and integration tests against the reactor and CLI.
+- Monad `pure`, `map` and `bind` over `Option`, `List` and `Sum E`,
+  Filterable `filter` over `Option` and `List`, and `either`. The function
+  argument names a definition with one parameter.
 
 ## Remaining M0 work
 
-1. Add dependent function types, nested application, and functions as
-   arguments. These need an internal value domain with neutral terms and a
-   threaded work budget. Then add Sigma checking and evaluation, `either`,
+1. Add dependent function types, nested application, and inline or partial
+   functions as arguments. These need an internal value domain with neutral
+   terms and a threaded work budget. Then add Sigma checking and evaluation,
    `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
-2. Add Monad map/bind, Algebra fold/unfold,
-   and Filterable filter with bounded evaluation.
+2. Add Algebra fold/unfold, and Filterable filter over `Text`, `Values` and
+   `Attrs`, with bounded evaluation.
 3. Add operation-family construction and encoding from `core/ops.mech`.
 4. Extend diagnostics with declaration context and improve source/output
    budgets as measurements justify changes.
 
 ## Known limits of this slice
+
+- `map`, `bind` and `filter` over a list use one step of the depth fuel for
+  each item, and the depth fuel is at most 512 steps. Thus a long list made by
+  `bind` can stop with a fuel error. Their function argument is a name, not a
+  `fun` term or a partial application.
 
 - Hash wraps a Text value. The compiler does not compute or validate digest
   strings, resolve references to log entries, or apply record projections.
