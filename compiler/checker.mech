@@ -56,10 +56,11 @@ def synthForm : Text -> Nat := fun (name : Text) =>
     (select Nat (sameText name strans) 4 (projectionIndex name)))
 
 -- Forms that check against a declared structure type: 1 pure, 2 map,
--- 3 bind, 4 filter.
+-- 3 bind, 4 filter, 5 fold, 6 unfold.
 def structureForm : Text -> Nat := fun (name : Text) =>
   select Nat (sameText name spure) 1 (select Nat (sameText name smap) 2
-    (select Nat (sameText name sbind) 3 (select Nat (sameText name sfilter) 4 0)))
+    (select Nat (sameText name sbind) 3 (select Nat (sameText name sfilter) 4
+      (select Nat (sameText name sfold) 5 (select Nat (sameText name sunfold) 6 0)))))
 
 -- An equality type keeps its sides as canonical JSON text.
 mu EqSides : Type 0 with
@@ -196,20 +197,23 @@ def unaryArgument : List Binding -> List Token -> Parsed Unary :=
               | some op => parsed op tail)))
 
 -- Structure forms act on the last type argument of Option, List and Sum.
+-- Text, Values and Attrs are sequences of bytes, of values and of fields.
+-- A field is the pair of its key and its value.
 mu Shape : Type 0 with
 | shapeOption : LType -> Shape
 | shapeList : LType -> Shape
 | shapeSum : LType -> LType -> Shape
+| shapeSequence : LType -> Shape
 | shapeNone : Shape
 
 def shapeOf : LType -> Shape := fun (ty : LType) =>
   case ty as self in LType return Shape with
   | tyNat => shapeNone
-  | tyText => shapeNone
+  | tyText => shapeSequence tyNat
   | tyFlag => shapeNone
   | tyValue => shapeNone
-  | tyValues => shapeNone
-  | tyAttrs => shapeNone
+  | tyValues => shapeSequence tyValue
+  | tyAttrs => shapeSequence (tyProd tyText tyValue)
   | tyKind => shapeNone
   | tyHash => shapeNone
   | tyRef kind => shapeNone
@@ -221,12 +225,14 @@ def shapeOf : LType -> Shape := fun (ty : LType) =>
   | tyUniverse level => shapeNone
   | tyEq a x y => shapeNone
 
--- 0 no instance, 1 Option, 2 List, 3 Sum E. Filter has no Sum instance.
+-- 0 no instance, 1 Option, 2 List, 3 Sum E, 4 Text, Values or Attrs. Filter
+-- has no Sum instance, and the sequences have only filter.
 def shapeCode : Nat -> LType -> Nat := fun (form : Nat) (ty : LType) =>
   case (shapeOf ty) as self in Shape return Nat with
   | shapeOption a => 1
   | shapeList a => 2
   | shapeSum e a => select Nat (numberEq form 4) 0 3
+  | shapeSequence a => select Nat (numberEq form 4) 4 0
   | shapeNone => 0
 
 def shapeElement : LType -> LType := fun (ty : LType) =>
@@ -234,6 +240,7 @@ def shapeElement : LType -> LType := fun (ty : LType) =>
   | shapeOption a => a
   | shapeList a => a
   | shapeSum e a => a
+  | shapeSequence a => a
   | shapeNone => ty
 
 def shapeWith : LType -> LType -> LType := fun (ty : LType) (element : LType) =>
@@ -241,6 +248,7 @@ def shapeWith : LType -> LType -> LType := fun (ty : LType) (element : LType) =>
   | shapeOption a => tyOption element
   | shapeList a => tyList element
   | shapeSum e a => tySum e element
+  | shapeSequence a => ty
   | shapeNone => ty
 
 def someValue : LType -> Value -> Value := fun (ty : LType) (value : Value) =>
@@ -252,6 +260,7 @@ def pureValue : LType -> Value -> Value := fun (ty : LType) (value : Value) =>
   | shapeOption a => someValue a value
   | shapeList a => valueItems (valuesItem value valuesEnd)
   | shapeSum e a => objectOne kInr value
+  | shapeSequence a => value
   | shapeNone => value
 
 def isNull : Value -> Nat := fun (value : Value) =>
@@ -309,6 +318,7 @@ def payloadOf : LType -> LType -> Value -> Option Value :=
       (some (select Value (encodesNull element) (projectValue 1 value) value))
   | shapeList a => none
   | shapeSum e a => select (Option Value) (sumLeft value) none (some (projectValue 1 value))
+  | shapeSequence a => none
   | shapeNone => none
 
 -- Join a source value and the result of one application: 2 map wraps the
@@ -333,6 +343,174 @@ def structureFits : Nat -> LType -> Unary -> Nat := fun (form : Nat) (ty : LType
 -- map and bind read F A for the parameter type A. Filter reads F A itself.
 def structureSource : Nat -> LType -> Unary -> LType := fun (form : Nat) (ty : LType) (op : Unary) =>
   select LType (numberEq form 4) ty (shapeWith ty (unaryParam op))
+
+-- The function argument of fold and unfold names a definition. It keeps the
+-- parameters, the result type and the body tokens.
+mu Stepper : Type 0 with
+| stepper : List Param -> LType -> List Token -> Stepper
+
+def stepperParams : Stepper -> List Param := fun (op : Stepper) =>
+  case op as self in Stepper return List Param with
+  | stepper params result body => params
+
+def stepperResult : Stepper -> LType := fun (op : Stepper) =>
+  case op as self in Stepper return LType with
+  | stepper params result body => result
+
+def stepperBody : Stepper -> List Token := fun (op : Stepper) =>
+  case op as self in Stepper return List Token with
+  | stepper params result body => body
+
+def stepperEnvironment : Stepper -> List Value -> List Binding -> List Binding :=
+  fun (op : Stepper) (values : List Value) (environment : List Binding) =>
+  bindParams (stepperParams op) values environment
+
+def stepperArgument : List Binding -> List Token -> Parsed Stepper :=
+  fun (environment : List Binding) (tokens : List Token) =>
+  case tokens as self in List return Parsed Stepper with
+  | nil => parseError 0 eStep
+  | cons head tail => (
+      case head as token in Token return Parsed Stepper with
+      | numberToken position number => parseError position eStep
+      | stringToken position text => parseError position eStep
+      | punctuation position mark => parseError position eStep
+      | identifier position name => (
+          case (lookup name environment) as found in Option return Parsed Stepper with
+          | none => parseError position eStep
+          | some item => (
+              case item as bound in Binding return Parsed Stepper with
+              | binding other ty value => parseError position eStep
+              | typeBinding other universe defined => parseError position eStep
+              | funBinding other params result body => parsed (stepper params result body) tail)))
+
+def rec sameTypes : List LType -> List LType -> Nat := fun (left : List LType) (right : List LType) =>
+  case left as self in List return Nat with
+  | nil => (
+      case right as other in List return Nat with
+      | nil => 1
+      | cons head tail => 0)
+  | cons head tail => (
+      case right as other in List return Nat with
+      | nil => 0
+      | cons first rest => boolAnd (sameType head first) (sameTypes tail rest))
+
+-- Algebra carriers: 1 Nat, 2 a sequence (List A, Text, Values or Attrs),
+-- 0 no instance.
+def carrierCode : LType -> Nat := fun (ty : LType) =>
+  case (shapeOf ty) as self in Shape return Nat with
+  | shapeOption a => 0
+  | shapeList a => 2
+  | shapeSum e a => 0
+  | shapeSequence a => 2
+  | shapeNone => select Nat (sameType ty tyNat) 1 0
+
+def rec textElements : Text -> Values := fun (text : Text) =>
+  case text as self in Text return Values with
+  | textEnd => valuesEnd
+  | textByte byte rest => valuesItem (valueNat byte) (textElements rest)
+
+def rec fieldElements : Attrs -> Values := fun (attrs : Attrs) =>
+  case attrs as self in Attrs return Values with
+  | attrsEnd => valuesEnd
+  | attrsField key item rest => valuesItem (objectTwo kFirst (valueText key) kSecond item) (fieldElements rest)
+
+def sequenceElements : Value -> Values := fun (value : Value) =>
+  case value as self in Value return Values with
+  | valueNull => valuesEnd
+  | valueFlag flag => valuesEnd
+  | valueNat number => valuesEnd
+  | valueText text => textElements text
+  | valueItems items => items
+  | valueAttrs attrs => fieldElements attrs
+
+-- A fold over the number n applies its function n times, once for each of n
+-- null items. The fuel bounds n.
+def rec unitItems : Fuel -> Nat -> Option Values := fun (fuel : Fuel) (count : Nat) =>
+  case fuel as guard in Fuel return Option Values with
+  | fuelEnd => select (Option Values) (numberEq count 0) (some valuesEnd) none
+  | fuelMore more => (
+      case (natEq count 0) as done return Option Values with
+      | 1 (x : prod ()) => some valuesEnd
+      | 0 (x : prod ()) => (
+          case (unitItems more (natSub count 1)) as inner in Option return Option Values with
+          | none => none
+          | some items => some (valuesItem valueNull items)))
+
+def elementsOf : Fuel -> Value -> Option Values := fun (fuel : Fuel) (value : Value) =>
+  case (asNat value) as number in Option return Option Values with
+  | none => some (sequenceElements value)
+  | some count => unitItems fuel count
+
+def countOf : Value -> Nat := fun (value : Value) =>
+  case (asNat value) as number in Option return Nat with
+  | none => 0
+  | some count => count
+
+def rec countValues : Values -> Nat := fun (items : Values) =>
+  case items as self in Values return Nat with
+  | valuesEnd => 0
+  | valuesItem item rest => natAdd (countValues rest) 1
+
+def rec textOfElements : Values -> Option Text := fun (items : Values) =>
+  case items as self in Values return Option Text with
+  | valuesEnd => some textEnd
+  | valuesItem item rest => (
+      case (textOfElements rest) as tail in Option return Option Text with
+      | none => none
+      | some text => (
+          case (asNat item) as byte in Option return Option Text with
+          | none => none
+          | some number => select (Option Text) (numberLt number 256) (some (textByte number text)) none))
+
+def keyOf : Value -> Text := fun (item : Value) =>
+  case (asText (projectValue 1 item)) as key in Option return Text with
+  | none => textEnd
+  | some text => text
+
+def rec fieldsOf : Values -> Result Attrs := fun (items : Values) =>
+  case items as self in Values return Result Attrs with
+  | valuesEnd => success attrsEnd
+  | valuesItem item rest => (
+      case (fieldsOf rest) as tail in Result return Result Attrs with
+      | failure at message => failure at message
+      | success attrs => select (Result Attrs) (hasField (keyOf item) attrs)
+          (failure 0 eField)
+          (success (attrsField (keyOf item) (projectValue 2 item) attrs)))
+
+-- Build a carrier value from its elements: the count for Nat, the bytes for
+-- Text, the fields for Attrs, and the items otherwise. Reject invalid bytes
+-- and duplicate attribute keys before the value can be consumed or printed.
+def rebuild : LType -> Values -> Result Value := fun (ty : LType) (items : Values) =>
+  case (natEq (sameType ty tyText) 1) as textual return Result Value with
+  | 1 (x : prod ()) => (
+      case (textOfElements items) as text in Option return Result Value with
+      | none => failure 0 eByte
+      | some bytes => success (valueText bytes))
+  | 0 (x : prod ()) => (
+      case (natEq (sameType ty tyAttrs) 1) as fields return Result Value with
+      | 1 (x : prod ()) => (
+          case (fieldsOf items) as attrs in Result return Result Value with
+          | failure at message => failure at message
+          | success fields => success (valueAttrs fields))
+      | 0 (x : prod ()) => success (select Value (sameType ty tyNat)
+          (valueNat (countValues items)) (valueItems items)))
+
+-- fold over Nat takes C -> C. Over a sequence of E it takes E -> C -> C.
+def foldFits : LType -> LType -> Stepper -> Nat := fun (ty : LType) (result : LType) (op : Stepper) =>
+  boolAnd (sameType (stepperResult op) result) (sameTypes (paramTypes (stepperParams op))
+    (select (List LType) (sameType ty tyNat) (cons result nil) (cons (shapeElement ty) (cons result nil))))
+
+def unfoldSeed : Stepper -> LType := fun (op : Stepper) =>
+  case (paramTypes (stepperParams op)) as types in List return LType with
+  | nil => tyNat
+  | cons head tail => head
+
+-- unfold into Nat takes S -> Option S. Into a sequence of E it takes
+-- S -> Option (Prod E S).
+def unfoldFits : LType -> Stepper -> Nat := fun (ty : LType) (op : Stepper) =>
+  boolAnd (sameTypes (paramTypes (stepperParams op)) (cons (unfoldSeed op) nil))
+    (sameType (stepperResult op) (tyOption (select LType (sameType ty tyNat) (unfoldSeed op)
+      (tyProd (shapeElement ty) (unfoldSeed op)))))
 
 -- A synthesized argument is an earlier definition, a projection, symm,
 -- trans, either, an application, or one of these in parentheses. An
@@ -434,7 +612,13 @@ and parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Val
                       case (natEq (structureForm name) 0) as structural return Parsed Value with
                       | 1 (x : prod ()) => select (Parsed Value) (sameText name srefl)
                           (reflCheck position expected tail) (parseError position eUnknown)
-                      | 0 (x : prod ()) => structureTerm more position (structureForm name) atom expected environment tail)
+                      | 0 (x : prod ()) => (
+                          case (natLt (structureForm name) 5) as monadic return Parsed Value with
+                          | 1 (x : prod ()) => structureTerm more position (structureForm name) atom expected environment tail
+                          | 0 (x : prod ()) => (
+                              case (natEq (structureForm name) 5) as folding return Parsed Value with
+                              | 1 (x : prod ()) => foldTerm more position atom expected environment tail
+                              | 0 (x : prod ()) => unfoldTerm more position atom expected environment tail)))
                   | 0 (x : prod ()) => checkSynthesized position expected (synthTerm more atom environment tokens))
               | some selected => (
                       case (natEq (boolAnd atom (hasArguments (planArguments selected))) 1) as bare return Parsed Value with
@@ -493,11 +677,14 @@ and structureTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List T
                 case (parseTerm more 1 (structureSource form expected op) environment afterFunction) as argument in Parsed return Parsed Value with
                 | parseError at message => parseError at message
                 | parsed source rest => (
-                  case (natEq (shapeCode form expected) 2) as listed return Parsed Value with
+                  case (natEq (carrierCode expected) 2) as listed return Parsed Value with
                   | 1 (x : prod ()) => (
-                      case (mapItems more position form op environment (itemsOf source)) as mapped in Parsed return Parsed Value with
+                      case (mapItems more position form op environment (sequenceElements source)) as mapped in Parsed return Parsed Value with
                       | parseError at message => parseError at message
-                      | parsed items ignored => parsed (valueItems items) rest)
+                      | parsed items ignored => (
+                          case (rebuild expected items) as rebuilt in Result return Parsed Value with
+                          | failure at message => parseError position message
+                          | success value => parsed value rest))
                   | 0 (x : prod ()) => (
                       case (payloadOf expected (unaryParam op) source) as payload in Option return Parsed Value with
                       | none => parsed source rest
@@ -549,3 +736,104 @@ and eitherTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
                   (unaryBody (select Unary (sumLeft source) onLeft onRight))) as applied in Parsed return Parsed Typed with
               | parseError at message => parseError at message
               | parsed value after => parsed (typed (unaryResult onLeft) value) rest))))))
+-- fold f z t synthesizes the type of t. Over a sequence it applies f from the
+-- last element: fold f z nil is z, and fold f z (cons x xs) is
+-- f x (fold f z xs). Over the number n it applies f n times to z.
+and foldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
+  fun (fuel : Fuel) (position : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Parsed Value with
+    | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
+    | 0 (x : prod ()) => (
+      case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
+      | parseError at message => parseError at message
+      | parsed op afterFunction => (
+        case (parseTerm more 1 expected environment afterFunction) as initial in Parsed return Parsed Value with
+        | parseError at message => parseError at message
+        | parsed start afterStart => (
+          case (synthTerm more 1 environment afterStart) as source in Parsed return Parsed Value with
+          | parseError at message => parseError at message
+          | parsed found rest => (
+            case found as item in Typed return Parsed Value with
+            | typed ty value => (
+              case (natEq (carrierCode ty) 0) as carried return Parsed Value with
+              | 1 (x : prod ()) => parseError (firstPosition afterStart) eStructure
+              | 0 (x : prod ()) => (
+                case (natEq (foldFits ty expected op) 1) as fits return Parsed Value with
+                | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+                | 1 (x : prod ()) => (
+                  case (elementsOf more value) as elements in Option return Parsed Value with
+                  | none => parseError position eFuel
+                  | some items => (
+                    case (foldItems more position op (carrierCode ty) environment items start) as folded in Parsed return Parsed Value with
+                    | parseError at message => parseError at message
+                    | parsed result ignored => parsed result rest)))))))))
+-- Each element uses one step of the depth fuel. Over Nat (code 1) the
+-- function takes only the accumulator.
+and foldItems : Fuel -> Nat -> Stepper -> Nat -> List Binding -> Values -> Value -> Parsed Value :=
+  fun (fuel : Fuel) (position : Nat) (op : Stepper) (code : Nat) (environment : List Binding) (items : Values) (start : Value) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case items as self in Values return Parsed Value with
+    | valuesEnd => parsed start nil
+    | valuesItem item rest => (
+        case (foldItems more position op code environment rest start) as inner in Parsed return Parsed Value with
+        | parseError at message => parseError at message
+        | parsed acc ignored => parseTerm more 0 (stepperResult op)
+            (stepperEnvironment op (select (List Value) (numberEq code 1) (cons acc nil) (cons item (cons acc nil))) environment)
+            (stepperBody op)))
+-- unfold g n s checks against a carrier. It applies g to the seed s until g
+-- gives none or n elements exist.
+and unfoldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
+  fun (fuel : Fuel) (position : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Parsed Value with
+    | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
+    | 0 (x : prod ()) => (
+      case (natEq (carrierCode expected) 0) as carried return Parsed Value with
+      | 1 (x : prod ()) => parseError position eStructure
+      | 0 (x : prod ()) => (
+        case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
+        | parseError at message => parseError at message
+        | parsed op afterFunction => (
+          case (natEq (unfoldFits expected op) 1) as fits return Parsed Value with
+          | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+          | 1 (x : prod ()) => (
+            case (parseTerm more 1 tyNat environment afterFunction) as bounded in Parsed return Parsed Value with
+            | parseError at message => parseError at message
+            | parsed limit afterLimit => (
+              case (parseTerm more 1 (unfoldSeed op) environment afterLimit) as seeded in Parsed return Parsed Value with
+              | parseError at message => parseError at message
+              | parsed seed rest => (
+                case (unfoldItems more position op (carrierCode expected) environment (countOf limit) seed) as built in Parsed return Parsed Value with
+                | parseError at message => parseError at message
+                | parsed items ignored => (
+                  case (rebuild expected items) as rebuilt in Result return Parsed Value with
+                  | failure at message => parseError position message
+                  | success result => parsed result rest))))))))
+-- Each element uses one step of the depth fuel. Into Nat (code 1) the payload
+-- of g is the next seed. Otherwise it is the pair of the element and the
+-- next seed.
+and unfoldItems : Fuel -> Nat -> Stepper -> Nat -> List Binding -> Nat -> Value -> Parsed Values :=
+  fun (fuel : Fuel) (position : Nat) (op : Stepper) (code : Nat) (environment : List Binding) (limit : Nat) (seed : Value) =>
+  case fuel as guard in Fuel return Parsed Values with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (natEq limit 0) as done return Parsed Values with
+    | 1 (x : prod ()) => parsed valuesEnd nil
+    | 0 (x : prod ()) => (
+      case (parseTerm more 0 (stepperResult op) (stepperEnvironment op (cons seed nil) environment) (stepperBody op)) as applied in Parsed return Parsed Values with
+      | parseError at message => parseError at message
+      | parsed result after => (
+        case (payloadOf (stepperResult op) (shapeElement (stepperResult op)) result) as next in Option return Parsed Values with
+        | none => parsed valuesEnd nil
+        | some payload => (
+          case (unfoldItems more position op code environment (natSub limit 1)
+              (select Value (numberEq code 1) payload (projectValue 2 payload))) as remaining in Parsed return Parsed Values with
+          | parseError at message => parseError at message
+          | parsed items ignored => parsed (valuesItem (select Value (numberEq code 1) valueNull (projectValue 1 payload)) items) nil))))
