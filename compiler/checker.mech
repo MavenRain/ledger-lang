@@ -1,3 +1,159 @@
+def projectionIndex : Text -> Nat := fun (name : Text) =>
+  select Nat (sameText name sfirst) 1 (select Nat (sameText name ssecond) 2 0)
+
+-- A checked product value is the object with the fields first and second.
+def projectValue : Nat -> Value -> Value := fun (index : Nat) (value : Value) =>
+  case value as self in Value return Value with
+  | valueNull => valueNull
+  | valueFlag flag => valueNull
+  | valueNat number => valueNull
+  | valueText text => valueNull
+  | valueItems items => valueNull
+  | valueAttrs attrs => (
+      case attrs as fields in Attrs return Value with
+      | attrsEnd => valueNull
+      | attrsField key item rest => select Value (numberEq index 1) item (
+          case rest as others in Attrs return Value with
+          | attrsEnd => valueNull
+          | attrsField other next more => next))
+
+def project : Nat -> Nat -> Typed -> List Token -> Parsed Typed :=
+  fun (position : Nat) (index : Nat) (found : Typed) (tokens : List Token) =>
+  case found as self in Typed return Parsed Typed with
+  | typed ty value => (
+      case ty as product in LType return Parsed Typed with
+      | tyNat => parseError position eProduct
+      | tyText => parseError position eProduct
+      | tyFlag => parseError position eProduct
+      | tyValue => parseError position eProduct
+      | tyValues => parseError position eProduct
+      | tyAttrs => parseError position eProduct
+      | tyKind => parseError position eProduct
+      | tyHash => parseError position eProduct
+      | tyRef kind => parseError position eProduct
+      | tySchema name => parseError position eProduct
+      | tyOption a => parseError position eProduct
+      | tyList a => parseError position eProduct
+      | tyProd a b => parsed (select Typed (numberEq index 1)
+          (typed a (projectValue 1 value)) (typed b (projectValue 2 value))) tokens
+      | tySum a b => parseError position eProduct
+      | tyUniverse level => parseError position eProduct
+      | tyEq a x y => parseError position eProduct)
+
+def checkSynthesized : Nat -> LType -> Parsed Typed -> Parsed Value :=
+  fun (position : Nat) (expected : LType) (result : Parsed Typed) =>
+  case result as self in Parsed return Parsed Value with
+  | parseError at message => parseError at message
+  | parsed found rest => (
+      case found as item in Typed return Parsed Value with
+      | typed ty value => select (Parsed Value) (sameType expected ty)
+          (parsed value rest) (parseError position eTerm))
+
+-- Forms that synthesize a type from one argument: 1 first, 2 second,
+-- 3 symm. The form 4 trans takes two arguments.
+def synthForm : Text -> Nat := fun (name : Text) =>
+  select Nat (sameText name ssymm) 3 (select Nat (sameText name strans) 4 (projectionIndex name))
+
+-- An equality type keeps its sides as canonical JSON text.
+mu EqSides : Type 0 with
+| eqSides : LType -> Text -> Text -> EqSides
+| notEq : EqSides
+
+def sidesOf : LType -> EqSides := fun (ty : LType) =>
+  case ty as self in LType return EqSides with
+  | tyNat => notEq
+  | tyText => notEq
+  | tyFlag => notEq
+  | tyValue => notEq
+  | tyValues => notEq
+  | tyAttrs => notEq
+  | tyKind => notEq
+  | tyHash => notEq
+  | tyRef kind => notEq
+  | tySchema name => notEq
+  | tyOption a => notEq
+  | tyList a => notEq
+  | tyProd a b => notEq
+  | tySum a b => notEq
+  | tyUniverse level => notEq
+  | tyEq a x y => eqSides a x y
+
+-- A proof has no runtime content. Its value is null.
+def reflCheck : Nat -> LType -> List Token -> Parsed Value :=
+  fun (position : Nat) (expected : LType) (tokens : List Token) =>
+  case (sidesOf expected) as self in EqSides return Parsed Value with
+  | notEq => parseError position eTerm
+  | eqSides a x y => select (Parsed Value) (sameText x y)
+      (parsed valueNull tokens) (parseError position eRefl)
+
+def symmProof : Nat -> Typed -> List Token -> Parsed Typed :=
+  fun (position : Nat) (found : Typed) (tokens : List Token) =>
+  case found as self in Typed return Parsed Typed with
+  | typed ty value => (
+      case (sidesOf ty) as sides in EqSides return Parsed Typed with
+      | notEq => parseError position eProof
+      | eqSides a x y => parsed (typed (tyEq a y x) valueNull) tokens)
+
+def transProof : Nat -> Typed -> Typed -> List Token -> Parsed Typed :=
+  fun (position : Nat) (left : Typed) (right : Typed) (tokens : List Token) =>
+  case left as self in Typed return Parsed Typed with
+  | typed leftType leftValue => (
+    case right as other in Typed return Parsed Typed with
+    | typed rightType rightValue => (
+      case (sidesOf leftType) as first in EqSides return Parsed Typed with
+      | notEq => parseError position eProof
+      | eqSides a x y => (
+          case (sidesOf rightType) as second in EqSides return Parsed Typed with
+          | notEq => parseError position eProof
+          | eqSides b u z => select (Parsed Typed) (boolAnd (sameType a b) (sameText y u))
+              (parsed (typed (tyEq a x z) valueNull) tokens) (parseError position eTrans))))
+
+-- A synthesized argument is an earlier definition, a projection, symm,
+-- trans, or one of these in parentheses.
+def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
+  fun (fuel : Fuel) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Typed with
+  | fuelEnd => parseError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case tokens as self in List return Parsed Typed with
+    | nil => parseError 0 eInfer
+    | cons head tail => (
+      case head as token in Token return Parsed Typed with
+      | numberToken position number => parseError position eInfer
+      | stringToken position text => parseError position eInfer
+      | punctuation position mark => (
+          case (natEq mark 40) as opening return Parsed Typed with
+          | 0 (x : prod ()) => parseError position eInfer
+          | 1 (x : prod ()) => (
+              case (synthTerm more 0 environment tail) as inside in Parsed return Parsed Typed with
+              | parseError at message => parseError at message
+              | parsed found rest => closeParsed Typed found rest))
+      | identifier position name => (
+          case (lookup name environment) as known in Option return Parsed Typed with
+          | some item => (
+              case item as bound in Binding return Parsed Typed with
+              | binding other ty value => parsed (typed ty value) tail
+              | typeBinding other universe defined => parseError position eInfer)
+          | none => (
+              case (natEq (synthForm name) 0) as plain return Parsed Typed with
+              | 1 (x : prod ()) => parseError position eInfer
+              | 0 (x : prod ()) => (
+                  case (natEq atom 1) as bare return Parsed Typed with
+                  | 1 (x : prod ()) => parseError position eParen
+                  | 0 (x : prod ()) => (
+                      case (synthTerm more 1 environment tail) as argument in Parsed return Parsed Typed with
+                      | parseError at message => parseError at message
+                      | parsed found rest => (
+                          case (natLt (synthForm name) 3) as projection return Parsed Typed with
+                          | 1 (x : prod ()) => project position (synthForm name) found rest
+                          | 0 (x : prod ()) => (
+                              case (natEq (synthForm name) 3) as symmetric return Parsed Typed with
+                              | 1 (x : prod ()) => symmProof position found rest
+                              | 0 (x : prod ()) => (
+                                  case (synthTerm more 1 environment rest) as second in Parsed return Parsed Typed with
+                                  | parseError at message => parseError at message
+                                  | parsed other after => transProof position found other after)))))))))
+
 -- Parsing, checking and constructor evaluation are fused in this M0 slice.
 -- An argument (atom = 1) is a literal, a reference, a nullary constructor or
 -- a parenthesized term.
@@ -26,10 +182,15 @@ def rec parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed
           | some item => (
               case item as known in Binding return Parsed Value with
               | binding other ty value => select (Parsed Value) (sameType expected ty)
-                  (parsed value tail) (parseError position eTerm))
+                  (parsed value tail) (parseError position eTerm)
+              | typeBinding other universe defined => parseError position eTerm)
           | none => (
               case (constructorPlan expected name) as selected in Option return Parsed Value with
-              | none => parseError position eUnknown
+              | none => (
+                  case (natEq (synthForm name) 0) as plain return Parsed Value with
+                  | 1 (x : prod ()) => select (Parsed Value) (sameText name srefl)
+                      (reflCheck position expected tail) (parseError position eUnknown)
+                  | 0 (x : prod ()) => checkSynthesized position expected (synthTerm more atom environment tokens))
               | some selected => (
                       case (natEq (boolAnd atom (hasArguments (planArguments selected))) 1) as bare return Parsed Value with
                       | 1 (x : prod ()) => parseError position eParen

@@ -23,6 +23,8 @@ make check
 make test
 bin/ledgerc examples/values.ledger > values.json
 bin/ledgerc examples/crm.ledger > crm.json
+bin/ledgerc examples/formers.ledger > formers.json
+bin/ledgerc examples/equality.ledger > equality.json
 ```
 
 `make test` builds `build/ledgerc.wasm` and runs the integration suite.
@@ -53,8 +55,8 @@ or a carriage return. A name or keyword cannot start directly after a number.
 Implemented types are `Nat`, every family in `core/schema.mech`, `Prod A B`,
 and `Sum A B`. This includes all business records, enums, and variants, plus
 `Hash`, indexed `Ref k`, `Option A`, and `List A`. Constructors follow the
-schema, plus `pair`, `inl`, and `inr` from the specification. Products and sums
-currently support construction only.
+schema, plus `pair`, `inl`, and `inr` from the specification. `first` and `second`
+project a product. Sums support construction only.
 
 ```text
 def companyKind : Kind := kindParty
@@ -76,6 +78,39 @@ such as `scopeAll` and `systemEmail`. `Hash` encodes as its digest Text;
 M0 accepts that text as supplied. Hash computation, reference resolution,
 and record projection are later work. See [examples/crm.ledger](examples/crm.ledger)
 for a program constructing all eight business record families.
+
+A type definition gives a name to a type. `Type 0` classifies the data types
+and `Type 1` classifies `Type 0`. A type definition is not an instance, so
+the output does not contain it. Type formers take only data types, thus
+`Option (Type 0)` is an error.
+
+```text
+def Contact : Type 0 := Prod Text (Option Text)
+def mira : Contact := pair "Mira" none
+def miraName : Text := first mira
+```
+
+The argument of `first` or `second` is an earlier definition, a projection,
+or one of these in parentheses. Its type must be a product. A literal or a
+constructor has no type of its own, so it is not an argument of a projection.
+See [examples/formers.ledger](examples/formers.ledger).
+
+An equality type `Eq A x y` is the type of a definition. `A` is a data type
+in atom form, and the sides `x` and `y` are atoms of type `A`. `refl` proves
+`Eq A x x`: the compiler evaluates both sides and compares their JSON
+encodings. `symm p` and `trans p q` synthesize their types from earlier
+proofs, like `first`. Proofs are not instances, so the output omits them:
+
+```
+def price : Nat := 1200
+def total : Nat := 1200
+def same : Eq Nat price total := refl
+def back : Eq Nat total price := symm same
+```
+
+In this slice, `Eq` cannot occur inside another type former or a type
+definition. The checking budget of the definition limits the JSON size of
+each side. See [examples/equality.ledger](examples/equality.ledger).
 
 `Option` presence is preserved. `none` is `null`. When the payload type can
 encode `null` (an `Option` or a `Value`), `some v` is `{"some":v}`. For other

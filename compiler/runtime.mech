@@ -123,6 +123,8 @@ mu LType : Type 0 with
 | tyList : LType -> LType
 | tyProd : LType -> LType -> LType
 | tySum : LType -> LType -> LType
+| tyUniverse : Nat -> LType
+| tyEq : LType -> Text -> Text -> LType
 
 mu Plan : Type 0 with
 | plan : List LType -> Nat -> Text -> Plan
@@ -158,17 +160,25 @@ mu Parsed (0 A : Type 0) : Type 0 with
 
 mu Binding : Type 0 with
 | binding : Text -> LType -> Value -> Binding
+| typeBinding : Text -> LType -> LType -> Binding
+
+-- A synthesized term carries its type with its value.
+mu Typed : Type 0 with
+| typed : LType -> Value -> Typed
+
+def bindingName : Binding -> Text := fun (item : Binding) =>
+  case item as self in Binding return Text with
+  | binding name ty value => name
+  | typeBinding name universe defined => name
 
 def rec lookup : Text -> List Binding -> Option Binding :=
   fun (name : Text) (environment : List Binding) =>
     case environment as self in List return Option Binding with
     | nil => none
-    | cons head tail =>
-        case head as item in Binding return Option Binding with
-        | binding other ty value => (
-            case (natEq (sameText name other) 1) as found return Option Binding with
-            | 1 (x : prod ()) => some head
-            | 0 (x : prod ()) => lookup name tail)
+    | cons head tail => (
+        case (natEq (sameText name (bindingName head)) 1) as found return Option Binding with
+        | 1 (x : prod ()) => some head
+        | 0 (x : prod ()) => lookup name tail)
 
 def rec hasField : Text -> Attrs -> Nat := fun (key : Text) (attrs : Attrs) =>
   case attrs as self in Attrs return Nat with

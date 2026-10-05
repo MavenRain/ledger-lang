@@ -21,6 +21,47 @@ def rec outputFuelFrom : Fuel -> Text -> Fuel := fun (done : Fuel) (source : Tex
 mu Located : Type 0 with
 | located : Nat -> Value -> Located
 
+-- An equality type keeps the canonical JSON text of its two sides.
+def eqType : Nat -> Fuel -> LType -> Value -> Value -> List Token -> Parsed LType :=
+  fun (position : Nat) (fuel : Fuel) (a : LType) (lhs : Value) (rhs : Value) (tokens : List Token) =>
+  case (printValue fuel textEnd 0 lhs) as left in Printed return Parsed LType with
+  | printError at message => parseError position message
+  | printed leftFuel leftText => (
+      case (printValue fuel textEnd 0 rhs) as right in Printed return Parsed LType with
+      | printError at message => parseError position message
+      | printed rightFuel rightText => parsed (tyEq a (reverseText leftText) (reverseText rightText)) tokens)
+
+-- `Eq A x y` is only the type of a definition. A is an atom that is a data
+-- type, and the sides x and y are atoms of type A.
+def parseEqType : Nat -> Fuel -> List Binding -> List Token -> Parsed LType :=
+  fun (position : Nat) (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
+  case (parseType fuel 1 environment tokens) as carrier in Parsed return Parsed LType with
+  | parseError at message => parseError at message
+  | parsed a afterType => (
+    case (natEq (typeLevel a) 0) as data return Parsed LType with
+    | 0 (x : prod ()) => parseError (firstPosition tokens) eData
+    | 1 (x : prod ()) => (
+      case (parseTerm fuel 1 a environment afterType) as left in Parsed return Parsed LType with
+      | parseError at message => parseError at message
+      | parsed lhs afterLeft => (
+        case (parseTerm fuel 1 a environment afterLeft) as right in Parsed return Parsed LType with
+        | parseError at message => parseError at message
+        | parsed rhs afterRight => eqType position fuel a lhs rhs afterRight)))
+
+def declaredType : Fuel -> List Binding -> List Token -> Parsed LType :=
+  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
+  case tokens as self in List return Parsed LType with
+  | nil => parseType fuel 0 environment tokens
+  | cons head tail => (
+      case head as token in Token return Parsed LType with
+      | numberToken position number => parseType fuel 0 environment tokens
+      | stringToken position text => parseType fuel 0 environment tokens
+      | punctuation position mark => parseType fuel 0 environment tokens
+      | identifier position name => (
+          case (natEq (sameText name sEq) 1) as equality return Parsed LType with
+          | 1 (x : prod ()) => parseEqType position fuel environment tail
+          | 0 (x : prod ()) => parseType fuel 0 environment tokens))
+
 def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
   fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
   case tokens as self in List return Parsed Binding with
@@ -40,20 +81,36 @@ def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
           case (expectMark 58 tail) as colon in Parsed return Parsed Binding with
           | parseError at message => parseError at message
           | parsed ignored rest => (
-            case (parseType fuel 0 environment rest) as declared in Parsed return Parsed Binding with
+            case (declaredType fuel environment rest) as declared in Parsed return Parsed Binding with
             | parseError at message => parseError at message
             | parsed ty afterType => (
               case (expectMark 61 afterType) as assign in Parsed return Parsed Binding with
               | parseError at message => parseError at message
               | parsed ignored afterAssign => (
-                case (parseTerm fuel 0 ty environment afterAssign) as checked in Parsed return Parsed Binding with
-                | parseError at message => parseError at message
-                | parsed value after => parsed (binding name ty value) after)))))))
+                case (natEq (typeLevel ty) 0) as data return Parsed Binding with
+                | 1 (x : prod ()) => (
+                    case (parseTerm fuel 0 ty environment afterAssign) as checked in Parsed return Parsed Binding with
+                    | parseError at message => parseError at message
+                    | parsed value after => parsed (binding name ty value) after)
+                | 0 (x : prod ()) => (
+                    case (parseType fuel 0 environment afterAssign) as defined in Parsed return Parsed Binding with
+                    | parseError at message => parseError at message
+                    | parsed inner after => select (Parsed Binding) (numberEq (typeLevel ty) (natAdd (typeLevel inner) 1))
+                        (parsed (typeBinding name ty inner) after) (parseError (firstPosition afterAssign) eUniverse)))))))))
 
-def instanceValue : Binding -> Value := fun (item : Binding) =>
-  case item as self in Binding return Value with
-  | binding name ty value => valueAttrs (attrsField kName (valueText name)
-      (attrsField kType (valueText (typeName ty)) (attrsField kValue value attrsEnd)))
+def instanceValue : Text -> LType -> Value -> Value := fun (name : Text) (ty : LType) (value : Value) =>
+  valueAttrs (attrsField kName (valueText name)
+    (attrsField kType (valueText (typeName ty)) (attrsField kValue value attrsEnd)))
+
+-- Type definitions and proofs are not instances, so the output omits them.
+def recordInstance : Nat -> Binding -> List Located -> List Located :=
+  fun (position : Nat) (item : Binding) (done : List Located) =>
+  case item as self in Binding return List Located with
+  | binding name ty value => (
+      case (sidesOf ty) as proof in EqSides return List Located with
+      | notEq => cons (located position (instanceValue name ty value)) done
+      | eqSides a lhs rhs => done)
+  | typeBinding name universe defined => done
 
 def rec parseProgram : Fuel -> Fuel -> List Binding -> List Located -> List Token -> Result (List Located) :=
   fun (fuel : Fuel) (checkingFuel : Fuel) (environment : List Binding) (done : List Located) (tokens : List Token) =>
@@ -75,7 +132,7 @@ def rec parseProgram : Fuel -> Fuel -> List Binding -> List Located -> List Toke
               case (parseDefinition checkingFuel environment tail) as next in Parsed return Result (List Located) with
               | parseError at message => failure at message
               | parsed item rest => parseProgram more checkingFuel (cons item environment)
-                  (cons (located position (instanceValue item)) done) rest))))
+                  (recordInstance position item done) rest))))
 
 -- A print error reports the first byte of the definition being printed.
 def rec printInstances : Fuel -> Text -> Nat -> List Located -> Printed :=

@@ -4,8 +4,8 @@ Date: 2026-10-04. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 156 integration tests with zero failures. The current
-gate took 10.1 seconds; the test runner reported 6.2 seconds. In the
+Wasm reactor, and runs 199 integration tests with zero failures. The current
+gate took 5.3 seconds; the test runner reported 3.6 seconds. In the
 isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 

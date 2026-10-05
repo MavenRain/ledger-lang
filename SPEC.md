@@ -40,6 +40,13 @@ recursion. Recursion comes only from `fold` and `unfold` (section 4).
 | Type equality | `Eq A x y`, `refl`, `transport`, `symm`, `trans`, `cong` |
 | Universes | `Type 0`, `Type 1` |
 
+`Type 0` classifies the data types and `Type 1` classifies `Type 0`. There is
+no cumulativity. `Option`, `List`, `Prod` and `Sum` take data types only.
+
+`Eq A x y` takes a data type `A` and two terms of type `A`. Two sides are
+equal when their values have the same JSON encoding. A proof has no runtime
+content, so a definition of an `Eq` type is not an instance.
+
 ## 4. Structures
 
 - **Monad** gives `pure`, `map` and `bind`. M0 instances: `Option`, `List`,

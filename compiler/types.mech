@@ -15,6 +15,8 @@ def encodesNull : LType -> Nat := fun (ty : LType) =>
   | tyList a => 0
   | tyProd a b => 0
   | tySum a b => 0
+  | tyUniverse level => 0
+  | tyEq a x y => 1
 
 def hasArguments : List LType -> Nat := fun (types : List LType) =>
   case types as self in List return Nat with
@@ -44,6 +46,8 @@ def constructorPlan : LType -> Text -> Option Plan := fun (ty : LType) (name : T
   | tyList a => select (Option Plan) (sameText name snil) (some (plan (nil) (6) snil)) (select (Option Plan) (sameText name scons) (some (plan (cons a (cons (tyList a) (nil))) (7) scons)) (none))
   | tyProd a b => select (Option Plan) (sameText name spair) (some (plan (cons a (cons b (nil))) (10) spair)) (none)
   | tySum a b => select (Option Plan) (sameText name sinl) (some (plan (cons a (nil)) (11) sinl)) (select (Option Plan) (sameText name sinr) (some (plan (cons b (nil)) (12) sinr)) (none))
+  | tyUniverse level => none
+  | tyEq a x y => none
 
 def unaryTypeName : Text -> Text -> Text := fun (head : Text) (arg : Text) =>
   appendText head (textByte 32 (textByte 40 (appendText arg (textByte 41 textEnd))))
@@ -67,6 +71,30 @@ def rec typeName : LType -> Text := fun (ty : LType) =>
   | tyList a => unaryTypeName sList (typeName a)
   | tyProd a b => binaryTypeName sProd (typeName a) (typeName b)
   | tySum a b => binaryTypeName sSum (typeName a) (typeName b)
+  | tyUniverse level => select Text (numberEq level 0) sType0 sType1
+  | tyEq a x y => appendText (unaryTypeName sEq (typeName a))
+      (textByte 32 (textByte 40 (appendText x (textByte 41 (textByte 32
+        (textByte 40 (appendText y (textByte 41 textEnd))))))))
+
+-- Data types have level 0. Type 0 has level 1 and Type 1 has level 2.
+def typeLevel : LType -> Nat := fun (ty : LType) =>
+  case ty as self in LType return Nat with
+  | tyNat => 0
+  | tyText => 0
+  | tyFlag => 0
+  | tyValue => 0
+  | tyValues => 0
+  | tyAttrs => 0
+  | tyKind => 0
+  | tyHash => 0
+  | tyRef kind => 0
+  | tySchema name => 0
+  | tyOption a => 0
+  | tyList a => 0
+  | tyProd a b => 0
+  | tySum a b => 0
+  | tyUniverse level => natAdd level 1
+  | tyEq a x y => 0
 
 -- The current type grammar has unique canonical names, so equality of
 -- these names is structural type equality for this supported subset.
@@ -76,5 +104,9 @@ def sameType : LType -> LType -> Nat := fun (a : LType) (b : LType) =>
 def primitiveReservedName : Text -> Nat := fun (name : Text) =>
   boolOr (sameText name sNat) (boolOr (sameText name sText) (boolOr (sameText name sFlag) (boolOr (sameText name sValue) (boolOr (sameText name sValues) (boolOr (sameText name sAttrs) (boolOr (sameText name sKind) (boolOr (sameText name sOption) (boolOr (sameText name sList) (boolOr (sameText name sProd) (boolOr (sameText name sSum) (boolOr (sameText name sdef) (boolOr (sameText name srec) (boolOr (sameText name smu) (boolOr (sameText name saxiom) (boolOr (sameText name spoly) (boolOr (sameText name sspecialize) (boolOr (sameText name stextEnd) (boolOr (sameText name stextByte) (boolOr (sameText name sflagNo) (boolOr (sameText name sflagYes) (boolOr (sameText name snone) (boolOr (sameText name ssome) (boolOr (sameText name snil) (boolOr (sameText name scons) (boolOr (sameText name svalueNull) (boolOr (sameText name svalueFlag) (boolOr (sameText name svalueNat) (boolOr (sameText name svalueText) (boolOr (sameText name svalueItems) (boolOr (sameText name svalueAttrs) (boolOr (sameText name svaluesEnd) (boolOr (sameText name svaluesItem) (boolOr (sameText name sattrsEnd) (boolOr (sameText name sattrsField) (boolOr (sameText name spair) (boolOr (sameText name sinl) (boolOr (sameText name sinr) (boolOr (sameText name skindParty) (boolOr (sameText name skindMembership) (boolOr (sameText name skindCommercial) (boolOr (sameText name skindCommitment) (boolOr (sameText name skindArtifact) (boolOr (sameText name skindEvent) (boolOr (sameText name skindAssignment) (boolOr (sameText name skindPolicy) (0))))))))))))))))))))))))))))))))))))))))))))))
 
+-- Forms of SPEC.md are reserved, also the forms that later slices implement.
+def formReservedName : Text -> Nat := fun (name : Text) =>
+  boolOr (sameText name sType) (boolOr (sameText name sfun) (boolOr (sameText name sSigma) (boolOr (sameText name spack) (boolOr (sameText name switness) (boolOr (sameText name spayload) (boolOr (sameText name sEq) (boolOr (sameText name srefl) (boolOr (sameText name stransport) (boolOr (sameText name ssymm) (boolOr (sameText name strans) (boolOr (sameText name scong) (boolOr (sameText name sfirst) (boolOr (sameText name ssecond) (boolOr (sameText name seither) (boolOr (sameText name spure) (boolOr (sameText name smap) (boolOr (sameText name sbind) (boolOr (sameText name sfold) (boolOr (sameText name sunfold) (boolOr (sameText name sfilter) (0)))))))))))))))))))))
+
 def reservedName : Text -> Nat := fun (name : Text) =>
-  boolOr (schemaReservedName name) (primitiveReservedName name)
+  boolOr (schemaReservedName name) (boolOr (primitiveReservedName name) (formReservedName name))

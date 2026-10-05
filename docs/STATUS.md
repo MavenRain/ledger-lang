@@ -9,6 +9,16 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
   UTF-8 strings.
 - Type and term parser for definitions, grouped expressions, every schema
   constructor, products, and sums.
+- Universes `Type 0` and `Type 1`, type definitions, and the instance
+  boundary for types. The output does not contain type definitions. Type
+  formers refuse universe arguments.
+- `first` and `second`. Their argument synthesizes its type: an earlier
+  definition, a projection, or one of these in parentheses.
+- Equality types `Eq A x y` with `refl`, `symm`, and `trans`. Sides are atoms
+  of a data type A. The compiler compares them by their JSON encoding. An
+  equality type is only the type of a definition, and proofs are not
+  instances. `symm` and `trans` synthesize their types like `first`.
+- Reserved names for every SPEC form, also for forms of later slices.
 - Type-directed checking with exact types on references to earlier
   definitions. Duplicate and implemented schema names are refused.
 - Hash and indexed Ref construction. Ref indices accept Kind constants,
@@ -30,9 +40,11 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
 
 ## Remaining M0 work
 
-1. Add universe, function, Sigma, and Eq checking and evaluation. Enforce
-   the instance boundary for types, functions, and proofs.
-2. Add product and sum eliminators, Monad map/bind, Algebra fold/unfold,
+1. Add function and Sigma checking and evaluation, `either`, `transport`,
+   and `cong`. Functions need an internal value domain with neutral terms.
+   Then `Eq` can appear inside Sigma and Pi types. Enforce the instance
+   boundary for functions.
+2. Add Monad map/bind, Algebra fold/unfold,
    and Filterable filter with bounded evaluation.
 3. Add operation-family construction and encoding from `core/ops.mech`.
 4. Extend diagnostics with declaration context and improve source/output
@@ -44,9 +56,8 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
   strings, resolve references to log entries, or apply record projections.
   Schema comments about business rules, such as a person's Party kind or a
   confidence percentage, do not add constraints beyond the declared types.
-- The compiler does not yet reserve names of later SPEC forms (for example
-  `Sigma`, `Eq`, `Type`, and `fun`) or operation families from `core/ops.mech`.
-  Later M0 work reserves them. All implemented schema names are reserved now.
+- The compiler reserves all schema names and every form name of SPEC.md. It
+  does not yet reserve the operation families from `core/ops.mech`.
 - Each constructor argument costs one parsing fuel step. The host requires a
   structurally recursive definition to examine its recursive argument at the
   start of its body, so the argument parser cannot skip this step. README.md
