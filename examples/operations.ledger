@@ -15,3 +15,8 @@ def step : Step := makeStep history denied
 
 def key : PipelineKey := pipelineByStage
 def bucket : Bucket := makeBucket "negotiation" 2 150000
+
+-- A Query value is checked against its answer type. It is not an instance.
+def isReconciled : Query Flag := queryAmountReconciled deal
+def whoEmploys : Query (Option (Ref kindParty)) := queryEmployer acme now
+def replayed : Query Log := queryReplay before

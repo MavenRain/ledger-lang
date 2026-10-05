@@ -56,6 +56,10 @@ not complete the M0 milestone in `SPEC.md`.
   encoding follow the schema rules. `Log` is an alias of `List Entry`, so
   the output shows `List (Entry)`. The compiler does not run the write path
   or the read path.
+- `Query T` is the indexed `Query` family of `core/ops.mech` as a `Type 1`
+  type. The compiler checks each of the 29 constructors against its answer
+  type. A Query value is not an instance. A Query type is not an argument of
+  a type former, a parameter type or a result type.
 
 ## Remaining M0 work
 
@@ -65,11 +69,9 @@ not complete the M0 milestone in `SPEC.md`.
    `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
 2. Add the `Value` carrier of Algebra fold/unfold. It needs one algebra
    case for each of the six `Value` constructors.
-3. Add the indexed `Query` family of `core/ops.mech` as a `Type 1` type
-   whose values are not instances. `WritePath` and `ReadPath` are function
-   types, so they need function types in type definitions. Until then the
-   type parser refuses these three names with
-   `this type belongs to a later milestone`.
+3. Add `WritePath` and `ReadPath`. They are function types, so they need
+   function types in type definitions. Until then the type parser refuses
+   these two names with `this type belongs to a later milestone`.
 4. Extend diagnostics with declaration context and improve source/output
    budgets as measurements justify changes.
 

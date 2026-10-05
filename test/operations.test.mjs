@@ -32,10 +32,11 @@ function readFamilies(source) {
       const name = declaration.match(/^\w+/)[0];
       const parts = declaration.slice(declaration.indexOf(':') + 1).split(/\s+->\s+/);
       const result = parts.pop().trim();
-      // Query is an indexed family of a later milestone. Only its names are used.
-      if (family === 'Query') return { name, fields: [] };
-      assert.match(result, new RegExp(`^${family}(?:\\s+\\w+)?$`));
-      return { name, fields: parts.map(part => {
+      // Query is indexed: the result of each constructor names its answer type.
+      const answer = family === 'Query' ? result.replace(/^Query\s+/, '') : null;
+      if (family === 'Query') assert.notEqual(answer, result, name);
+      else assert.match(result, new RegExp(`^${family}(?:\\s+\\w+)?$`));
+      return { name, answer, fields: parts.map(part => {
         const match = part.trim().match(/^\((\w+)\s*:\s*(.+)\)$/s);
         assert.ok(match, part);
         return { name: match[1], type: match[2].trim() };
@@ -151,8 +152,48 @@ test('Log is an alias of List Entry', () => {
   reject('def log : Log := cons momentNow nil');
 });
 
-test('Query, WritePath and ReadPath are types of a later milestone', () => {
-  for (const type of ['Query Flag', 'Query', 'WritePath', 'ReadPath', 'List WritePath', 'Option (Query Flag)']) {
+for (const constructor of families.get('Query')) {
+  test(`query ${constructor.name}: answer type, argument types, and arity`, () => {
+    const args = constructor.fields.map(field => `(${sample(field.type).term})`);
+    const type = `Query (${constructor.answer})`;
+    const define = (index, terms) => `def result : ${index} := ${[constructor.name, ...terms].join(' ')}`;
+    // A Query value is checked, but it is not an instance.
+    assert.deepEqual(accept(`${define(type, args)}\ndef again : ${type} := result\ndef one : Nat := 1`),
+      [{ name: 'one', type: 'Nat', value: 1 }]);
+    reject(`${define(type, args)} 0`);
+    const other = constructor.answer === 'Flag' ? 'Query Nat' : 'Query Flag';
+    assert.match(JSON.stringify(reject(define(other, args))), /this constructor gives a Query of another answer type/);
+    assert.match(JSON.stringify(reject(define('Nat', args))), /unknown name or constructor/);
+    constructor.fields.forEach((field, index) => {
+      const wrong = field.type === 'Nat' ? '"wrong"' : '0';
+      reject(define(type, args.map((arg, at) => (at === index ? wrong : arg))));
+    });
+    if (args.length) reject(define(type, args.slice(0, -1)));
+  });
+}
+
+test('Query takes one data type and is a Type 1 type', () => {
+  const deal = 'def deal : Ref kindCommercial := refTo (hashOf "deal")';
+  const ask = `${deal}\ndef ask : Query Flag := queryAmountReconciled deal`;
+  const instance = { name: 'deal', type: 'Ref (kindCommercial)', value: { kind: 'kindCommercial', hash: 'deal' } };
+  assert.deepEqual(accept(ask), [instance]);
+  assert.deepEqual(accept(`${deal}\ndef Answer : Type 1 := Query Flag\ndef ask : Answer := queryAmountReconciled deal`), [instance]);
+  assert.match(JSON.stringify(reject('def Answer : Type 0 := Query Flag')), /type is not in the declared universe/);
+  for (const type of ['Option (Query Flag)', 'List (Query Flag)', 'Prod (Query Flag) Nat', 'Sum Nat (Query Flag)',
+    'Query (Query Flag)', 'Query (Type 0)']) {
+    assert.match(JSON.stringify(reject(`def x : ${type} := nil`)), /expected a data type/, type);
+  }
+  assert.match(JSON.stringify(reject('def x : List Query := nil')), /argument needs parentheses/);
+  assert.match(JSON.stringify(reject('def x : Query := nil')), /expected a supported type/);
+  reject(`${deal}\ndef f : (q : Query Flag) -> Nat := 1`);
+  reject(`${deal}\ndef f : (n : Nat) -> Query Flag := queryAmountReconciled deal`);
+  reject(`${ask}\ndef p : Prod (Query Flag) Nat := pair ask 1`);
+  reject(`${ask}\ndef n : Nat := first ask`);
+  reject(`${ask}\ndef same : Eq (Query Flag) ask ask := refl`);
+});
+
+test('WritePath and ReadPath are types of a later milestone', () => {
+  for (const type of ['WritePath', 'ReadPath', 'List WritePath', 'Option ReadPath']) {
     assert.match(JSON.stringify(reject(`def x : ${type} := nil`)), /this type belongs to a later milestone/, type);
   }
   assert.doesNotMatch(JSON.stringify(reject('def x : Unknown := nil')), /later milestone/);

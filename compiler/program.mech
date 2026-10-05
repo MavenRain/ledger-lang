@@ -234,7 +234,7 @@ def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
               case (expectMark 61 afterType) as assign in Parsed return Parsed Binding with
               | parseError at message => parseError at message
               | parsed ignored afterAssign => (
-                case (natEq (typeLevel ty) 0) as data return Parsed Binding with
+                case (natEq (isTermType ty) 1) as data return Parsed Binding with
                 | 1 (x : prod ()) => (
                     case (parseTerm fuel 0 ty environment afterAssign) as checked in Parsed return Parsed Binding with
                     | parseError at message => parseError at message
@@ -249,14 +249,18 @@ def instanceValue : Text -> LType -> Value -> Value := fun (name : Text) (ty : L
   valueAttrs (attrsField kName (valueText name)
     (attrsField kType (valueText (typeName ty)) (attrsField kValue value attrsEnd)))
 
--- Type definitions and proofs are not instances, so the output omits them.
+-- Type definitions, proofs and Query values are not instances, so the output
+-- omits them.
 def recordInstance : Nat -> Binding -> List Located -> List Located :=
   fun (position : Nat) (item : Binding) (done : List Located) =>
   case item as self in Binding return List Located with
   | binding name ty value => (
-      case (sidesOf ty) as proof in EqSides return List Located with
-      | notEq => cons (located position (instanceValue name ty value)) done
-      | eqSides a lhs rhs => done)
+      case (natEq (isQueryType ty) 1) as indexed return List Located with
+      | 1 (x : prod ()) => done
+      | 0 (x : prod ()) => (
+          case (sidesOf ty) as proof in EqSides return List Located with
+          | notEq => cons (located position (instanceValue name ty value)) done
+          | eqSides a lhs rhs => done))
   | typeBinding name universe defined => done
   | funBinding name params result body => done
 

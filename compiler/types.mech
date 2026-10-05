@@ -17,6 +17,7 @@ def encodesNull : LType -> Nat := fun (ty : LType) =>
   | tySum a b => 0
   | tyUniverse level => 0
   | tyEq a x y => 1
+  | tyQuery a => 0
 
 def hasArguments : List LType -> Nat := fun (types : List LType) =>
   case types as self in List return Nat with
@@ -27,30 +28,6 @@ def planArguments : Plan -> List LType := fun (selected : Plan) =>
   case selected as self in Plan return List LType with
   | plan arguments mode label => arguments
   | recordPlan arguments fields tag => arguments
-
-def constructorPlan : LType -> Text -> Option Plan := fun (ty : LType) (name : Text) =>
-  case ty as self in LType return Option Plan with
-  | tyNat => none
-  | tyHash => select (Option Plan) (sameText name sHashOf)
-      (some (plan (cons tyText nil) 5 sHashOf)) none
-  | tyRef kind => select (Option Plan) (sameText name sRefTo)
-      (some (plan (cons tyHash nil) 15 kind)) none
-  | tySchema family => (
-      case (schemaConstructorPlan family name) as found in Option return Option Plan with
-      | none => opsConstructorPlan family name
-      | some selected => some selected)
-  | tyText => select (Option Plan) (sameText name stextEnd) (some (plan (nil) (3) stextEnd)) (select (Option Plan) (sameText name stextByte) (some (plan (cons tyNat (cons tyText (nil))) (4) stextByte)) (none))
-  | tyFlag => select (Option Plan) (sameText name sflagNo) (some (plan (nil) (1) sflagNo)) (select (Option Plan) (sameText name sflagYes) (some (plan (nil) (2) sflagYes)) (none))
-  | tyValue => select (Option Plan) (sameText name svalueNull) (some (plan (nil) (0) svalueNull)) (select (Option Plan) (sameText name svalueFlag) (some (plan (cons tyFlag (nil)) (5) svalueFlag)) (select (Option Plan) (sameText name svalueNat) (some (plan (cons tyNat (nil)) (5) svalueNat)) (select (Option Plan) (sameText name svalueText) (some (plan (cons tyText (nil)) (5) svalueText)) (select (Option Plan) (sameText name svalueItems) (some (plan (cons tyValues (nil)) (5) svalueItems)) (select (Option Plan) (sameText name svalueAttrs) (some (plan (cons tyAttrs (nil)) (5) svalueAttrs)) (none))))))
-  | tyValues => select (Option Plan) (sameText name svaluesEnd) (some (plan (nil) (6) svaluesEnd)) (select (Option Plan) (sameText name svaluesItem) (some (plan (cons tyValue (cons tyValues (nil))) (7) svaluesItem)) (none))
-  | tyAttrs => select (Option Plan) (sameText name sattrsEnd) (some (plan (nil) (8) sattrsEnd)) (select (Option Plan) (sameText name sattrsField) (some (plan (cons tyText (cons tyValue (cons tyAttrs (nil)))) (9) sattrsField)) (none))
-  | tyKind => select (Option Plan) (sameText name skindParty) (some (plan (nil) (14) skindParty)) (select (Option Plan) (sameText name skindMembership) (some (plan (nil) (14) skindMembership)) (select (Option Plan) (sameText name skindCommercial) (some (plan (nil) (14) skindCommercial)) (select (Option Plan) (sameText name skindCommitment) (some (plan (nil) (14) skindCommitment)) (select (Option Plan) (sameText name skindArtifact) (some (plan (nil) (14) skindArtifact)) (select (Option Plan) (sameText name skindEvent) (some (plan (nil) (14) skindEvent)) (select (Option Plan) (sameText name skindAssignment) (some (plan (nil) (14) skindAssignment)) (select (Option Plan) (sameText name skindPolicy) (some (plan (nil) (14) skindPolicy)) (none))))))))
-  | tyOption a => select (Option Plan) (sameText name snone) (some (plan (nil) (0) snone)) (select (Option Plan) (sameText name ssome) (some (plan (cons a (nil)) (select Nat (encodesNull a) 13 5) ssome)) (none))
-  | tyList a => select (Option Plan) (sameText name snil) (some (plan (nil) (6) snil)) (select (Option Plan) (sameText name scons) (some (plan (cons a (cons (tyList a) (nil))) (7) scons)) (none))
-  | tyProd a b => select (Option Plan) (sameText name spair) (some (plan (cons a (cons b (nil))) (10) spair)) (none)
-  | tySum a b => select (Option Plan) (sameText name sinl) (some (plan (cons a (nil)) (11) sinl)) (select (Option Plan) (sameText name sinr) (some (plan (cons b (nil)) (12) sinr)) (none))
-  | tyUniverse level => none
-  | tyEq a x y => none
 
 def unaryTypeName : Text -> Text -> Text := fun (head : Text) (arg : Text) =>
   appendText head (textByte 32 (textByte 40 (appendText arg (textByte 41 textEnd))))
@@ -78,8 +55,10 @@ def rec typeName : LType -> Text := fun (ty : LType) =>
   | tyEq a x y => appendText (unaryTypeName sEq (typeName a))
       (textByte 32 (textByte 40 (appendText x (textByte 41 (textByte 32
         (textByte 40 (appendText y (textByte 41 textEnd))))))))
+  | tyQuery a => unaryTypeName opsTextQuery (typeName a)
 
 -- Data types have level 0. Type 0 has level 1 and Type 1 has level 2.
+-- A Query type is in Type 1, so it has level 1.
 def typeLevel : LType -> Nat := fun (ty : LType) =>
   case ty as self in LType return Nat with
   | tyNat => 0
@@ -98,11 +77,71 @@ def typeLevel : LType -> Nat := fun (ty : LType) =>
   | tySum a b => 0
   | tyUniverse level => natAdd level 1
   | tyEq a x y => 0
+  | tyQuery a => 1
 
 -- The current type grammar has unique canonical names, so equality of
 -- these names is structural type equality for this supported subset.
 def sameType : LType -> LType -> Nat := fun (a : LType) (b : LType) =>
   sameText (typeName a) (typeName b)
+
+def constructorPlan : LType -> Text -> Option Plan := fun (ty : LType) (name : Text) =>
+  case ty as self in LType return Option Plan with
+  | tyNat => none
+  | tyHash => select (Option Plan) (sameText name sHashOf)
+      (some (plan (cons tyText nil) 5 sHashOf)) none
+  | tyRef kind => select (Option Plan) (sameText name sRefTo)
+      (some (plan (cons tyHash nil) 15 kind)) none
+  | tySchema family => (
+      case (schemaConstructorPlan family name) as found in Option return Option Plan with
+      | none => opsConstructorPlan family name
+      | some selected => some selected)
+  | tyText => select (Option Plan) (sameText name stextEnd) (some (plan (nil) (3) stextEnd)) (select (Option Plan) (sameText name stextByte) (some (plan (cons tyNat (cons tyText (nil))) (4) stextByte)) (none))
+  | tyFlag => select (Option Plan) (sameText name sflagNo) (some (plan (nil) (1) sflagNo)) (select (Option Plan) (sameText name sflagYes) (some (plan (nil) (2) sflagYes)) (none))
+  | tyValue => select (Option Plan) (sameText name svalueNull) (some (plan (nil) (0) svalueNull)) (select (Option Plan) (sameText name svalueFlag) (some (plan (cons tyFlag (nil)) (5) svalueFlag)) (select (Option Plan) (sameText name svalueNat) (some (plan (cons tyNat (nil)) (5) svalueNat)) (select (Option Plan) (sameText name svalueText) (some (plan (cons tyText (nil)) (5) svalueText)) (select (Option Plan) (sameText name svalueItems) (some (plan (cons tyValues (nil)) (5) svalueItems)) (select (Option Plan) (sameText name svalueAttrs) (some (plan (cons tyAttrs (nil)) (5) svalueAttrs)) (none))))))
+  | tyValues => select (Option Plan) (sameText name svaluesEnd) (some (plan (nil) (6) svaluesEnd)) (select (Option Plan) (sameText name svaluesItem) (some (plan (cons tyValue (cons tyValues (nil))) (7) svaluesItem)) (none))
+  | tyAttrs => select (Option Plan) (sameText name sattrsEnd) (some (plan (nil) (8) sattrsEnd)) (select (Option Plan) (sameText name sattrsField) (some (plan (cons tyText (cons tyValue (cons tyAttrs (nil)))) (9) sattrsField)) (none))
+  | tyKind => select (Option Plan) (sameText name skindParty) (some (plan (nil) (14) skindParty)) (select (Option Plan) (sameText name skindMembership) (some (plan (nil) (14) skindMembership)) (select (Option Plan) (sameText name skindCommercial) (some (plan (nil) (14) skindCommercial)) (select (Option Plan) (sameText name skindCommitment) (some (plan (nil) (14) skindCommitment)) (select (Option Plan) (sameText name skindArtifact) (some (plan (nil) (14) skindArtifact)) (select (Option Plan) (sameText name skindEvent) (some (plan (nil) (14) skindEvent)) (select (Option Plan) (sameText name skindAssignment) (some (plan (nil) (14) skindAssignment)) (select (Option Plan) (sameText name skindPolicy) (some (plan (nil) (14) skindPolicy)) (none))))))))
+  | tyOption a => select (Option Plan) (sameText name snone) (some (plan (nil) (0) snone)) (select (Option Plan) (sameText name ssome) (some (plan (cons a (nil)) (select Nat (encodesNull a) 13 5) ssome)) (none))
+  | tyList a => select (Option Plan) (sameText name snil) (some (plan (nil) (6) snil)) (select (Option Plan) (sameText name scons) (some (plan (cons a (cons (tyList a) (nil))) (7) scons)) (none))
+  | tyProd a b => select (Option Plan) (sameText name spair) (some (plan (cons a (cons b (nil))) (10) spair)) (none)
+  | tySum a b => select (Option Plan) (sameText name sinl) (some (plan (cons a (nil)) (11) sinl)) (select (Option Plan) (sameText name sinr) (some (plan (cons b (nil)) (12) sinr)) (none))
+  | tyUniverse level => none
+  | tyEq a x y => none
+  | tyQuery a => (
+      case (opsQueryAnswer name) as answer in Option return Option Plan with
+      | none => none
+      | some index => select (Option Plan) (sameType index a) (opsQueryPlan name) none)
+
+-- A definition of a Query type is a term, but a Query type is not a data type.
+def isQueryType : LType -> Nat := fun (ty : LType) =>
+  case ty as self in LType return Nat with
+  | tyNat => 0
+  | tyText => 0
+  | tyFlag => 0
+  | tyValue => 0
+  | tyValues => 0
+  | tyAttrs => 0
+  | tyKind => 0
+  | tyHash => 0
+  | tyRef kind => 0
+  | tySchema name => 0
+  | tyOption a => 0
+  | tyList a => 0
+  | tyProd a b => 0
+  | tySum a b => 0
+  | tyUniverse level => 0
+  | tyEq a x y => 0
+  | tyQuery a => 1
+
+-- A definition of a data type or of a Query type is a term.
+def isTermType : LType -> Nat := fun (ty : LType) =>
+  boolOr (numberEq (typeLevel ty) 0) (isQueryType ty)
+
+-- A Query constructor does not check against a Query type of another answer.
+def unknownName : LType -> Text -> Text := fun (expected : LType) (name : Text) =>
+  case (opsQueryAnswer name) as answer in Option return Text with
+  | none => eUnknown
+  | some index => select Text (isQueryType expected) eQueryIndex eUnknown
 
 def primitiveReservedName : Text -> Nat := fun (name : Text) =>
   boolOr (sameText name sNat) (boolOr (sameText name sText) (boolOr (sameText name sFlag) (boolOr (sameText name sValue) (boolOr (sameText name sValues) (boolOr (sameText name sAttrs) (boolOr (sameText name sKind) (boolOr (sameText name sOption) (boolOr (sameText name sList) (boolOr (sameText name sProd) (boolOr (sameText name sSum) (boolOr (sameText name sdef) (boolOr (sameText name srec) (boolOr (sameText name smu) (boolOr (sameText name saxiom) (boolOr (sameText name spoly) (boolOr (sameText name sspecialize) (boolOr (sameText name stextEnd) (boolOr (sameText name stextByte) (boolOr (sameText name sflagNo) (boolOr (sameText name sflagYes) (boolOr (sameText name snone) (boolOr (sameText name ssome) (boolOr (sameText name snil) (boolOr (sameText name scons) (boolOr (sameText name svalueNull) (boolOr (sameText name svalueFlag) (boolOr (sameText name svalueNat) (boolOr (sameText name svalueText) (boolOr (sameText name svalueItems) (boolOr (sameText name svalueAttrs) (boolOr (sameText name svaluesEnd) (boolOr (sameText name svaluesItem) (boolOr (sameText name sattrsEnd) (boolOr (sameText name sattrsField) (boolOr (sameText name spair) (boolOr (sameText name sinl) (boolOr (sameText name sinr) (boolOr (sameText name skindParty) (boolOr (sameText name skindMembership) (boolOr (sameText name skindCommercial) (boolOr (sameText name skindCommitment) (boolOr (sameText name skindArtifact) (boolOr (sameText name skindEvent) (boolOr (sameText name skindAssignment) (boolOr (sameText name skindPolicy) (0))))))))))))))))))))))))))))))))))))))))))))))

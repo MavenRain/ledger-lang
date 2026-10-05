@@ -23,7 +23,7 @@ def closeParsed : (0 A : Type 0) -> A -> List Token -> Parsed A :=
 
 def typeFormer : Text -> Nat := fun (name : Text) =>
   boolOr (sameText name sOption) (boolOr (sameText name sList)
-    (boolOr (sameText name sProd) (boolOr (sameText name sSum) (boolOr (sameText name sRef) (sameText name sType)))))
+    (boolOr (sameText name sProd) (boolOr (sameText name sSum) (boolOr (sameText name sRef) (boolOr (sameText name opsTextQuery) (sameText name sType))))))
 
 -- Only Kind constants and checked earlier Kind bindings can index Ref.
 def kindBinding : Binding -> Option Text := fun (item : Binding) =>
@@ -93,7 +93,8 @@ def namedType : Nat -> Text -> List Binding -> List Token -> Parsed LType :=
               | some ty => parsed ty tokens)
           | some ty => parsed ty tokens))
 
--- Type formers take data types only, so a universe is not an argument.
+-- Type formers take data types only, so a universe or a Query type is not an
+-- argument.
 def dataType : Nat -> LType -> LType -> List Token -> Parsed LType :=
   fun (position : Nat) (argument : LType) (result : LType) (tokens : List Token) =>
   select (Parsed LType) (numberEq (typeLevel argument) 0) (parsed result tokens) (parseError position eData)
@@ -182,4 +183,10 @@ def rec parseType : Fuel -> Nat -> List Binding -> List Token -> Parsed LType :=
                                   | parseError at message => parseError at message
                                   | parsed kind rest => parsed (tyRef kind) rest)
                               | 0 (x : prod ()) => (
-                                  namedType position name environment tail))))))))))))))))
+                                case (natEq (sameText name opsTextQuery) 1) as indexed return Parsed LType with
+                                | 1 (x : prod ()) => (
+                                    case (parseType more 1 environment tail) as first in Parsed return Parsed LType with
+                                    | parseError at message => parseError at message
+                                    | parsed a rest => dataType (firstPosition tail) a (tyQuery a) rest)
+                                | 0 (x : prod ()) => (
+                                    namedType position name environment tail)))))))))))))))))

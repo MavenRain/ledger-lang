@@ -42,6 +42,8 @@ recursion. Recursion comes only from `fold` and `unfold` (section 4).
 
 `Type 0` classifies the data types and `Type 1` classifies `Type 0`. There is
 no cumulativity. `Option`, `List`, `Prod` and `Sum` take data types only.
+`Query T` takes a data type `T` and is in `Type 1`, so a definition of a
+Query type is not an instance.
 
 `Eq A x y` takes a data type `A` and two terms of type `A`. Two sides are
 equal when their values have the same JSON encoding. A proof has no runtime

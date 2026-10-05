@@ -235,8 +235,19 @@ def history : Log := nil
 `now` encodes as `{"tag":"momentNow"}`, `key` as `"pipelineByStage"`, and
 `history` as `[]` with the type `List (Entry)`.
 
-`Query`, `WritePath` and `ReadPath` are reserved names. As a type, each of
-them stops the compiler with `this type belongs to a later milestone`. The
-compiler does not run the write path or the read path. The reactor loads
+`Query T` is a `Type 1` type that takes one data type `T`, the answer type.
+A Query constructor checks only against the Query type of its answer type.
+Another answer type stops the compiler with
+`this constructor gives a Query of another answer type`. A definition of a
+Query type is not an instance. A Query type is not an argument of a type
+former, a parameter type or a result type.
+
+```
+def isReconciled : Query Flag := queryAmountReconciled deal
+```
+
+`WritePath` and `ReadPath` are reserved names. As a type, each of them stops
+the compiler with `this type belongs to a later milestone`. The compiler
+does not run the write path or the read path. The reactor loads
 `core/schema.mech` only. `compiler/operations.mech` holds the constructor
 and field data of `core/ops.mech`.

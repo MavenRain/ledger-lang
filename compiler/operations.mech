@@ -1,7 +1,8 @@
 -- Operation metadata follows core/ops.mech. The operation conformance tests
 -- cover every family, constructor, field name, field order, and argument type.
--- Query, WritePath and ReadPath are reserved. Their types belong to a later
--- milestone, so the type parser refuses them with eLaterType.
+-- Query is an indexed Type 1 family. opsQueryAnswer gives the answer type of
+-- each Query constructor. WritePath and ReadPath are reserved. Their types
+-- belong to a later milestone, so the type parser refuses them with eLaterType.
 
 def opsTextLog : Text := textByte 76 (textByte 111 (textByte 103 (textEnd)))
 def opsTextWritePath : Text := textByte 87 (textByte 114 (textByte 105 (textByte 116 (textByte 101 (textByte 80 (textByte 97 (textByte 116 (textByte 104 (textEnd)))))))))
@@ -120,35 +121,50 @@ def opsTextartifacts : Text := textByte 97 (textByte 114 (textByte 116 (textByte
 def opsTexttimeline : Text := textByte 116 (textByte 105 (textByte 109 (textByte 101 (textByte 108 (textByte 105 (textByte 110 (textByte 101 (textEnd))))))))
 def opsTextQuery : Text := textByte 81 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textEnd)))))
 def opsTextqueryMembersOf : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 77 (textByte 101 (textByte 109 (textByte 98 (textByte 101 (textByte 114 (textByte 115 (textByte 79 (textByte 102 (textEnd))))))))))))))
+def opsTextorg : Text := textByte 111 (textByte 114 (textByte 103 (textEnd)))
+def opsTextmoment : Text := textByte 109 (textByte 111 (textByte 109 (textByte 101 (textByte 110 (textByte 116 (textEnd))))))
 def opsTextqueryEmployer : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 69 (textByte 109 (textByte 112 (textByte 108 (textByte 111 (textByte 121 (textByte 101 (textByte 114 (textEnd)))))))))))))
+def opsTextperson : Text := textByte 112 (textByte 101 (textByte 114 (textByte 115 (textByte 111 (textByte 110 (textEnd))))))
 def opsTextqueryJobChanges : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 74 (textByte 111 (textByte 98 (textByte 67 (textByte 104 (textByte 97 (textByte 110 (textByte 103 (textByte 101 (textByte 115 (textEnd)))))))))))))))
+def opsTextsince : Text := textByte 115 (textByte 105 (textByte 110 (textByte 99 (textByte 101 (textEnd)))))
 def opsTextqueryCommercial : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 67 (textByte 111 (textByte 109 (textByte 109 (textByte 101 (textByte 114 (textByte 99 (textByte 105 (textByte 97 (textByte 108 (textEnd)))))))))))))))
 def opsTextqueryProjectionSound : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 80 (textByte 114 (textByte 111 (textByte 106 (textByte 101 (textByte 99 (textByte 116 (textByte 105 (textByte 111 (textByte 110 (textByte 83 (textByte 111 (textByte 117 (textByte 110 (textByte 100 (textEnd))))))))))))))))))))
+def opsTextstored : Text := textByte 115 (textByte 116 (textByte 111 (textByte 114 (textByte 101 (textByte 100 (textEnd))))))
 def opsTextqueryTermsInForce : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 84 (textByte 101 (textByte 114 (textByte 109 (textByte 115 (textByte 73 (textByte 110 (textByte 70 (textByte 111 (textByte 114 (textByte 99 (textByte 101 (textEnd)))))))))))))))))
 def opsTextqueryTermHistory : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 84 (textByte 101 (textByte 114 (textByte 109 (textByte 72 (textByte 105 (textByte 115 (textByte 116 (textByte 111 (textByte 114 (textByte 121 (textEnd))))))))))))))))
 def opsTextqueryAmountReconciled : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 65 (textByte 109 (textByte 111 (textByte 117 (textByte 110 (textByte 116 (textByte 82 (textByte 101 (textByte 99 (textByte 111 (textByte 110 (textByte 99 (textByte 105 (textByte 108 (textByte 101 (textByte 100 (textEnd)))))))))))))))))))))
 def opsTextqueryDiscountPct : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 68 (textByte 105 (textByte 115 (textByte 99 (textByte 111 (textByte 117 (textByte 110 (textByte 116 (textByte 80 (textByte 99 (textByte 116 (textEnd))))))))))))))))
 def opsTextqueryEvidence : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 69 (textByte 118 (textByte 105 (textByte 100 (textByte 101 (textByte 110 (textByte 99 (textByte 101 (textEnd)))))))))))))
+def opsTextfact : Text := textByte 102 (textByte 97 (textByte 99 (textByte 116 (textEnd))))
 def opsTextqueryArtifactIntact : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 65 (textByte 114 (textByte 116 (textByte 105 (textByte 102 (textByte 97 (textByte 99 (textByte 116 (textByte 73 (textByte 110 (textByte 116 (textByte 97 (textByte 99 (textByte 116 (textEnd)))))))))))))))))))
+def opsTextdigest : Text := textByte 100 (textByte 105 (textByte 103 (textByte 101 (textByte 115 (textByte 116 (textEnd))))))
 def opsTextqueryTimeline : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 84 (textByte 105 (textByte 109 (textByte 101 (textByte 108 (textByte 105 (textByte 110 (textByte 101 (textEnd)))))))))))))
 def opsTextqueryThread : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 84 (textByte 104 (textByte 114 (textByte 101 (textByte 97 (textByte 100 (textEnd)))))))))))
+def opsTextroot : Text := textByte 114 (textByte 111 (textByte 111 (textByte 116 (textEnd))))
 def opsTextqueryReplay : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 82 (textByte 101 (textByte 112 (textByte 108 (textByte 97 (textByte 121 (textEnd)))))))))))
 def opsTextqueryTail : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 84 (textByte 97 (textByte 105 (textByte 108 (textEnd)))))))))
+def opsTextafter : Text := textByte 97 (textByte 102 (textByte 116 (textByte 101 (textByte 114 (textEnd)))))
 def opsTextqueryAuditByActor : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 65 (textByte 117 (textByte 100 (textByte 105 (textByte 116 (textByte 66 (textByte 121 (textByte 65 (textByte 99 (textByte 116 (textByte 111 (textByte 114 (textEnd)))))))))))))))))
 def opsTextqueryAuditByPolicy : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 65 (textByte 117 (textByte 100 (textByte 105 (textByte 116 (textByte 66 (textByte 121 (textByte 80 (textByte 111 (textByte 108 (textByte 105 (textByte 99 (textByte 121 (textEnd))))))))))))))))))
 def opsTextqueryOwner : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 79 (textByte 119 (textByte 110 (textByte 101 (textByte 114 (textEnd))))))))))
 def opsTextqueryBook : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 66 (textByte 111 (textByte 111 (textByte 107 (textEnd)))))))))
 def opsTextqueryCan : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 67 (textByte 97 (textByte 110 (textEnd))))))))
+def opsTextprincipal : Text := textByte 112 (textByte 114 (textByte 105 (textByte 110 (textByte 99 (textByte 105 (textByte 112 (textByte 97 (textByte 108 (textEnd)))))))))
+def opsTextaction : Text := textByte 97 (textByte 99 (textByte 116 (textByte 105 (textByte 111 (textByte 110 (textEnd))))))
+def opsTextfields : Text := textByte 102 (textByte 105 (textByte 101 (textByte 108 (textByte 100 (textByte 115 (textEnd))))))
 def opsTextqueryDryRun : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 68 (textByte 114 (textByte 121 (textByte 82 (textByte 117 (textByte 110 (textEnd)))))))))))
 def opsTextqueryRedacted : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 82 (textByte 101 (textByte 100 (textByte 97 (textByte 99 (textByte 116 (textByte 101 (textByte 100 (textEnd)))))))))))))
 def opsTextquerySimulatePolicy : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 83 (textByte 105 (textByte 109 (textByte 117 (textByte 108 (textByte 97 (textByte 116 (textByte 101 (textByte 80 (textByte 111 (textByte 108 (textByte 105 (textByte 99 (textByte 121 (textEnd)))))))))))))))))))
 def opsTextqueryPipeline : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 80 (textByte 105 (textByte 112 (textByte 101 (textByte 108 (textByte 105 (textByte 110 (textByte 101 (textEnd)))))))))))))
 def opsTextqueryStageStats : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 83 (textByte 116 (textByte 97 (textByte 103 (textByte 101 (textByte 83 (textByte 116 (textByte 97 (textByte 116 (textByte 115 (textEnd)))))))))))))))
 def opsTextqueryStaleDeals : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 83 (textByte 116 (textByte 97 (textByte 108 (textByte 101 (textByte 68 (textByte 101 (textByte 97 (textByte 108 (textByte 115 (textEnd)))))))))))))))
+def opsTextquietEntries : Text := textByte 113 (textByte 117 (textByte 105 (textByte 101 (textByte 116 (textByte 69 (textByte 110 (textByte 116 (textByte 114 (textByte 105 (textByte 101 (textByte 115 (textEnd))))))))))))
 def opsTextqueryRenewals : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 82 (textByte 101 (textByte 110 (textByte 101 (textByte 119 (textByte 97 (textByte 108 (textByte 115 (textEnd)))))))))))))
 def opsTextqueryAccount360 : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 65 (textByte 99 (textByte 99 (textByte 111 (textByte 117 (textByte 110 (textByte 116 (textByte 51 (textByte 54 (textByte 48 (textEnd)))))))))))))))
 def opsTextqueryReviewQueue : Text := textByte 113 (textByte 117 (textByte 101 (textByte 114 (textByte 121 (textByte 82 (textByte 101 (textByte 118 (textByte 105 (textByte 101 (textByte 119 (textByte 81 (textByte 117 (textByte 101 (textByte 117 (textByte 101 (textEnd))))))))))))))))
+def opsTextbelowConfidence : Text := textByte 98 (textByte 101 (textByte 108 (textByte 111 (textByte 119 (textByte 67 (textByte 111 (textByte 110 (textByte 102 (textByte 105 (textByte 100 (textByte 101 (textByte 110 (textByte 99 (textByte 101 (textEnd)))))))))))))))
 def eLaterType : Text := appendText (textByte 116 (textByte 104 (textByte 105 (textByte 115 (textEnd))))) (appendText (textByte 32 (textByte 116 (textByte 121 (textByte 112 (textEnd))))) (appendText (textByte 101 (textByte 32 (textByte 98 (textByte 101 (textEnd))))) (appendText (textByte 108 (textByte 111 (textByte 110 (textByte 103 (textEnd))))) (appendText (textByte 115 (textByte 32 (textByte 116 (textByte 111 (textEnd))))) (appendText (textByte 32 (textByte 97 (textByte 32 (textByte 108 (textEnd))))) (appendText (textByte 97 (textByte 116 (textByte 101 (textByte 114 (textEnd))))) (appendText (textByte 32 (textByte 109 (textByte 105 (textByte 108 (textEnd))))) (appendText (textByte 101 (textByte 115 (textByte 116 (textByte 111 (textEnd))))) (textByte 110 (textByte 101 (textEnd)))))))))))
+def eQueryIndex : Text := appendText (textByte 116 (textByte 104 (textByte 105 (textByte 115 (textEnd))))) (appendText (textByte 32 (textByte 99 (textByte 111 (textByte 110 (textEnd))))) (appendText (textByte 115 (textByte 116 (textByte 114 (textByte 117 (textEnd))))) (appendText (textByte 99 (textByte 116 (textByte 111 (textByte 114 (textEnd))))) (appendText (textByte 32 (textByte 103 (textByte 105 (textByte 118 (textEnd))))) (appendText (textByte 101 (textByte 115 (textByte 32 (textByte 97 (textEnd))))) (appendText (textByte 32 (textByte 81 (textByte 117 (textByte 101 (textEnd))))) (appendText (textByte 114 (textByte 121 (textByte 32 (textByte 111 (textEnd))))) (appendText (textByte 102 (textByte 32 (textByte 97 (textByte 110 (textEnd))))) (appendText (textByte 111 (textByte 116 (textByte 104 (textByte 101 (textEnd))))) (appendText (textByte 114 (textByte 32 (textByte 97 (textByte 110 (textEnd))))) (appendText (textByte 115 (textByte 119 (textByte 101 (textByte 114 (textEnd))))) (appendText (textByte 32 (textByte 116 (textByte 121 (textByte 112 (textEnd))))) (textByte 101 (textEnd))))))))))))))
 
 def opsMomentPlan : Text -> Option Plan := fun (name : Text) =>
   (case (natEq (sameText name opsTextmomentNow) 1) as matched return Option Plan with
@@ -309,6 +325,130 @@ def opsConstructorPlan : Text -> Text -> Option Plan := fun (family : Text) (nam
     | 1 (x : prod ()) => opsAccount360Plan name
     | 0 (x : prod ()) => none))))))))))))
 
+-- A Query value is tagged with its constructor. It is not an instance.
+def opsQueryPlan : Text -> Option Plan := fun (name : Text) =>
+  (case (natEq (sameText name opsTextqueryMembersOf) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindParty) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextorg) (cons (opsTextmoment) (nil))) (some opsTextqueryMembersOf))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryEmployer) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindParty) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextperson) (cons (opsTextmoment) (nil))) (some opsTextqueryEmployer))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryJobChanges) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema opsTextMoment) (nil)) (cons (opsTextsince) (nil)) (some opsTextqueryJobChanges))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryCommercial) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindCommercial) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextcommercial) (cons (opsTextmoment) (nil))) (some opsTextqueryCommercial))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryProjectionSound) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindCommercial) (cons (tySchema schemaTextCommercial) (nil))) (cons (opsTextcommercial) (cons (opsTextstored) (nil))) (some opsTextqueryProjectionSound))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTermsInForce) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindCommercial) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextcommercial) (cons (opsTextmoment) (nil))) (some opsTextqueryTermsInForce))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTermHistory) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindCommitment) (nil)) (cons (opsTextcommitment) (nil)) (some opsTextqueryTermHistory))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAmountReconciled) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindCommercial) (nil)) (cons (opsTextcommercial) (nil)) (some opsTextqueryAmountReconciled))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryDiscountPct) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindCommercial) (nil)) (cons (opsTextcommercial) (nil)) (some opsTextqueryDiscountPct))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryEvidence) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyHash) (nil)) (cons (opsTextfact) (nil)) (some opsTextqueryEvidence))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryArtifactIntact) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindArtifact) (cons (tyText) (nil))) (cons (opsTextartifact) (cons (opsTextdigest) (nil))) (some opsTextqueryArtifactIntact))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTimeline) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema schemaTextSubject) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextsubject) (cons (opsTextmoment) (nil))) (some opsTextqueryTimeline))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryThread) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindEvent) (nil)) (cons (opsTextroot) (nil)) (some opsTextqueryThread))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryReplay) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema opsTextMoment) (nil)) (cons (opsTextmoment) (nil)) (some opsTextqueryReplay))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTail) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema opsTextMoment) (nil)) (cons (opsTextafter) (nil)) (some opsTextqueryTail))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAuditByActor) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema schemaTextActor) (nil)) (cons (opsTextactor) (nil)) (some opsTextqueryAuditByActor))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAuditByPolicy) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindPolicy) (nil)) (cons (opsTextpolicy) (nil)) (some opsTextqueryAuditByPolicy))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryOwner) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema schemaTextAccount) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextsubject) (cons (opsTextmoment) (nil))) (some opsTextqueryOwner))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryBook) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindParty) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextassignee) (cons (opsTextmoment) (nil))) (some opsTextqueryBook))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryCan) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyText) (cons (tySchema schemaTextPermission) (cons (tySchema schemaTextSubject) (cons (tyOption (tyList (tyText))) (nil))))) (cons (opsTextprincipal) (cons (opsTextaction) (cons (opsTextsubject) (cons (opsTextfields) (nil))))) (some opsTextqueryCan))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryDryRun) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindCommercial) (cons (tyText) (nil))) (cons (opsTextcommercial) (cons (opsTextstage) (nil))) (some opsTextqueryDryRun))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryRedacted) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyText) (cons (tySchema schemaTextSubject) (nil))) (cons (opsTextprincipal) (cons (opsTextsubject) (nil))) (some opsTextqueryRedacted))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextquerySimulatePolicy) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema schemaTextPolicy) (nil)) (cons (opsTextpolicy) (nil)) (some opsTextquerySimulatePolicy))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryPipeline) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tySchema opsTextPipelineKey) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextkey) (cons (opsTextmoment) (nil))) (some opsTextqueryPipeline))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryStageStats) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (nil) (nil) (some opsTextqueryStageStats))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryStaleDeals) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyNat) (nil)) (cons (opsTextquietEntries) (nil)) (some opsTextqueryStaleDeals))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryRenewals) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (nil) (nil) (some opsTextqueryRenewals))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAccount360) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyRef skindParty) (cons (tySchema opsTextMoment) (nil))) (cons (opsTextparty) (cons (opsTextmoment) (nil))) (some opsTextqueryAccount360))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryReviewQueue) 1) as matched return Option Plan with
+    | 1 (x : prod ()) => some (recordPlan (cons (tyNat) (nil)) (cons (opsTextbelowConfidence) (nil)) (some opsTextqueryReviewQueue))
+    | 0 (x : prod ()) => none)))))))))))))))))))))))))))))
+
+-- The answer type is the index of the Query type that the constructor gives.
+def opsQueryAnswer : Text -> Option LType := fun (name : Text) =>
+  (case (natEq (sameText name opsTextqueryMembersOf) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindMembership))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryEmployer) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyOption (tyRef skindParty))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryJobChanges) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindParty))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryCommercial) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyOption (tySchema schemaTextCommercial))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryProjectionSound) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyFlag)
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTermsInForce) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindCommitment))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTermHistory) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindCommitment))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAmountReconciled) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyFlag)
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryDiscountPct) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyOption (tyNat))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryEvidence) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindArtifact))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryArtifactIntact) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyFlag)
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTimeline) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindEvent))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryThread) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindEvent))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryReplay) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tySchema schemaTextEntry))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryTail) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tySchema schemaTextEntry))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAuditByActor) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindEvent))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAuditByPolicy) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindEvent))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryOwner) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyOption (tyRef skindParty))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryBook) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tySchema schemaTextAccount))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryCan) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tySchema opsTextVerdict)
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryDryRun) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tySchema opsTextMissing))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryRedacted) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyAttrs)
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextquerySimulatePolicy) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindEvent))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryPipeline) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tySchema opsTextBucket))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryStageStats) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tySchema opsTextStageStat))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryStaleDeals) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyRef skindCommercial))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryRenewals) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tySchema opsTextRenewal))
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryAccount360) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tySchema opsTextAccount360)
+    | 0 (x : prod ()) => (case (natEq (sameText name opsTextqueryReviewQueue) 1) as matched return Option LType with
+    | 1 (x : prod ()) => some (tyList (tyHash))
+    | 0 (x : prod ()) => none)))))))))))))))))))))))))))))
+
 -- Log is an alias. The parser gives its definition, so the alias has no own name in the output.
 def opsType : Text -> Option LType := fun (name : Text) =>
   (case (natEq (sameText name opsTextLog) 1) as matched return Option LType with
@@ -340,7 +480,7 @@ def opsType : Text -> Option LType := fun (name : Text) =>
     | 0 (x : prod ()) => none)))))))))))))
 
 def opsLaterType : Text -> Nat := fun (name : Text) =>
-  boolOr (sameText name opsTextQuery) (boolOr (sameText name opsTextWritePath) (boolOr (sameText name opsTextReadPath) (0)))
+  boolOr (sameText name opsTextWritePath) (boolOr (sameText name opsTextReadPath) (0))
 
 def opsReservedName : Text -> Nat := fun (name : Text) =>
   boolOr (sameText name opsTextLog) (boolOr (sameText name opsTextWritePath) (boolOr (sameText name opsTextReadPath) (boolOr (sameText name opsTextMoment) (boolOr (sameText name opsTextmomentNow) (boolOr (sameText name opsTextmomentAsOf) (boolOr (sameText name opsTextMissing) (boolOr (sameText name opsTextmissingField) (boolOr (sameText name opsTextmissingCommitment) (boolOr (sameText name opsTextmissingApproval) (boolOr (sameText name opsTextVerdict) (boolOr (sameText name opsTextverdictAllow) (boolOr (sameText name opsTextverdictDeny) (boolOr (sameText name opsTextCommand) (boolOr (sameText name opsTextcommandResolveParty) (boolOr (sameText name opsTextcommandMergeParties) (boolOr (sameText name opsTextcommandSplitParty) (boolOr (sameText name opsTextcommandAddIdentifier) (boolOr (sameText name opsTextcommandVerifyIdentifier) (boolOr (sameText name opsTextcommandEnrichParty) (boolOr (sameText name opsTextcommandDeleteParty) (boolOr (sameText name opsTextcommandRestoreParty) (boolOr (sameText name opsTextcommandEraseParty) (boolOr (sameText name opsTextcommandStartMembership) (boolOr (sameText name opsTextcommandEndMembership) (boolOr (sameText name opsTextcommandSetPrimary) (boolOr (sameText name opsTextcommandOpenCommercial) (boolOr (sameText name opsTextcommandTransition) (boolOr (sameText name opsTextcommandChangeAmount) (boolOr (sameText name opsTextcommandSetStatus) (boolOr (sameText name opsTextcommandPropose) (boolOr (sameText name opsTextcommandAgree) (boolOr (sameText name opsTextcommandIngest) (boolOr (sameText name opsTextcommandExtract) (boolOr (sameText name opsTextcommandRecord) (boolOr (sameText name opsTextcommandAssign) (boolOr (sameText name opsTextcommandReassign) (boolOr (sameText name opsTextcommandEndAssignment) (boolOr (sameText name opsTextcommandBulkReassign) (boolOr (sameText name opsTextcommandRouteTerritory) (boolOr (sameText name opsTextcommandRequestApproval) (boolOr (sameText name opsTextcommandGrantApproval) (boolOr (sameText name opsTextWrite) (boolOr (sameText name opsTextmakeWrite) (boolOr (sameText name opsTextOutcome) (boolOr (sameText name opsTextoutcomeAppended) (boolOr (sameText name opsTextoutcomeDenied) (boolOr (sameText name opsTextoutcomeConflict) (boolOr (sameText name opsTextStep) (boolOr (sameText name opsTextmakeStep) (boolOr (sameText name opsTextPipelineKey) (boolOr (sameText name opsTextpipelineByStage) (boolOr (sameText name opsTextpipelineByOwner) (boolOr (sameText name opsTextpipelineByTerritory) (boolOr (sameText name opsTextpipelineByCloseDate) (boolOr (sameText name opsTextBucket) (boolOr (sameText name opsTextmakeBucket) (boolOr (sameText name opsTextStageStat) (boolOr (sameText name opsTextmakeStageStat) (boolOr (sameText name opsTextRenewal) (boolOr (sameText name opsTextmakeRenewal) (boolOr (sameText name opsTextAccount360) (boolOr (sameText name opsTextmakeAccount360) (boolOr (sameText name opsTextQuery) (boolOr (sameText name opsTextqueryMembersOf) (boolOr (sameText name opsTextqueryEmployer) (boolOr (sameText name opsTextqueryJobChanges) (boolOr (sameText name opsTextqueryCommercial) (boolOr (sameText name opsTextqueryProjectionSound) (boolOr (sameText name opsTextqueryTermsInForce) (boolOr (sameText name opsTextqueryTermHistory) (boolOr (sameText name opsTextqueryAmountReconciled) (boolOr (sameText name opsTextqueryDiscountPct) (boolOr (sameText name opsTextqueryEvidence) (boolOr (sameText name opsTextqueryArtifactIntact) (boolOr (sameText name opsTextqueryTimeline) (boolOr (sameText name opsTextqueryThread) (boolOr (sameText name opsTextqueryReplay) (boolOr (sameText name opsTextqueryTail) (boolOr (sameText name opsTextqueryAuditByActor) (boolOr (sameText name opsTextqueryAuditByPolicy) (boolOr (sameText name opsTextqueryOwner) (boolOr (sameText name opsTextqueryBook) (boolOr (sameText name opsTextqueryCan) (boolOr (sameText name opsTextqueryDryRun) (boolOr (sameText name opsTextqueryRedacted) (boolOr (sameText name opsTextquerySimulatePolicy) (boolOr (sameText name opsTextqueryPipeline) (boolOr (sameText name opsTextqueryStageStats) (boolOr (sameText name opsTextqueryStaleDeals) (boolOr (sameText name opsTextqueryRenewals) (boolOr (sameText name opsTextqueryAccount360) (boolOr (sameText name opsTextqueryReviewQueue) (0)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
