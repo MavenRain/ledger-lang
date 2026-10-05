@@ -143,7 +143,98 @@ def rec bindParams : List Param -> List Value -> List Binding -> List Binding :=
   | cons head tail => (
       case head as item in Param return List Binding with
       | param name ty => bindParams tail (argumentTail values)
-          (cons (binding name ty (argumentHead values)) environment))
+          (cons (select Binding (sameType ty (tyUniverse 0)) (typeBinding name ty (tySchema name))
+            (binding name ty (argumentHead values))) environment))
+
+-- A type parameter has the type `Type 0`. bindParams gives it the opaque type
+-- of its name. No constructor makes a term of an opaque type, because the
+-- name of a type parameter is not a reserved name.
+def isTypeParam : Param -> Nat := fun (item : Param) =>
+  case item as self in Param return Nat with
+  | param name ty => sameType ty (tyUniverse 0)
+
+def rec hasTypeParam : List Param -> Nat := fun (params : List Param) =>
+  case params as self in List return Nat with
+  | nil => 0
+  | cons head tail => (
+      case (natEq (isTypeParam head) 1) as found return Nat with
+      | 1 (x : prod ()) => 1
+      | 0 (x : prod ()) => hasTypeParam tail)
+
+def rec hasValueParam : List Param -> Nat := fun (params : List Param) =>
+  case params as self in List return Nat with
+  | nil => 0
+  | cons head tail => (
+      case (natEq (isTypeParam head) 1) as found return Nat with
+      | 1 (x : prod ()) => hasValueParam tail
+      | 0 (x : prod ()) => 1)
+
+-- The type that a list of type bindings gives for the name of a type
+-- parameter. A name that the list does not hold stays opaque.
+def typeArgument : Text -> List Binding -> LType := fun (name : Text) (chosen : List Binding) =>
+  case (lookup name chosen) as found in Option return LType with
+  | none => tySchema name
+  | some item => (
+      case item as known in Binding return LType with
+      | binding other ty value => tySchema name
+      | typeBinding other universe defined => defined
+      | arrowBinding other params result => tySchema name
+      | funBinding other params result body => tySchema name)
+
+-- The substitution replaces all names in one step, so a type argument that
+-- contains the name of another type parameter does not change again.
+def rec substType : List Binding -> LType -> LType := fun (chosen : List Binding) (ty : LType) =>
+  case ty as self in LType return LType with
+  | tyNat => tyNat
+  | tyText => tyText
+  | tyFlag => tyFlag
+  | tyValue => tyValue
+  | tyValues => tyValues
+  | tyAttrs => tyAttrs
+  | tyKind => tyKind
+  | tyHash => tyHash
+  | tyRef kind => tyRef kind
+  | tySchema name => typeArgument name chosen
+  | tyOption a => tyOption (substType chosen a)
+  | tyList a => tyList (substType chosen a)
+  | tyProd a b => tyProd (substType chosen a) (substType chosen b)
+  | tySum a b => tySum (substType chosen a) (substType chosen b)
+  | tyUniverse level => tyUniverse level
+  | tyEq a x y => tyEq (substType chosen a) x y
+  | tyQuery a => tyQuery (substType chosen a)
+
+-- The value parameters of a function, with the type arguments in place of
+-- the type parameters.
+def rec valueParams : List Binding -> List Param -> List Param :=
+  fun (chosen : List Binding) (params : List Param) =>
+  case params as self in List return List Param with
+  | nil => nil
+  | cons head tail => (
+      case head as item in Param return List Param with
+      | param name ty => (
+          case (natEq (isTypeParam head) 1) as found return List Param with
+          | 1 (x : prod ()) => valueParams chosen tail
+          | 0 (x : prod ()) => cons (param name (substType chosen ty)) (valueParams chosen tail)))
+
+-- An application gives one type argument for each type parameter. The type
+-- parameters come first. A type argument is a data type in the position of
+-- an argument.
+def rec typeArguments : Fuel -> List Param -> List Binding -> List Binding -> List Token -> Parsed (List Binding) :=
+  fun (fuel : Fuel) (params : List Param) (environment : List Binding) (chosen : List Binding) (tokens : List Token) =>
+  case params as self in List return Parsed (List Binding) with
+  | nil => parsed chosen tokens
+  | cons head tail => (
+      case head as item in Param return Parsed (List Binding) with
+      | param name ty => (
+          case (natEq (isTypeParam head) 1) as found return Parsed (List Binding) with
+          | 0 (x : prod ()) => parsed chosen tokens
+          | 1 (x : prod ()) => (
+              case (parseType fuel 1 environment tokens) as actual in Parsed return Parsed (List Binding) with
+              | parseError at message => parseError at message
+              | parsed given rest => (
+                  case (natEq (typeLevel given) 0) as data return Parsed (List Binding) with
+                  | 0 (x : prod ()) => parseError (firstPosition tokens) eData
+                  | 1 (x : prod ()) => typeArguments fuel tail environment (cons (typeBinding name ty given) chosen) rest))))
 
 -- The scope of a definition is the part of the environment that is older
 -- than the definition. A body evaluates in this scope, so the parameters of
@@ -193,7 +284,8 @@ def unaryOf : List Binding -> Binding -> Option Unary := fun (scope : List Bindi
           | cons next more => none
           | nil => (
               case head as first in Param return Option Unary with
-              | param label ty => some (unary label ty result body scope))))
+              | param label ty => select (Option Unary) (isTypeParam head) none
+                  (some (unary label ty result body scope)))))
 
 def unaryArgument : List Binding -> List Token -> Parsed Unary :=
   fun (environment : List Binding) (tokens : List Token) =>
@@ -400,7 +492,9 @@ def stepperArgument : List Binding -> List Token -> Parsed Stepper :=
               | binding other ty value => parseError position eStep
               | typeBinding other universe defined => parseError position eStep
               | arrowBinding other params result => parseError position eStep
-              | funBinding other params result body => parsed (stepper params result body (definitionScope other environment)) tail)))
+              | funBinding other params result body => select (Parsed Stepper) (hasTypeParam params)
+                  (parseError position eStep)
+                  (parsed (stepper params result body (definitionScope other environment)) tail))))
 
 def rec sameTypes : List LType -> List LType -> Nat := fun (left : List LType) (right : List LType) =>
   case left as self in List return Nat with
@@ -713,15 +807,18 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
                   case (natEq atom 1) as refused return Worked Typed with
                   | 1 (x : prod ()) => workError position eParen
                   | 0 (x : prod ()) => (
-                      case (parseArguments more budget 1 (paramTypes params) environment tail) as checked in Worked return Worked Typed with
+                    case (typeArguments more params environment nil tail) as instantiated in Parsed return Worked Typed with
+                    | parseError at message => workError at message
+                    | parsed chosen afterTypes => (
+                      case (parseArguments more budget 1 (paramTypes (valueParams chosen params)) environment afterTypes) as checked in Worked return Worked Typed with
                       | workError at message => workError at message
                       | worked values rest budget => (
                           case (natEq (checkingBody environment) 1) as marked return Worked Typed with
-                          | 1 (x : prod ()) => worked (typed result valueNull) rest budget
+                          | 1 (x : prod ()) => worked (typed (substType chosen result) valueNull) rest budget
                           | 0 (x : prod ()) => (
-                              case (parseTerm more (natSub budget 1) 0 result (bindParams params values (definitionScope other environment)) body) as applied in Worked return Worked Typed with
+                              case (parseTerm more (natSub budget 1) 0 (substType chosen result) (bindParams (valueParams chosen params) values (reverseListOnto Binding (definitionScope other environment) chosen)) body) as applied in Worked return Worked Typed with
                               | workError at message => workError at message
-                              | worked value after budget => worked (typed result value) rest budget)))))
+                              | worked value after budget => worked (typed (substType chosen result) value) rest budget))))))
           | none => (
               case (natEq (synthForm name) 0) as plain return Worked Typed with
               | 1 (x : prod ()) => workError position eInfer

@@ -149,3 +149,19 @@ tests. This slice has no mutation run.
 The full design in `SPEC.md` is not implemented. See [STATUS.md](STATUS.md)
 for remaining M0 work and [README.md](../README.md) for supported syntax and
 resource limits. Entry hashing and projection remain M1 work.
+
+The type parameter slice adds `test/poly.test.mjs` with 20 cases and
+`examples/poly.ledger`. The positive cases apply a polymorphic function at
+`Nat` and at a product type, apply polymorphic functions in the body of
+another polymorphic function, give the type parameters to a second function
+in the other order, and give a new name to a type parameter in a binder. The
+case with the other order fails for a substitution that replaces one name
+after the other. Thirteen cases refuse a program at its byte: a result or an
+argument of another type, a missing type argument, a type former without
+parentheses, a universe as a type argument, a type parameter after a value
+parameter (also through the name of a function type), a reserved name, a
+value binder for a type parameter, the declared name after a binder gives a
+new name, a constructor at an opaque type, a term of another type parameter,
+and a polymorphic function as the argument of `map`. One case in
+`test/functions.test.mjs` changes: `Type 0` is now the type of a type
+parameter, so the case uses `Type 1`. No mutation run covers this slice.

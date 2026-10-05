@@ -154,6 +154,15 @@ of the work budget. See [examples/functions.ledger](examples/functions.ledger),
 [examples/nested.ledger](examples/nested.ledger) and
 [examples/bodies.ledger](examples/bodies.ledger).
 
+A function can have type parameters. A type parameter `(A : Type 0)` comes
+before each value parameter. The types of the later parameters and the
+result type can use its name. An application gives one data type for each
+type parameter in the position of an argument, as in `id Nat 4` or
+`id (Prod Nat Nat) p`. In the body, the type of a type parameter is opaque:
+no constructor makes a term of it. A binder can give a new name to a type
+parameter. A type definition of a function type with a type parameter is in
+`Type 1`. See [examples/poly.ledger](examples/poly.ledger).
+
 A type definition can name a function type of data types. The function type
 is in `Type 0`. The name then stands for the function type: as the type of a
 function definition, as the body of another type definition, and at the end

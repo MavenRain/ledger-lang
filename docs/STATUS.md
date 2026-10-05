@@ -75,6 +75,14 @@ not complete the M0 milestone in `SPEC.md`.
   of a longer function type. `WritePath` is the built-in function type
   `(log : Log) -> (write : Write) -> Step`.
 
+- Type parameters. A function type can start with type parameters
+  `(A : Type 0)`. The types of the later parameters and the result type can
+  use the name of a type parameter. The definition checks its body one time
+  with an opaque type for each type parameter. An application gives one data
+  type for each type parameter, and the checker replaces all type parameters
+  in one step. A binder can give a new name to a type parameter. A type
+  definition of a function type with a type parameter is in `Type 1`.
+
 ## Remaining M0 work
 
 1. Add dependent function types and inline or partial functions as
@@ -126,6 +134,13 @@ not complete the M0 milestone in `SPEC.md`.
 M1 remains the write path, entry hashes, and record projection. M2 remains
 the indexed read path. The core files and full specification retain their
 original meaning.
+
+- Type parameters come before the value parameters. A type argument is in
+  the position of an argument, so a type former such as `Prod Nat Nat` needs
+  parentheses. The checker does not infer a type argument. A function with a
+  type parameter is not the function argument of a structure form or of an
+  algebra form. A type cannot depend on a value parameter. The name of a
+  type parameter is not a reserved name.
 
 ## Internal boundaries
 

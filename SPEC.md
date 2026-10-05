@@ -58,6 +58,15 @@ A type definition can name a function type of data types:
 function type, also at the end of a longer function type. `WritePath` is
 the function type `(log : Log) -> (write : Write) -> Step`.
 
+A function type can start with type parameters: `(A : Type 0) -> (x : A) -> A`.
+Each type parameter comes before the value parameters. The types of the
+later parameters and the result type can use its name. A function type with
+a type parameter is in `Type 1`. An application `f T a` gives one data type
+`T` for each type parameter, then the value arguments. The checker replaces
+all type parameters with the type arguments in one step. The type of a type
+parameter is opaque in the body of the function, so the body is correct for
+each type argument. A type that depends on a value parameter is later work.
+
 ## 4. Structures
 
 - **Monad** gives `pure`, `map` and `bind`. M0 instances: `Option`, `List`,
