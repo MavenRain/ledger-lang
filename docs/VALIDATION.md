@@ -5,7 +5,7 @@ OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
 Wasm reactor, and runs 156 integration tests with zero failures. The current
-gate took 10.1 seconds; the test runner reported 6.2 seconds. In the
+gate took 15.2 seconds; the test runner reported 11.7 seconds. In the
 isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
@@ -28,7 +28,9 @@ constructor of the remaining 28 schema families. Conformance cases read
 - Exact field names and order, nested values, argument types, and rejection
   of missing and extra arguments.
 - Ref kind mismatches in record fields, including Option fields and Refs
-  inside the List fields `Artifact.subjects` and `Party.identifiers`.
+  inside the List fields `Artifact.subjects` and `Party.identifiers`. The
+  Artifact cases also check the exact error byte for mismatches in both the
+  first and later list elements.
 - Kind alias normalization, all pairs of different Ref kinds, and Ref types
   nested in Option, List, Prod, and Sum.
 - Rejection of non-Kind, unknown, and forward indices; byte diagnostics and

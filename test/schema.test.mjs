@@ -182,7 +182,18 @@ test('Ref kind mismatches are rejected inside List record fields', () => {
   const party = identifiers =>
     `${refs}\ndef result : Party := makeParty partyOrg "Acme" none (${identifiers}) attrsEnd none none`;
   const identifier = verifiedBy => `(makeIdentifier systemDomain "acme.example" (some ${verifiedBy}))`;
-  accept(artifact('cons (accountParty partyRef) (cons (accountCommercial dealRef) nil)'));
+  assert.deepEqual(accept(artifact('cons (accountParty partyRef) (cons (accountCommercial dealRef) nil)')).at(-1).value.subjects, [
+    { tag: 'accountParty', party: { kind: 'kindParty', hash: 'party' } },
+    { tag: 'accountCommercial', commercial: { kind: 'kindCommercial', hash: 'deal' } },
+  ]);
+  for (const bad of ['accountParty eventRef', 'accountParty dealRef', 'accountCommercial eventRef', 'accountCommercial partyRef']) {
+    for (const subjects of [`cons (${bad}) nil`, `cons (accountParty partyRef) (cons (${bad}) nil)`]) {
+      const source = artifact(subjects);
+      const error = reject(source);
+      assert.match(error.message, /declared type/);
+      assert.equal(error.byte, source.indexOf(bad) + bad.indexOf(' ') + 1);
+    }
+  }
   accept(party(`cons ${identifier('eventRef')} (cons ${identifier('eventRef')} nil)`));
   for (const source of [
     artifact('cons (accountParty wrongkindParty) (cons (accountCommercial dealRef) nil)'),
