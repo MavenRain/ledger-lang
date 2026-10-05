@@ -137,10 +137,9 @@ test('unfold refuses a declared type without a carrier at the keyword', () => {
   reject(again + 'def r : Flag := unfold again 1 0', structureError, 'unfold');
 });
 
-test('fold and unfold are refused in a function body and bare as an argument', () => {
-  const nested = 'a function body cannot use this form';
-  reject(keep + 'def h : (n : Nat) -> Nat := fun (n : Nat) => fold keep 0 n', nested, 'fold');
-  reject(again + 'def h : (n : Nat) -> Nat := fun (n : Nat) => unfold again 1 n', nested, 'unfold');
+test('fold and unfold work in a function body and are refused bare as an argument', () => {
+  assert.deepEqual(values(keep + 'def h : (n : Nat) -> Nat := fun (n : Nat) => fold keep 0 n def y : Nat := h 2'), [0]);
+  values(again + 'def h : (n : Nat) -> Nat := fun (n : Nat) => unfold again 1 n def y : Nat := h 2');
   reject(keep + 'def n : Nat := 2 def r : Option Nat := some fold keep 0 n',
     'argument needs parentheses', 'fold');
   reject(again + 'def r : Option Nat := some unfold again 1 0', 'argument needs parentheses', 'unfold');
@@ -268,9 +267,8 @@ test('the number of functions must fit the source of a fold', () => {
     'cannot infer the type of this term', 'valueNull');
 });
 
-test('a fold over Value is refused in a function body and bare as an argument', () => {
-  reject(onValue + `def h : (v : Value) -> Text := fun (v : Value) => ${foldValue} v`,
-    'a function body cannot use this form', 'fold');
+test('a fold over Value works in a function body and is refused bare as an argument', () => {
+  values(onValue + `def h : (v : Value) -> Text := fun (v : Value) => ${foldValue} v def y : Text := h valueNull`);
   reject(onValue + `def v : Value := valueNull def r : Option Text := some ${foldValue} v`,
     'argument needs parentheses', 'fold');
   assert.deepEqual(values(onValue +
@@ -317,8 +315,7 @@ test('unfold into Value checks the coalgebra, the limit and the seed', () => {
     'def r : Value := unfold mixed 1 0', termError, 'mixed');
   reject(growChain + 'def r : Value := unfold growChain "x" 0', termError, '"x"');
   reject(growChain + 'def r : Value := unfold growChain 1 "x"', termError, '"x"');
-  reject(growChain + 'def h : (n : Nat) -> Value := fun (n : Nat) => unfold growChain 1 n',
-    'a function body cannot use this form', 'unfold');
+  values(growChain + 'def h : (n : Nat) -> Value := fun (n : Nat) => unfold growChain 1 n def y : Value := h 0');
 });
 
 test('fold consumes a Value that unfold built', () => {

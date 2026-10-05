@@ -138,7 +138,10 @@ in parentheses, it can be the argument of `first` or `second`, or a side of
 
 In this slice, a function type is only the type of a definition. A function
 body can apply an earlier function, and a function is an argument only of a
-structure form. The body
+structure form. A function
+body can use `map`, `bind`, `filter`, `either`, `fold` and `unfold`. A
+function that a form applies evaluates in the scope of its definition, so a
+parameter of the caller cannot replace a name in that function. The body
 check at the definition does not know the argument values, so it checks an
 application in the body only by type. Thus a constructor
 error in the body, such as `textByte n textEnd` with `n` above 255, is
@@ -172,7 +175,7 @@ needs `A -> B`, `bind` needs `A -> F B`, and `filter` needs `B -> Flag`.
 item. The values `none` and `inl e` stay as they are. `filter` keeps the
 payloads for which `f` gives `flagYes`. `either f g s` applies `f` to the
 payload of `inl` and `g` to the payload of `inr`, and its type is the result
-type of `f` and `g`. A function body can use `pure`, but it cannot use the
+type of `f` and `g`. A function body can use `pure` and the
 other forms. Each list item uses one step of the depth fuel. See
 [examples/structures.ledger](examples/structures.ledger).
 
@@ -189,7 +192,7 @@ pairs. For `unfold`, the declared type selects the carrier. Into `Nat`,
 elements. An element above 255 into `Text` and a duplicate key into `Attrs`
 are errors at `unfold`. `filter f t` also checks against `Text`, `Values` and
 `Attrs`, with `f : E -> Flag`, and keeps the order of the elements. A
-function body cannot use `fold` or `unfold`. Each element uses one step of
+function body can use `fold` and `unfold`. Each element uses one step of
 the depth fuel, so a short program can fold or unfold only a short sequence.
 
 `Value` is a carrier too. A fold over a `Value` takes five functions before

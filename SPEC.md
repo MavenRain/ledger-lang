@@ -75,8 +75,10 @@ Surface forms in M0. The declared type selects the instance: `pure x`,
 with one parameter. For `map`, `f : A -> B` and `t : F A`. For `bind`,
 `f : A -> F B` and `t : F A`. For `filter`, `f : B -> Flag` and `t : F B`.
 `either f g s` synthesizes `C` from `f : A -> C`, `g : B -> C` and
-`s : Sum A B`. A function body can use `pure` and can apply an earlier
-function, but it cannot use `map`, `bind`, `filter` or `either`.
+`s : Sum A B`. A function body can use `pure`, can apply an earlier
+function, and can use `map`, `bind`, `filter` and `either`. The check of
+the body at the definition checks the function and the source of a form.
+It does not evaluate the form.
 
 `fold f z t` checks against a declared type `C`. `z : C`, and `t`
 synthesizes its carrier like the argument of `first`. Over `Nat`,

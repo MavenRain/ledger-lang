@@ -12,7 +12,6 @@ const instances = source => {
   return result.instances;
 };
 const funError = 'expected fun with the declared parameters';
-const nestedError = 'a function body cannot use this form';
 // Each case names the last occurrence of `at` in the source as the error byte.
 const reject = (source, message, at) => {
   const result = run(source);

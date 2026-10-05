@@ -23,6 +23,9 @@ not complete the M0 milestone in `SPEC.md`.
   `fun` with flat or curried binders, and saturated application. The
   definition checks the body once. Each application evaluates the body again
   with the argument values. A function body can apply an earlier function.
+  A function body can use `map`, `bind`, `filter`, `either`, `fold` and
+  `unfold`. A function that a form applies evaluates in the scope of its
+  definition.
   The body evaluates in the scope of its definition. All evaluated bodies of
   a program share one work budget. Functions are not instances.
 - Reserved names for every SPEC form, also for forms of later slices.
@@ -74,8 +77,7 @@ not complete the M0 milestone in `SPEC.md`.
 
 ## Remaining M0 work
 
-1. Allow the structure forms, `fold` and `unfold` in a function body. Then
-   add dependent function types and inline or partial functions as
+1. Add dependent function types and inline or partial functions as
    arguments. These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types.

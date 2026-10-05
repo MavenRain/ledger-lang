@@ -14,7 +14,6 @@ const values = source => {
 const structureError = 'the type has no instance of this structure';
 const unaryError = 'expected a function with one parameter';
 const typeError = 'term does not have the declared type';
-const nestedError = 'a function body cannot use this form';
 // Each case names the last occurrence of `at` in the source as the error byte.
 const reject = (source, message, at) => {
   const result = run(source);
@@ -106,11 +105,13 @@ test('structure forms need parentheses as arguments', () => {
   reject(`${fns}def x : Option Nat := some either len id (inr 1)`, 'argument needs parentheses', 'either');
 });
 
-test('a function body can use pure but cannot use the other forms', () => {
+test('a function body can use pure and the forms that apply a function', () => {
   assert.deepEqual(values(`${fns}def one : (n : Nat) -> List Nat := fun (n : Nat) => pure n ` +
     'def x : List Nat := one 8'), [[8]]);
-  reject(`${fns}def h : (n : Nat) -> List Nat := fun (n : Nat) => map id nil`, nestedError, 'map');
-  reject(`${fns}def h : (n : Nat) -> Nat := fun (n : Nat) => either len id (inr n)`, nestedError, 'either');
+  assert.deepEqual(values(`${fns}def h : (n : Nat) -> List Nat := fun (n : Nat) => map id (cons n nil) ` +
+    'def y : List Nat := h 8'), [[8]]);
+  assert.deepEqual(values(`${fns}def h : (n : Nat) -> Nat := fun (n : Nat) => either len id (inr n) ` +
+    'def y : Nat := h 8'), [8]);
 });
 
 test('the structures example compiles', async () => {

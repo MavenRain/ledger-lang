@@ -126,6 +126,17 @@ budget across definitions, a doubling chain of 41 functions, and the sides
 of an `Eq` type. The slice removes the old refusal case from
 `test/functions.test.mjs`. This slice has no mutation run.
 
+The in-body forms slice adds `test/bodies.test.mjs` with 4 cases. They
+cover `map`, `bind`, `either` and `fold` in a function body, a form that
+applies a function with a form in its body, the scope of a function that a
+form applies, the check of a form at the definition, and the work budget
+for forms in function bodies. Six earlier rows in
+`test/structures.test.mjs` and `test/algebra.test.mjs` asserted the refusal
+of a form in a function body. These rows now assert that the program
+compiles. The earlier paragraphs that name this refusal describe the rows
+before this slice. The full suite has 394 tests. This slice has no example
+file and no mutation run.
+
 The full design in `SPEC.md` is not implemented. See [STATUS.md](STATUS.md)
 for remaining M0 work and [README.md](../README.md) for supported syntax and
 resource limits. Entry hashing and projection remain M1 work.
