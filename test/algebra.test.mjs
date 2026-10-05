@@ -125,11 +125,12 @@ const again = 'def again : (s : Nat) -> Option Nat := fun (s : Nat) => some s ';
 const structureError = 'the type has no instance of this structure';
 const termError = 'term does not have the declared type';
 const stepError = 'expected the name of a function';
+const casesError = 'the number of functions does not fit the source of this fold';
 
-test('fold refuses a source without a carrier at the source', () => {
+test('fold refuses a source without a carrier, or a Value with one function, at the source', () => {
   reject(keep + 'def src : Flag := flagYes def r : Nat := fold keep 0 src', structureError, 'src');
   reject(keep + 'def blank : Value := valueNull def r : Nat := fold keep 0 blank',
-    structureError, 'blank');
+    casesError, 'blank');
 });
 
 test('unfold refuses a declared type without a carrier at the keyword', () => {
@@ -186,5 +187,145 @@ test('the algebra example compiles', async () => {
     ['counts', [1, 2]], ['copied', [1, 2]], ['three', 3], ['ticks', ['tick', 'tick', 'tick']],
     ['greeting', 'Hi'], ['bytes', [72, 105]], ['alternating', [1, 2, 1, 2]], ['letters', 'ABA'],
     ['fields', { id: null, name: null }], ['present', { id: null, name: null }], ['cleared', ''],
+    ['valueTree', { left: { left: null, right: null }, right: null }], ['treeShape', 'attrs'],
+    ['plainLeaf', 'plain'], ['leafText', 'plain'],
   ]);
+});
+
+const onNat = 'def onNat : (n : Nat) -> Text := fun (n : Nat) => "nat" ';
+const onRest = 'def onFlag : (b : Flag) -> Text := fun (b : Flag) => "flag" ' +
+  'def onText : (t : Text) -> Text := fun (t : Text) => t ' +
+  'def onItems : (xs : List Text) -> Text := fun (xs : List Text) => "items" ' +
+  'def onAttrs : (fs : List (Prod Text Text)) -> Text := fun (fs : List (Prod Text Text)) => "attrs" ';
+const onValue = onNat + onRest;
+const foldValue = 'fold onNat onFlag onText onItems onAttrs "null"';
+const message = (source, expected) => {
+  const result = run(source);
+  assert.deepEqual(Object.keys(result), ['error'], JSON.stringify(result));
+  assert.equal(result.error.message, expected);
+};
+
+for (const [term, expected] of [
+  ['valueNull', 'null'], ['valueNat 3', 'nat'], ['valueFlag flagYes', 'flag'],
+  ['valueText "leaf"', 'leaf'], ['valueItems valuesEnd', 'items'],
+  ['valueItems (valuesItem valueNull valuesEnd)', 'items'], ['valueAttrs attrsEnd', 'attrs'],
+  ['valueAttrs (attrsField "k" (valueNat 1) attrsEnd)', 'attrs'],
+]) {
+  test(`fold over Value selects the case of ${term}`, () => {
+    assert.deepEqual(values(onValue + `def v : Value := ${term} def r : Text := ${foldValue} v`).at(-1),
+      expected);
+  });
+}
+
+test('fold over Value gives each scalar payload to its function', () => {
+  const sum = 'Sum Nat (Sum Flag Text)';
+  const functions = `def a : (n : Nat) -> ${sum} := fun (n : Nat) => inl n ` +
+    `def b : (f : Flag) -> ${sum} := fun (f : Flag) => inr (inl f) ` +
+    `def c : (t : Text) -> ${sum} := fun (t : Text) => inr (inr t) ` +
+    `def d : (xs : List (${sum})) -> ${sum} := fun (xs : List (${sum})) => inl 4 ` +
+    `def e : (fs : List (Prod Text (${sum}))) -> ${sum} := fun (fs : List (Prod Text (${sum}))) => inl 5 `;
+  const use = name => `fold a b c d e (inl 0) ${name}`;
+  assert.deepEqual(values(functions + 'def vn : Value := valueNat 7 def vf : Value := valueFlag flagYes ' +
+    'def vt : Value := valueText "x" def vz : Value := valueNull ' +
+    'def vi : Value := valueItems valuesEnd def va : Value := valueAttrs attrsEnd ' +
+    `def rn : ${sum} := ${use('vn')} def rf : ${sum} := ${use('vf')} ` +
+    `def rt : ${sum} := ${use('vt')} def rz : ${sum} := ${use('vz')} ` +
+    `def ri : ${sum} := ${use('vi')} def ra : ${sum} := ${use('va')}`).slice(6),
+  [{ inl: 7 }, { inr: { inl: true } }, { inr: { inr: 'x' } }, { inl: 0 }, { inl: 4 }, { inl: 5 }]);
+});
+
+test('fold over Value folds the children of items and of fields', () => {
+  const byte = 'def onNat : (n : Nat) -> Text := fun (n : Nat) => textByte n "!" ';
+  const nested = number => 'def v : Value := valueItems (valuesItem (valueText "a") (valuesItem ' +
+    `(valueAttrs (attrsField "k" (valueItems (valuesItem (valueNat ${number}) valuesEnd)) attrsEnd)) valuesEnd)) `;
+  assert.deepEqual(values(byte + onRest + nested(65) + `def r : Text := ${foldValue} v`).at(-1), 'items');
+  message(byte + onRest + nested(256) + `def r : Text := ${foldValue} v`,
+    'textByte requires a byte below 256');
+});
+
+test('fold over Value checks each function and the initial value against the declared type', () => {
+  const other = 'def other : (p : Prod Nat Nat) -> Text := fun (p : Prod Nat Nat) => "x" ';
+  const names = ['onNat', 'onFlag', 'onText', 'onItems', 'onAttrs'];
+  for (const index of names.keys()) {
+    const used = names.map((name, at) => (at === index ? 'other' : name)).join(' ');
+    reject(onValue + other + `def v : Value := valueNull def r : Text := fold ${used} "null" v`,
+      termError, 'other');
+  }
+  reject(onValue + 'def wrongResult : (n : Nat) -> Nat := fun (n : Nat) => n def v : Value := valueNull ' +
+    'def r : Text := fold wrongResult onFlag onText onItems onAttrs "null" v', termError, 'wrongResult');
+  reject(onValue + 'def v : Value := valueNull def r : Text := fold onNat onFlag onText onItems onAttrs 7 v',
+    termError, '7');
+});
+
+test('the number of functions must fit the source of a fold', () => {
+  reject(onValue + `def n : Nat := 2 def r : Text := ${foldValue} n`, casesError, 'n');
+  reject(onValue + 'def v : Value := valueNull def r : Text := fold onNat onFlag "null" v',
+    stepError, '"null"');
+  reject(onValue + 'def v : Value := valueNull ' +
+    'def r : Text := fold onNat onFlag onText onItems onAttrs onNat "null" v',
+    'argument needs parentheses', 'onNat');
+  reject(onValue + `def r : Text := ${foldValue} valueNull`,
+    'cannot infer the type of this term', 'valueNull');
+});
+
+test('a fold over Value is refused in a function body and bare as an argument', () => {
+  reject(onValue + `def h : (v : Value) -> Text := fun (v : Value) => ${foldValue} v`,
+    'a function body cannot apply a function', 'fold');
+  reject(onValue + `def v : Value := valueNull def r : Option Text := some ${foldValue} v`,
+    'argument needs parentheses', 'fold');
+  assert.deepEqual(values(onValue +
+    `def v : Value := valueNull def r : Option Text := some (${foldValue} v)`), [null, 'null']);
+});
+
+const layer = seed => `Option (Sum Nat (Sum Flag (Sum Text (Sum (List ${seed}) (List (Prod Text ${seed}))))))`;
+const grow = (name, seed, body) =>
+  `def ${name} : (s : ${seed}) -> ${layer(seed)} := fun (s : ${seed}) => ${body} `;
+const growChain = grow('growChain', 'Nat', 'some (inr (inr (inr (inl (cons s nil)))))');
+
+test('unfold into Value builds each scalar layer and gives null for none', () => {
+  assert.deepEqual(values(
+    grow('growNat', 'Nat', 'some (inl s)') + grow('growFlag', 'Flag', 'some (inr (inl s))') +
+    grow('growText', 'Text', 'some (inr (inr (inl s)))') + grow('growNone', 'Nat', 'none') +
+    'def a : Value := unfold growNat 1 7 def b : Value := unfold growFlag 1 flagYes ' +
+    'def c : Value := unfold growText 1 "x" def d : Value := unfold growNone 5 7 ' +
+    'def e : Value := unfold growNat 0 7'), [7, true, 'x', null, null]);
+});
+
+test('unfold into Value applies its coalgebra at most n times, depth first', () => {
+  const twice = grow('growTwice', 'Nat', 'some (inr (inr (inr (inl (cons s (cons s nil))))))');
+  assert.deepEqual(
+    values(twice + [0, 1, 2, 3].map(n => `def t${n} : Value := unfold growTwice ${n} 5`).join(' ')),
+    [null, [null, null], [[null, null], null], [[[null, null], null], null]]);
+});
+
+test('unfold into Value keeps the field order and refuses a duplicate key', () => {
+  const fields = grow('growFields', 'Text',
+    'some (inr (inr (inr (inr (cons (pair "z" s) (cons (pair "a" s) nil))))))');
+  const result = values(fields +
+    'def one : Value := unfold growFields 1 "s" def two : Value := unfold growFields 2 "s"');
+  assert.deepEqual(result, [{ z: null, a: null }, { z: { z: null, a: null }, a: null }]);
+  assert.deepEqual(Object.keys(result[0]), ['z', 'a']);
+  assert.deepEqual(Object.keys(result[1].z), ['z', 'a']);
+  const twin = grow('growTwin', 'Text',
+    'some (inr (inr (inr (inr (cons (pair "k" s) (cons (pair "k" s) nil))))))');
+  reject(twin + 'def bad : Value := unfold growTwin 1 "s"', 'duplicate attribute key', 'unfold');
+});
+
+test('unfold into Value checks the coalgebra, the limit and the seed', () => {
+  reject(again + 'def r : Value := unfold again 1 0', termError, 'again');
+  reject(`def mixed : (s : Nat) -> ${layer('Text')} := fun (s : Nat) => none ` +
+    'def r : Value := unfold mixed 1 0', termError, 'mixed');
+  reject(growChain + 'def r : Value := unfold growChain "x" 0', termError, '"x"');
+  reject(growChain + 'def r : Value := unfold growChain 1 "x"', termError, '"x"');
+  reject(growChain + 'def h : (n : Nat) -> Value := fun (n : Nat) => unfold growChain 1 n',
+    'a function body cannot apply a function', 'unfold');
+});
+
+test('fold consumes a Value that unfold built', () => {
+  assert.deepEqual(values(onValue + growChain +
+    `def v : Value := unfold growChain 30 1 def r : Text := ${foldValue} v`).at(-1), 'items');
+});
+
+test('each application into Value uses one step of the depth fuel', () => {
+  message(growChain + 'def v : Value := unfold growChain 600 1', 'compiler fuel exhausted');
 });

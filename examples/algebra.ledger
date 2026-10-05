@@ -21,3 +21,20 @@ def letters : Text := unfold swap 3 (pair 65 66)
 def fields : Attrs := unfold label 2 (pair "id" "name")
 def present : Attrs := filter kept fields
 def cleared : Text := filter dropped greeting
+
+-- Value is a carrier too. The coalgebra of unfold gives the layer of a seed:
+-- none for valueNull, or a number, a flag, a text, the seeds of the items, or
+-- the keys and seeds of the fields. unfold applies it at most n times. fold
+-- takes one function for each constructor after valueNull, then the result
+-- for valueNull.
+def grow : (s : Text) -> Option (Sum Nat (Sum Flag (Sum Text (Sum (List Text) (List (Prod Text Text)))))) :=
+  fun (s : Text) => some (inr (inr (inr (inr (cons (pair "left" s) (cons (pair "right" s) nil))))))
+def onNat : (n : Nat) -> Text := fun (n : Nat) => "number"
+def onFlag : (b : Flag) -> Text := fun (b : Flag) => "flag"
+def onText : (t : Text) -> Text := fun (t : Text) => t
+def onItems : (results : List Text) -> Text := fun (results : List Text) => "items"
+def onAttrs : (results : List (Prod Text Text)) -> Text := fun (results : List (Prod Text Text)) => "attrs"
+def valueTree : Value := unfold grow 2 "seed"
+def treeShape : Text := fold onNat onFlag onText onItems onAttrs "null" valueTree
+def plainLeaf : Value := valueText "plain"
+def leafText : Text := fold onNat onFlag onText onItems onAttrs "null" plainLeaf

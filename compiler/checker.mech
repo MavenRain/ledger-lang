@@ -398,7 +398,8 @@ def rec sameTypes : List LType -> List LType -> Nat := fun (left : List LType) (
       | cons first rest => boolAnd (sameType head first) (sameTypes tail rest))
 
 -- Algebra carriers: 1 Nat, 2 a sequence (List A, Text, Values or Attrs),
--- 0 no instance.
+-- 0 no instance. Value is a carrier with its own forms: foldValueTerm and
+-- unfoldValueTerm.
 def carrierCode : LType -> Nat := fun (ty : LType) =>
   case (shapeOf ty) as self in Shape return Nat with
   | shapeOption a => 0
@@ -514,6 +515,134 @@ def unfoldFits : LType -> Stepper -> Nat := fun (ty : LType) (op : Stepper) =>
   boolAnd (sameTypes (paramTypes (stepperParams op)) (cons (unfoldSeed op) nil))
     (sameType (stepperResult op) (tyOption (select LType (sameType ty tyNat) (unfoldSeed op)
       (tyProd (shapeElement ty) (unfoldSeed op)))))
+
+-- The algebra of a fold over Value has one case for each constructor. The
+-- initial value is the case of valueNull. The five functions follow in
+-- constructor order: valueNat, valueFlag, valueText, valueItems, valueAttrs.
+mu ValueAlgebra : Type 0 with
+| valueAlgebra : Stepper -> Stepper -> Stepper -> Stepper -> Stepper -> ValueAlgebra
+
+def algebraStep : Nat -> ValueAlgebra -> Stepper := fun (index : Nat) (ops : ValueAlgebra) =>
+  case ops as self in ValueAlgebra return Stepper with
+  | valueAlgebra onNat onFlag onText onItems onAttrs => select Stepper (numberEq index 1) onNat
+      (select Stepper (numberEq index 2) onFlag (select Stepper (numberEq index 3) onText
+        (select Stepper (numberEq index 4) onItems onAttrs)))
+
+-- 0 valueNull, 1 valueNat, 2 valueFlag, 3 valueText, 4 valueItems,
+-- 5 valueAttrs.
+def valueIndex : Value -> Nat := fun (value : Value) =>
+  case value as self in Value return Nat with
+  | valueNull => 0
+  | valueNat number => 1
+  | valueFlag flag => 2
+  | valueText text => 3
+  | valueItems items => 4
+  | valueAttrs attrs => 5
+
+-- For the result type C the functions take Nat, Flag, Text, List C and
+-- List (Prod Text C).
+def algebraParam : Nat -> LType -> LType := fun (index : Nat) (result : LType) =>
+  select LType (numberEq index 1) tyNat (select LType (numberEq index 2) tyFlag
+    (select LType (numberEq index 3) tyText (select LType (numberEq index 4) (tyList result)
+      (tyList (tyProd tyText result)))))
+
+def algebraArgument : Nat -> LType -> List Binding -> List Token -> Parsed Stepper :=
+  fun (index : Nat) (result : LType) (environment : List Binding) (tokens : List Token) =>
+  case (stepperArgument environment tokens) as named in Parsed return Parsed Stepper with
+  | parseError at message => parseError at message
+  | parsed op rest => select (Parsed Stepper)
+      (boolAnd (sameType (stepperResult op) result)
+        (sameTypes (paramTypes (stepperParams op)) (cons (algebraParam index result) nil)))
+      (parsed op rest) (parseError (firstPosition tokens) eTerm)
+
+def algebraArguments : LType -> List Binding -> List Token -> Parsed ValueAlgebra :=
+  fun (result : LType) (environment : List Binding) (tokens : List Token) =>
+  case (algebraArgument 1 result environment tokens) as first in Parsed return Parsed ValueAlgebra with
+  | parseError at message => parseError at message
+  | parsed onNat afterNat => (
+    case (algebraArgument 2 result environment afterNat) as second in Parsed return Parsed ValueAlgebra with
+    | parseError at message => parseError at message
+    | parsed onFlag afterFlag => (
+      case (algebraArgument 3 result environment afterFlag) as third in Parsed return Parsed ValueAlgebra with
+      | parseError at message => parseError at message
+      | parsed onText afterText => (
+        case (algebraArgument 4 result environment afterText) as fourth in Parsed return Parsed ValueAlgebra with
+        | parseError at message => parseError at message
+        | parsed onItems afterItems => (
+          case (algebraArgument 5 result environment afterItems) as fifth in Parsed return Parsed ValueAlgebra with
+          | parseError at message => parseError at message
+          | parsed onAttrs rest => parsed (valueAlgebra onNat onFlag onText onItems onAttrs) rest))))
+
+-- A second function name after the first selects the fold over Value. The
+-- initial value is a data value, so it is never the bare name of a function.
+def namesFunction : List Binding -> List Token -> Nat :=
+  fun (environment : List Binding) (tokens : List Token) =>
+  case (stepperArgument environment tokens) as named in Parsed return Nat with
+  | parseError at message => 0
+  | parsed op rest => 1
+
+-- The children of a Value: its items, or its fields as pairs of key and value.
+def childElements : Value -> Values := fun (value : Value) =>
+  case value as self in Value return Values with
+  | valueNull => valuesEnd
+  | valueNat number => valuesEnd
+  | valueFlag flag => valuesEnd
+  | valueText text => valuesEnd
+  | valueItems items => items
+  | valueAttrs attrs => fieldElements attrs
+
+-- A scalar gives its payload to its function. Items and fields give the list
+-- of the results of their children.
+def algebraInput : Value -> Values -> Value := fun (value : Value) (results : Values) =>
+  select Value (numberLt (valueIndex value) 4) value (valueItems results)
+
+-- The coalgebra of an unfold into Value gives the layer of a seed of type S:
+-- none for valueNull, or a number, a flag, a text, the seeds of the items, or
+-- the keys and seeds of the fields.
+def valueLayer : LType -> LType := fun (seed : LType) =>
+  tyOption (tySum tyNat (tySum tyFlag (tySum tyText
+    (tySum (tyList seed) (tyList (tyProd tyText seed))))))
+
+def unfoldValueFits : Stepper -> Nat := fun (op : Stepper) =>
+  boolAnd (sameTypes (paramTypes (stepperParams op)) (cons (unfoldSeed op) nil))
+    (sameType (stepperResult op) (valueLayer (unfoldSeed op)))
+
+-- 0 none, then the place of the payload in the sum: 1 a number, 2 a flag,
+-- 3 a text, 4 the items, 5 the fields.
+def layerIndex : Value -> Nat := fun (layer : Value) =>
+  select Nat (isNull layer) 0 (select Nat (sumLeft layer) 1
+    (select Nat (sumLeft (projectValue 1 layer)) 2
+      (select Nat (sumLeft (projectValue 1 (projectValue 1 layer))) 3
+        (select Nat (sumLeft (projectValue 1 (projectValue 1 (projectValue 1 layer)))) 4 5))))
+
+def layerPayload : Value -> Value := fun (layer : Value) =>
+  select Value (numberEq (layerIndex layer) 1) (projectValue 1 layer)
+    (select Value (numberEq (layerIndex layer) 2) (projectValue 1 (projectValue 1 layer))
+      (select Value (numberEq (layerIndex layer) 3) (projectValue 1 (projectValue 1 (projectValue 1 layer)))
+        (projectValue 1 (projectValue 1 (projectValue 1 (projectValue 1 layer))))))
+
+-- The values that an unfold into Value built, with the number of
+-- applications that remain.
+mu Grown : Type 0 with
+| grown : Values -> Nat -> Grown
+
+def grownItems : Grown -> Values := fun (built : Grown) =>
+  case built as self in Grown return Values with
+  | grown items limit => items
+
+def grownLimit : Grown -> Nat := fun (built : Grown) =>
+  case built as self in Grown return Nat with
+  | grown items limit => limit
+
+def grownHead : Grown -> Value := fun (built : Grown) =>
+  case built as self in Grown return Value with
+  | grown items limit => (
+      case items as list in Values return Value with
+      | valuesEnd => valueNull
+      | valuesItem head rest => head)
+
+def grownLeaf : Value -> Nat -> Grown := fun (value : Value) (limit : Nat) =>
+  grown (valuesItem value valuesEnd) limit
 
 -- A synthesized argument is an earlier definition, a projection, symm,
 -- trans, either, an application, or one of these in parentheses. An
@@ -741,7 +870,8 @@ and eitherTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
               | parsed value after => parsed (typed (unaryResult onLeft) value) rest))))))
 -- fold f z t synthesizes the type of t. Over a sequence it applies f from the
 -- last element: fold f z nil is z, and fold f z (cons x xs) is
--- f x (fold f z xs). Over the number n it applies f n times to z.
+-- f x (fold f z xs). Over the number n it applies f n times to z. With five
+-- functions the source is a Value.
 and foldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
   fun (fuel : Fuel) (position : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Parsed Value with
@@ -753,6 +883,9 @@ and foldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Pars
       case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
       | parseError at message => parseError at message
       | parsed op afterFunction => (
+        case (natEq (namesFunction environment afterFunction) 1) as several return Parsed Value with
+        | 1 (x : prod ()) => foldValueTerm more position expected environment tokens
+        | 0 (x : prod ()) => (
         case (parseTerm more 1 expected environment afterFunction) as initial in Parsed return Parsed Value with
         | parseError at message => parseError at message
         | parsed start afterStart => (
@@ -762,7 +895,7 @@ and foldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Pars
             case found as item in Typed return Parsed Value with
             | typed ty value => (
               case (natEq (carrierCode ty) 0) as carried return Parsed Value with
-              | 1 (x : prod ()) => parseError (firstPosition afterStart) eStructure
+              | 1 (x : prod ()) => parseError (firstPosition afterStart) (select Text (sameType ty tyValue) eCases eStructure)
               | 0 (x : prod ()) => (
                 case (natEq (foldFits ty expected op) 1) as fits return Parsed Value with
                 | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
@@ -772,7 +905,7 @@ and foldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Pars
                   | some items => (
                     case (foldItems more position op (carrierCode ty) environment items start) as folded in Parsed return Parsed Value with
                     | parseError at message => parseError at message
-                    | parsed result ignored => parsed result rest)))))))))
+                    | parsed result ignored => parsed result rest))))))))))
 -- Each element uses one step of the depth fuel. Over Nat (code 1) the
 -- function takes only the accumulator.
 and foldItems : Fuel -> Nat -> Stepper -> Nat -> List Binding -> Values -> Value -> Parsed Value :=
@@ -799,7 +932,10 @@ and unfoldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Pa
     | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
     | 0 (x : prod ()) => (
       case (natEq (carrierCode expected) 0) as carried return Parsed Value with
-      | 1 (x : prod ()) => parseError position eStructure
+      | 1 (x : prod ()) => (
+          case (natEq (sameType expected tyValue) 1) as tree return Parsed Value with
+          | 1 (x : prod ()) => unfoldValueTerm more position environment tokens
+          | 0 (x : prod ()) => parseError position eStructure)
       | 0 (x : prod ()) => (
         case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
         | parseError at message => parseError at message
@@ -840,3 +976,128 @@ and unfoldItems : Fuel -> Nat -> Stepper -> Nat -> List Binding -> Nat -> Value 
               (select Value (numberEq code 1) payload (projectValue 2 payload))) as remaining in Parsed return Parsed Values with
           | parseError at message => parseError at message
           | parsed items ignored => parsed (valuesItem (select Value (numberEq code 1) valueNull (projectValue 1 payload)) items) nil))))
+-- A fold over Value takes five functions before z. Each function is checked
+-- against the declared type before the source is read.
+and foldValueTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
+  fun (fuel : Fuel) (position : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (algebraArguments expected environment tokens) as named in Parsed return Parsed Value with
+    | parseError at message => parseError at message
+    | parsed ops afterFunctions => (
+      case (parseTerm more 1 expected environment afterFunctions) as initial in Parsed return Parsed Value with
+      | parseError at message => parseError at message
+      | parsed start afterStart => (
+        case (synthTerm more 1 environment afterStart) as source in Parsed return Parsed Value with
+        | parseError at message => parseError at message
+        | parsed found rest => (
+          case found as item in Typed return Parsed Value with
+          | typed ty value => (
+            case (natEq (sameType ty tyValue) 1) as carried return Parsed Value with
+            | 0 (x : prod ()) => parseError (firstPosition afterStart) eCases
+            | 1 (x : prod ()) => (
+              case (foldValue more position ops environment start value) as folded in Parsed return Parsed Value with
+              | parseError at message => parseError at message
+              | parsed result ignored => parsed result rest))))))
+-- valueNull gives z. A scalar applies its function to the payload. Items and
+-- fields fold each child first, in order, and then apply their function to
+-- the list of the results. Each node and each child uses one step of the
+-- depth fuel.
+and foldValue : Fuel -> Nat -> ValueAlgebra -> List Binding -> Value -> Value -> Parsed Value :=
+  fun (fuel : Fuel) (position : Nat) (ops : ValueAlgebra) (environment : List Binding) (start : Value) (value : Value) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (natEq (valueIndex value) 0) as empty return Parsed Value with
+    | 1 (x : prod ()) => parsed start nil
+    | 0 (x : prod ()) => (
+      case (foldChildren more position ops environment start (numberEq (valueIndex value) 5) (childElements value)) as inner in Parsed return Parsed Value with
+      | parseError at message => parseError at message
+      | parsed results ignored => parseTerm more 0 (stepperResult (algebraStep (valueIndex value) ops))
+          (stepperEnvironment (algebraStep (valueIndex value) ops) (cons (algebraInput value results) nil) environment)
+          (stepperBody (algebraStep (valueIndex value) ops))))
+-- A child of the fields (keyed = 1) is the pair of its key and its value.
+-- Its result is the pair of the key and the folded value.
+and foldChildren : Fuel -> Nat -> ValueAlgebra -> List Binding -> Value -> Nat -> Values -> Parsed Values :=
+  fun (fuel : Fuel) (position : Nat) (ops : ValueAlgebra) (environment : List Binding) (start : Value) (keyed : Nat) (elements : Values) =>
+  case fuel as guard in Fuel return Parsed Values with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case elements as self in Values return Parsed Values with
+    | valuesEnd => parsed valuesEnd nil
+    | valuesItem head rest => (
+        case (foldValue more position ops environment start (select Value keyed (projectValue 2 head) head)) as first in Parsed return Parsed Values with
+        | parseError at message => parseError at message
+        | parsed result ignored => (
+            case (foldChildren more position ops environment start keyed rest) as remaining in Parsed return Parsed Values with
+            | parseError at message => parseError at message
+            | parsed results unused => parsed (valuesItem
+                (select Value keyed (objectTwo kFirst (projectValue 1 head) kSecond result) result) results) nil)))
+-- unfold g n s into Value. g gives the layer of a seed. unfold applies g to
+-- the seeds in depth-first order, at most n times. A seed that is left after
+-- n applications becomes valueNull.
+and unfoldValueTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Value :=
+  fun (fuel : Fuel) (position : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed Value with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
+    | parseError at message => parseError at message
+    | parsed op afterFunction => (
+      case (natEq (unfoldValueFits op) 1) as fits return Parsed Value with
+      | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+      | 1 (x : prod ()) => (
+        case (parseTerm more 1 tyNat environment afterFunction) as bounded in Parsed return Parsed Value with
+        | parseError at message => parseError at message
+        | parsed limit afterLimit => (
+          case (parseTerm more 1 (unfoldSeed op) environment afterLimit) as seeded in Parsed return Parsed Value with
+          | parseError at message => parseError at message
+          | parsed seed rest => (
+            case (unfoldNode more position op environment (countOf limit) seed) as built in Parsed return Parsed Value with
+            | parseError at message => parseError at message
+            | parsed node ignored => parsed (grownHead node) rest)))))
+-- Each application of g uses one step of the depth fuel and one of the n
+-- applications. Duplicate keys of the fields are an error at unfold.
+and unfoldNode : Fuel -> Nat -> Stepper -> List Binding -> Nat -> Value -> Parsed Grown :=
+  fun (fuel : Fuel) (position : Nat) (op : Stepper) (environment : List Binding) (limit : Nat) (seed : Value) =>
+  case fuel as guard in Fuel return Parsed Grown with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case (natEq limit 0) as done return Parsed Grown with
+    | 1 (x : prod ()) => parsed (grownLeaf valueNull 0) nil
+    | 0 (x : prod ()) => (
+      case (parseTerm more 0 (stepperResult op) (stepperEnvironment op (cons seed nil) environment) (stepperBody op)) as applied in Parsed return Parsed Grown with
+      | parseError at message => parseError at message
+      | parsed layer after => (
+        case (natLt (layerIndex layer) 4) as leaf return Parsed Grown with
+        | 1 (x : prod ()) => parsed (grownLeaf (layerPayload layer) (natSub limit 1)) nil
+        | 0 (x : prod ()) => (
+          case (unfoldSeeds more position op environment (numberEq (layerIndex layer) 5) (natSub limit 1) (itemsOf (layerPayload layer))) as children in Parsed return Parsed Grown with
+          | parseError at message => parseError at message
+          | parsed built ignored => (
+            case (natEq (layerIndex layer) 5) as fielded return Parsed Grown with
+            | 0 (x : prod ()) => parsed (grownLeaf (valueItems (grownItems built)) (grownLimit built)) nil
+            | 1 (x : prod ()) => (
+              case (fieldsOf (grownItems built)) as attrs in Result return Parsed Grown with
+              | failure at message => parseError position message
+              | success fields => parsed (grownLeaf (valueAttrs fields) (grownLimit built)) nil))))))
+-- The seeds of the items, or the keys and seeds of the fields (keyed = 1),
+-- from the left. The applications that remain pass from each seed to the
+-- next seed.
+and unfoldSeeds : Fuel -> Nat -> Stepper -> List Binding -> Nat -> Nat -> Values -> Parsed Grown :=
+  fun (fuel : Fuel) (position : Nat) (op : Stepper) (environment : List Binding) (keyed : Nat) (limit : Nat) (seeds : Values) =>
+  case fuel as guard in Fuel return Parsed Grown with
+  | fuelEnd => parseError position eFuel
+  | fuelMore more => (
+    case seeds as self in Values return Parsed Grown with
+    | valuesEnd => parsed (grown valuesEnd limit) nil
+    | valuesItem head rest => (
+        case (unfoldNode more position op environment limit (select Value keyed (projectValue 2 head) head)) as first in Parsed return Parsed Grown with
+        | parseError at message => parseError at message
+        | parsed node ignored => (
+            case (unfoldSeeds more position op environment keyed (grownLimit node) rest) as remaining in Parsed return Parsed Grown with
+            | parseError at message => parseError at message
+            | parsed others unused => parsed (grown (valuesItem
+                (select Value keyed (objectTwo kFirst (projectValue 1 head) kSecond (grownHead node)) (grownHead node))
+                (grownItems others)) (grownLimit others)) nil)))

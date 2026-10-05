@@ -83,8 +83,19 @@ as `Nat`, the `Value` items of `Values`, and the fields of `Attrs` as
 `Nat`, `g : S -> Option S`, and the result is the number of steps. Into a
 sequence of `E`, `g : S -> Option (Prod E S)`. `unfold` stops when `g` gives
 `none` or after `n` elements. `filter` also checks against `Text`, `Values`
-and `Attrs`, with `f : E -> Flag`. The `Value` carrier of Algebra is later
-work.
+and `Attrs`, with `f : E -> Flag`.
+
+Over `Value`, `fold` takes one function for each constructor after
+`valueNull`: `fold fNat fFlag fText fItems fAttrs z t`. `fNat : Nat -> C`,
+`fFlag : Flag -> C`, `fText : Text -> C`, `fItems : List C -> C` and
+`fAttrs : List (Prod Text C) -> C`. `z` is the result for `valueNull`. `fold`
+consumes the children of `valueItems` and `valueAttrs` first, and a field
+result is the pair of its key and the folded value. Into `Value`,
+`g : S -> Option (Sum Nat (Sum Flag (Sum Text (Sum (List S) (List (Prod Text S))))))`.
+`none` gives `valueNull`. The other results give a number, a flag, a text,
+the seeds of the items, or the keys and seeds of the fields. `unfold` applies
+`g` at most `n` times, in depth-first order. A seed that is left becomes
+`valueNull`.
 
 ## 5. Instances and the target
 

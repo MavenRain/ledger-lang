@@ -4,7 +4,7 @@ Date: 2026-10-05. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 342 integration tests with zero failures. The test
+Wasm reactor, and runs 361 integration tests with zero failures. The test
 runner reported 1.5 seconds. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
@@ -47,18 +47,33 @@ argument without exactly one parameter, mismatched function types, a bare
 form as an argument, and the forms that apply a function in a function body.
 The example `examples/structures.ledger` is compiled and its values compared.
 
-The 23 algebra tests in `test/algebra.test.mjs` cover `fold` over `Nat`,
+Of the 42 algebra tests in `test/algebra.test.mjs`, 23 cover `fold` over `Nat`,
 `List`, `Text`, `Values` and `Attrs`, including the right-to-left order and an
 empty source. They cover `unfold` into `Nat`, `List`, `Text`, `Values` and
 `Attrs`, the step limit, `none` from the coalgebra, and a non-byte element
 into `Text`. `filter` over `Text`, `Values` and `Attrs` keeps or removes all
 elements in order. Duplicate keys from `unfold` into `Attrs` are refused, also
 when a `fold` consumes the result. Refusals are checked at their source
-bytes: a type without the structure, the `Value` source, `fold` and `unfold`
-in a function body or bare as an argument, a function argument that does not
-name a function, function, initial value, limit and seed type mismatches, a
-source that does not synthesize its type, and depth fuel exhaustion. The
-example `examples/algebra.ledger` is compiled and its values compared.
+bytes: a type without the structure, a `Value` source with one function,
+`fold` and `unfold` in a function body or bare as an argument, a function
+argument that does not name a function, function, initial value, limit and
+seed type mismatches, a source that does not synthesize its type, and depth
+fuel exhaustion. The example `examples/algebra.ledger` is compiled and its
+values compared.
+
+The other 19 algebra tests cover the `Value` carrier. A fold over `Value`
+selects the case of each of the six constructors, gives each scalar payload
+to its function, and folds the children of items and of fields before their
+parent. An unfold into `Value` builds each scalar layer, gives `valueNull`
+for `none` and for a seed that is left after the limit, applies the coalgebra
+in depth-first order, and keeps the field order. A `fold` consumes a `Value`
+that an `unfold` built. Refusals are checked at their source bytes: each of
+the five functions and the initial value with a wrong type, five functions
+with a source that is not a `Value`, two functions, six functions, a source
+that does not synthesize its type, both forms in a function body, a bare
+fold as an argument, a coalgebra with a wrong type, limit and seed type
+mismatches, and a duplicate key from a layer of fields. Depth fuel
+exhaustion gives its message. No mutation run was made for this slice.
 
 The 23 function tests in `test/functions.test.mjs` cover flat and curried
 binders, argument type checks, applications as arguments of projections,

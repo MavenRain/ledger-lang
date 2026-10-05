@@ -50,6 +50,11 @@ not complete the M0 milestone in `SPEC.md`.
   `Attrs`, and Filterable `filter` over `Text`, `Values` and `Attrs`. The
   source of `fold` synthesizes its type. `unfold` stops at `none` or at its
   `Nat` limit. An `Attrs` result refuses duplicate keys.
+- Algebra `fold` and `unfold` over `Value`. `fold` takes five functions, one
+  for each constructor after `valueNull`, then the result for `valueNull`.
+  `unfold` takes one function that gives the layer of a seed. It applies
+  that function at most `n` times in depth-first order, and a seed that is
+  left becomes `valueNull`. A layer of fields refuses duplicate keys.
 - Operation families of `core/ops.mech`: `Moment`, `Missing`, `Verdict`,
   `Command`, `Write`, `Outcome`, `Step`, `PipelineKey`, `Bucket`,
   `StageStat`, `Renewal` and `Account360`. Construction, checking and JSON
@@ -67,12 +72,10 @@ not complete the M0 milestone in `SPEC.md`.
    functions as arguments. These need an internal value domain with neutral
    terms and a threaded work budget. Then add Sigma checking and evaluation,
    `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
-2. Add the `Value` carrier of Algebra fold/unfold. It needs one algebra
-   case for each of the six `Value` constructors.
-3. Add `WritePath` and `ReadPath`. They are function types, so they need
+2. Add `WritePath` and `ReadPath`. They are function types, so they need
    function types in type definitions. Until then the type parser refuses
    these two names with `this type belongs to a later milestone`.
-4. Extend diagnostics with declaration context and improve source/output
+3. Extend diagnostics with declaration context and improve source/output
    budgets as measurements justify changes.
 
 ## Known limits of this slice
@@ -82,6 +85,10 @@ not complete the M0 milestone in `SPEC.md`.
   512 steps. Thus a long list made by `bind`, or a `fold` over a large `Nat`,
   can stop with a fuel error. Their function argument is a name, not a `fun`
   term or a partial application.
+- Over `Value`, `fold` and `unfold` use one step of the depth fuel for each
+  level and for each earlier child of the same list. The limit of `unfold`
+  into `Value` counts applications, not elements or levels. A fold over
+  `Value` needs all five functions. It cannot leave out a case.
 - The source of `fold` must synthesize its type. A literal source such as
   `nil` or a string is refused. Name it in an earlier definition.
 

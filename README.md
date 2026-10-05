@@ -172,7 +172,31 @@ are errors at `unfold`. `filter f t` also checks against `Text`, `Values` and
 `Attrs`, with `f : E -> Flag`, and keeps the order of the elements. A
 function body cannot use `fold` or `unfold`. Each element uses one step of
 the depth fuel, so a short program can fold or unfold only a short sequence.
-`Value` is not yet a carrier. See [examples/algebra.ledger](examples/algebra.ledger).
+
+`Value` is a carrier too. A fold over a `Value` takes five functions before
+`z`: `fold fNat fFlag fText fItems fAttrs z t`. The source `t` synthesizes
+the type `Value`. For the declared type `C`, `fNat : Nat -> C`,
+`fFlag : Flag -> C`, `fText : Text -> C`, `fItems : List C -> C` and
+`fAttrs : List (Prod Text C) -> C`. `valueNull` gives `z`. A scalar gives its
+payload to its function. `valueItems` and `valueAttrs` fold each child first,
+from the left, and then give the list of the results to their function. The
+result of a field is the pair of its key and the folded value. One function
+with a `Value` source, or five functions with another source, stops the
+compiler with `the number of functions does not fit the source of this fold`.
+
+`unfold g n s` checks against `Value` when `g` gives the layer of a seed of
+type `S`:
+
+```text
+g : (s : S) -> Option (Sum Nat (Sum Flag (Sum Text (Sum (List S) (List (Prod Text S))))))
+```
+
+`none` gives `valueNull`. The other results give a number, a flag, a text,
+the seeds of the items, or the keys and seeds of the fields. `unfold` applies
+`g` to the seeds in depth-first order, at most `n` times. A seed that is left
+after `n` applications becomes `valueNull`. A duplicate key is an error at
+`unfold`. Each level and each earlier child of the same list uses one step of
+the depth fuel. See [examples/algebra.ledger](examples/algebra.ledger).
 
 `Option` presence is preserved. `none` is `null`. When the payload type can
 encode `null` (an `Option` or a `Value`), `some v` is `{"some":v}`. For other
