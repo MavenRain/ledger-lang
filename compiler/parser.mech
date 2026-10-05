@@ -87,7 +87,10 @@ def namedType : Nat -> Text -> List Binding -> List Token -> Parsed LType :=
           | funBinding other params result body => parseError position eType)
       | none => (
           case (schemaType name) as schema in Option return Parsed LType with
-          | none => parseError position eType
+          | none => (
+              case (opsType name) as operation in Option return Parsed LType with
+              | none => parseError position (select Text (opsLaterType name) eLaterType eType)
+              | some ty => parsed ty tokens)
           | some ty => parsed ty tokens))
 
 -- Type formers take data types only, so a universe is not an argument.

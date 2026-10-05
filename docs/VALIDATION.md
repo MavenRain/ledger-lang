@@ -4,9 +4,8 @@ Date: 2026-10-05. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 258 integration tests with zero failures. The test
-runner reported 2.2 seconds. In the
-isolated checkout the host was selected with
+Wasm reactor, and runs 312 integration tests with zero failures. The test
+runner reported 1.5 seconds. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
 The original 61 tests still cover scalar and container constructors, earlier
@@ -76,6 +75,15 @@ through the CLI and a Bend 2 Wasm generation timeout at 600 seconds. Those
 external review inputs were not rerun for this slice. The committed source
 and resource-boundary regression tests were rerun as part of the full gate.
 Neither mechanism-lang compiler checkout was edited.
+
+The operation slice adds `test/operations.test.mjs`. It reads
+`core/ops.mech` and `core/schema.mech`, not the compiler metadata. For each
+of the 48 constructors of the 12 `Type 0` operation families it checks the
+field names, field order, argument types and arity, and it rejects a surplus
+argument, a missing argument, a wrong argument type and a wrong `Ref` index.
+More cases cover the `Log` alias, the later-milestone refusal of `Query`,
+`WritePath` and `ReadPath`, the 93 reserved operation names, and the literal
+output of `examples/operations.ledger`.
 
 The full design in `SPEC.md` is not implemented. See [STATUS.md](STATUS.md)
 for remaining M0 work and [README.md](../README.md) for supported syntax and

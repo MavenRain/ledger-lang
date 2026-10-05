@@ -35,7 +35,10 @@ def constructorPlan : LType -> Text -> Option Plan := fun (ty : LType) (name : T
       (some (plan (cons tyText nil) 5 sHashOf)) none
   | tyRef kind => select (Option Plan) (sameText name sRefTo)
       (some (plan (cons tyHash nil) 15 kind)) none
-  | tySchema family => schemaConstructorPlan family name
+  | tySchema family => (
+      case (schemaConstructorPlan family name) as found in Option return Option Plan with
+      | none => opsConstructorPlan family name
+      | some selected => some selected)
   | tyText => select (Option Plan) (sameText name stextEnd) (some (plan (nil) (3) stextEnd)) (select (Option Plan) (sameText name stextByte) (some (plan (cons tyNat (cons tyText (nil))) (4) stextByte)) (none))
   | tyFlag => select (Option Plan) (sameText name sflagNo) (some (plan (nil) (1) sflagNo)) (select (Option Plan) (sameText name sflagYes) (some (plan (nil) (2) sflagYes)) (none))
   | tyValue => select (Option Plan) (sameText name svalueNull) (some (plan (nil) (0) svalueNull)) (select (Option Plan) (sameText name svalueFlag) (some (plan (cons tyFlag (nil)) (5) svalueFlag)) (select (Option Plan) (sameText name svalueNat) (some (plan (cons tyNat (nil)) (5) svalueNat)) (select (Option Plan) (sameText name svalueText) (some (plan (cons tyText (nil)) (5) svalueText)) (select (Option Plan) (sameText name svalueItems) (some (plan (cons tyValues (nil)) (5) svalueItems)) (select (Option Plan) (sameText name svalueAttrs) (some (plan (cons tyAttrs (nil)) (5) svalueAttrs)) (none))))))
@@ -109,4 +112,5 @@ def formReservedName : Text -> Nat := fun (name : Text) =>
   boolOr (sameText name sType) (boolOr (sameText name sfun) (boolOr (sameText name sSigma) (boolOr (sameText name spack) (boolOr (sameText name switness) (boolOr (sameText name spayload) (boolOr (sameText name sEq) (boolOr (sameText name srefl) (boolOr (sameText name stransport) (boolOr (sameText name ssymm) (boolOr (sameText name strans) (boolOr (sameText name scong) (boolOr (sameText name sfirst) (boolOr (sameText name ssecond) (boolOr (sameText name seither) (boolOr (sameText name spure) (boolOr (sameText name smap) (boolOr (sameText name sbind) (boolOr (sameText name sfold) (boolOr (sameText name sunfold) (boolOr (sameText name sfilter) (0)))))))))))))))))))))
 
 def reservedName : Text -> Nat := fun (name : Text) =>
-  boolOr (schemaReservedName name) (boolOr (primitiveReservedName name) (formReservedName name))
+  boolOr (schemaReservedName name) (boolOr (opsReservedName name)
+    (boolOr (primitiveReservedName name) (formReservedName name)))

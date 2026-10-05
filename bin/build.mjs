@@ -8,7 +8,7 @@ export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const sources = [
   'core/schema.mech',
   'compiler/runtime.mech', 'compiler/literals.mech', 'compiler/lexer.mech',
-  'compiler/schema.mech', 'compiler/types.mech', 'compiler/evaluate.mech', 'compiler/parser.mech',
+  'compiler/schema.mech', 'compiler/operations.mech', 'compiler/types.mech', 'compiler/evaluate.mech', 'compiler/parser.mech',
   'compiler/checker.mech', 'compiler/json.mech', 'compiler/program.mech',
 ];
 const exports = ['compile', 'emptyText', 'consText', 'textIsEnd', 'textHead', 'textTail'];

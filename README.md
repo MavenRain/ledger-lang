@@ -218,5 +218,25 @@ while the output is written reports the first byte of that definition.
   and `node bin/ledgerc.mjs` starts Node again with these flags. A program
   that imports `bin/bridge.mjs` must start Node with the same flags.
 
-See `core/ops.mech` for the planned write and read types. The current
-reactor loads `core/schema.mech`; operations are preserved for later work.
+## Operation families
+
+The compiler constructs, checks and encodes the `Type 0` families of
+`core/ops.mech`: `Moment`, `Missing`, `Verdict`, `Command`, `Write`,
+`Outcome`, `Step`, `PipelineKey`, `Bucket`, `StageStat`, `Renewal` and
+`Account360`. The encoding rules are the schema rules. `Log` is an alias of
+`List Entry`. See `examples/operations.ledger`.
+
+```
+def now : Moment := momentNow
+def key : PipelineKey := pipelineByStage
+def history : Log := nil
+```
+
+`now` encodes as `{"tag":"momentNow"}`, `key` as `"pipelineByStage"`, and
+`history` as `[]` with the type `List (Entry)`.
+
+`Query`, `WritePath` and `ReadPath` are reserved names. As a type, each of
+them stops the compiler with `this type belongs to a later milestone`. The
+compiler does not run the write path or the read path. The reactor loads
+`core/schema.mech` only. `compiler/operations.mech` holds the constructor
+and field data of `core/ops.mech`.

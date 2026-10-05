@@ -1,7 +1,8 @@
 # Compiler status
 
 M0 now implements construction, checking, and JSON encoding for every family
-in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
+in `core/schema.mech` and every `Type 0` family in `core/ops.mech`. It does
+not complete the M0 milestone in `SPEC.md`.
 
 ## Implemented
 
@@ -49,6 +50,12 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
   `Attrs`, and Filterable `filter` over `Text`, `Values` and `Attrs`. The
   source of `fold` synthesizes its type. `unfold` stops at `none` or at its
   `Nat` limit. An `Attrs` result refuses duplicate keys.
+- Operation families of `core/ops.mech`: `Moment`, `Missing`, `Verdict`,
+  `Command`, `Write`, `Outcome`, `Step`, `PipelineKey`, `Bucket`,
+  `StageStat`, `Renewal` and `Account360`. Construction, checking and JSON
+  encoding follow the schema rules. `Log` is an alias of `List Entry`, so
+  the output shows `List (Entry)`. The compiler does not run the write path
+  or the read path.
 
 ## Remaining M0 work
 
@@ -58,7 +65,11 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
    `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
 2. Add the `Value` carrier of Algebra fold/unfold. It needs one algebra
    case for each of the six `Value` constructors.
-3. Add operation-family construction and encoding from `core/ops.mech`.
+3. Add the indexed `Query` family of `core/ops.mech` as a `Type 1` type
+   whose values are not instances. `WritePath` and `ReadPath` are function
+   types, so they need function types in type definitions. Until then the
+   type parser refuses these three names with
+   `this type belongs to a later milestone`.
 4. Extend diagnostics with declaration context and improve source/output
    budgets as measurements justify changes.
 
@@ -77,7 +88,9 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
   Schema comments about business rules, such as a person's Party kind or a
   confidence percentage, do not add constraints beyond the declared types.
 - The compiler reserves all schema names and every form name of SPEC.md. It
-  does not yet reserve the operation families from `core/ops.mech`.
+  also reserves every family, constructor and definition name of
+  `core/ops.mech`, including `Query` and its constructors. Field names are
+  not reserved.
 - Each constructor argument costs one parsing fuel step. The host requires a
   structurally recursive definition to examine its recursive argument at the
   start of its body, so the argument parser cannot skip this step. README.md
@@ -97,6 +110,7 @@ original meaning.
 
 `runtime.mech` holds compiler data types and common operations. `lexer.mech`
 turns Text into tokens. `schema.mech` describes schema constructors and fields;
+`operations.mech` describes the operation families in the same form;
 `types.mech` describes primitive and container forms. `parser.mech`,
 `checker.mech`, and `evaluate.mech` check and evaluate terms. `json.mech`
 serializes checked runtime values. `program.mech` compiles definitions and
@@ -105,6 +119,7 @@ produces the success or error document.
 `test/schema.test.mjs` derives conformance cases from the original schema,
 independently of compiler metadata. It checks every newly added constructor,
 field name, field order, argument type, and arity, plus indexed references.
+`test/operations.test.mjs` does the same from `core/ops.mech`.
 
 Internal families such as Fuel, Token, LType, Result, Plan, and Binding cannot
 be used as ledger types. The only exported runtime boundary is Text and its

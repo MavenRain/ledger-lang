@@ -1,0 +1,17 @@
+-- Operation families from core/ops.mech. The compiler checks and encodes
+-- these values. It does not run the write path or the read path.
+def acme : Ref kindParty := refTo (hashOf "party-acme")
+def deal : Ref kindCommercial := refTo (hashOf "deal-1")
+
+def now : Moment := momentNow
+def before : Moment := momentAsOf (hashOf "entry-7")
+
+def advance : Command := commandTransition deal "negotiation"
+def write : Write := makeWrite (actorHuman acme) (some (hashOf "entry-7")) advance
+
+def denied : Outcome := outcomeDenied none (cons (missingApproval "legal") nil)
+def history : Log := nil
+def step : Step := makeStep history denied
+
+def key : PipelineKey := pipelineByStage
+def bucket : Bucket := makeBucket "negotiation" 2 150000
