@@ -40,10 +40,10 @@ recursion. Recursion comes only from `fold` and `unfold` (section 4).
 | Type equality | `Eq A x y`, `refl`, `transport`, `symm`, `trans`, `cong` |
 | Universes | `Type 0`, `Type 1` |
 
-`Type 0` classifies the data types and `Type 1` classifies `Type 0`. There is
-no cumulativity. `Option`, `List`, `Prod` and `Sum` take data types only.
-`Query T` takes a data type `T` and is in `Type 1`, so a definition of a
-Query type is not an instance.
+`Type 0` classifies the data types and the function types of data types.
+`Type 1` classifies `Type 0`. There is no cumulativity. `Option`, `List`,
+`Prod` and `Sum` take data types only. `Query T` takes a data type `T` and
+is in `Type 1`, so a definition of a Query type is not an instance.
 
 `Eq A x y` takes a data type `A` and two terms of type `A`. Two sides are
 equal when their values have the same JSON encoding. A proof has no runtime
@@ -52,6 +52,11 @@ content, so a definition of an `Eq` type is not an instance.
 `(x : A) -> B` is the type of a function. A function has no JSON encoding, so
 a function type is not a data type. An application `f a` checks `a` against
 `A` and evaluates the body of `f` with `x` bound to the value of `a`.
+
+A type definition can name a function type of data types:
+`def Rule : Type 0 := (count : Nat) -> Flag`. The name stands for the
+function type, also at the end of a longer function type. `WritePath` is
+the function type `(log : Log) -> (write : Write) -> Step`.
 
 ## 4. Structures
 

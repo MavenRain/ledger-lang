@@ -192,8 +192,8 @@ test('Query takes one data type and is a Type 1 type', () => {
   reject(`${ask}\ndef same : Eq (Query Flag) ask ask := refl`);
 });
 
-test('WritePath and ReadPath are types of a later milestone', () => {
-  for (const type of ['WritePath', 'ReadPath', 'List WritePath', 'Option ReadPath']) {
+test('ReadPath is a type of a later milestone', () => {
+  for (const type of ['ReadPath', 'List ReadPath', 'Option ReadPath']) {
     assert.match(JSON.stringify(reject(`def x : ${type} := nil`)), /this type belongs to a later milestone/, type);
   }
   assert.doesNotMatch(JSON.stringify(reject('def x : Unknown := nil')), /later milestone/);

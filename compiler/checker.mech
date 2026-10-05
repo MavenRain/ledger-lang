@@ -171,6 +171,7 @@ def unaryOf : Binding -> Option Unary := fun (item : Binding) =>
   case item as self in Binding return Option Unary with
   | binding name ty value => none
   | typeBinding name universe defined => none
+  | arrowBinding name params result => none
   | funBinding name params result body => (
       case params as list in List return Option Unary with
       | nil => none
@@ -384,6 +385,7 @@ def stepperArgument : List Binding -> List Token -> Parsed Stepper :=
               case item as bound in Binding return Parsed Stepper with
               | binding other ty value => parseError position eStep
               | typeBinding other universe defined => parseError position eStep
+              | arrowBinding other params result => parseError position eStep
               | funBinding other params result body => parsed (stepper params result body) tail)))
 
 def rec sameTypes : List LType -> List LType -> Nat := fun (left : List LType) (right : List LType) =>
@@ -672,6 +674,7 @@ def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
               case item as bound in Binding return Parsed Typed with
               | binding other ty value => parsed (typed ty value) tail
               | typeBinding other universe defined => parseError position eInfer
+              | arrowBinding other params result => parseError position eInfer
               | funBinding other params result body => (
                   case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Parsed Typed with
                   | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
@@ -735,6 +738,7 @@ and parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Val
               | binding other ty value => select (Parsed Value) (sameType expected ty)
                   (parsed value tail) (parseError position eTerm)
               | typeBinding other universe defined => parseError position eTerm
+              | arrowBinding other params result => parseError position eTerm
               | funBinding other params result body => checkSynthesized position expected (synthTerm more atom environment tokens))
           | none => (
               case (constructorPlan expected name) as selected in Option return Parsed Value with

@@ -33,6 +33,7 @@ def kindBinding : Binding -> Option Text := fun (item : Binding) =>
       | 0 (x : prod ()) => none
       | 1 (x : prod ()) => asText value)
   | typeBinding name universe defined => none
+  | arrowBinding name params result => none
   | funBinding name params result body => none
 
 def rec parseKindIndex : Fuel -> List Binding -> List Token -> Parsed Text :=
@@ -65,6 +66,7 @@ def rec parseKindIndex : Fuel -> List Binding -> List Token -> Parsed Text :=
               | some selected => parsed name tail))))
 
 -- A universe is Type 0 or Type 1. An earlier type definition stands for its type.
+-- The name of a function type is not a data type.
 def namedType : Nat -> Text -> List Binding -> List Token -> Parsed LType :=
   fun (position : Nat) (name : Text) (environment : List Binding) (tokens : List Token) =>
   case (natEq (sameText name sType) 1) as universe return Parsed LType with
@@ -84,12 +86,14 @@ def namedType : Nat -> Text -> List Binding -> List Token -> Parsed LType :=
           case item as known in Binding return Parsed LType with
           | binding other ty value => parseError position eType
           | typeBinding other universe defined => parsed defined tokens
+          | arrowBinding other params result => parseError position eData
           | funBinding other params result body => parseError position eType)
       | none => (
           case (schemaType name) as schema in Option return Parsed LType with
           | none => (
               case (opsType name) as operation in Option return Parsed LType with
-              | none => parseError position (select Text (opsLaterType name) eLaterType eType)
+              | none => parseError position (select Text (opsLaterType name) eLaterType
+                  (select Text (sameText name opsTextWritePath) eData eType))
               | some ty => parsed ty tokens)
           | some ty => parsed ty tokens))
 

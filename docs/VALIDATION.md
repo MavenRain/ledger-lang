@@ -4,8 +4,8 @@ Date: 2026-10-05. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 361 integration tests with zero failures. The test
-runner reported 1.5 seconds. In the isolated checkout the host was selected with
+Wasm reactor, and runs 381 integration tests with zero failures. The test
+runner reported 1.9 seconds. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
 The original 61 tests still cover scalar and container constructors, earlier
@@ -97,14 +97,24 @@ of the 48 constructors of the 12 `Type 0` operation families it checks the
 field names, field order, argument types and arity, and it rejects a surplus
 argument, a missing argument, a wrong argument type and a wrong `Ref` index.
 More cases cover the `Log` alias, the later-milestone refusal of
-`WritePath` and `ReadPath`, the 93 reserved operation names, and the literal
-output of `examples/operations.ledger`.
+`ReadPath`, the 93 reserved operation names, and the literal output of
+`examples/operations.ledger`.
 
 The Query slice adds one case for each of the 29 `Query` constructors. Each
 case checks the answer type, the argument types and the arity, and it checks
 that the value is not an instance. One more case covers the universe of a
 Query type and its refusal as an argument of a type former, a parameter type
 and a result type.
+
+The function type slice adds `test/paths.test.mjs` with 20 cases. They cover
+a type definition of a function type, the name as the type of a function
+definition, in another type definition and at the end of a longer function
+type, the `Type 0` universe, the refusal as a data type and as a term,
+`WritePath` in each of these positions, the refusal of `ReadPath`, and the
+literal steps of `examples/paths.ledger`. Additional cases cover grouping
+of function type names and complete arrow types, the 511-parenthesis
+boundary, parameter shadowing, universe and data type restrictions, and
+missing closing parentheses. This slice has no mutation run.
 
 The full design in `SPEC.md` is not implemented. See [STATUS.md](STATUS.md)
 for remaining M0 work and [README.md](../README.md) for supported syntax and

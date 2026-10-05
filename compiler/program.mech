@@ -114,8 +114,49 @@ def parseParam : Fuel -> List Binding -> List Token -> Parsed Param :=
 mu Signature : Type 0 with
 | signature : List Param -> LType -> Signature
 
+-- WritePath is the function type of core/ops.mech:
+-- (log : Log) -> (write : Write) -> Step.
+def writePathSignature : Signature :=
+  signature (cons (param opsTextlog (tyList (tySchema schemaTextEntry)))
+    (cons (param (textByte 119 (textByte 114 (textByte 105 (textByte 116 (textByte 101 textEnd)))))
+      (tySchema opsTextWrite)) nil)) (tySchema opsTextStep)
+
+-- A type definition can name a function type. A parameter hides this name.
+def namedSignature : List Binding -> List Token -> Option Signature :=
+  fun (environment : List Binding) (tokens : List Token) =>
+  case (nameOf tokens) as named in Option return Option Signature with
+  | none => none
+  | some name => (
+      case (lookup name environment) as found in Option return Option Signature with
+      | none => select (Option Signature) (sameText name opsTextWritePath) (some writePathSignature) none
+      | some item => (
+          case item as known in Binding return Option Signature with
+          | binding other ty value => none
+          | typeBinding other universe defined => none
+          | arrowBinding other params result => some (signature params result)
+          | funBinding other params result body => none))
+
+-- A function type starts with a parameter group or is the name of one.
+-- Grouping parentheses preserve this distinction from data types.
+def rec startsArrow : Fuel -> List Binding -> List Token -> Nat :=
+  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Nat with
+  | fuelEnd => 0
+  | fuelMore more => (
+      case (namedSignature environment tokens) as known in Option return Nat with
+      | some found => 1
+      | none => (
+          case (natEq (startsParam tokens) 1) as parameter return Nat with
+          | 1 (x : prod ()) => 1
+          | 0 (x : prod ()) => (
+              case (natEq (markOf tokens) 40) as grouped return Nat with
+              | 0 (x : prod ()) => 0
+              | 1 (x : prod ()) => startsArrow more environment (dropToken tokens))))
+
 -- `(x : A) -> ... -> B` with data types. B cannot refer to a parameter.
 -- Parameters hide outer names in subsequent type annotations.
+-- The name of a function type can end the chain. Its parameters follow the
+-- earlier ones.
 def rec parseSignature : Fuel -> List Binding -> List Param -> List Token -> Parsed Signature :=
   fun (fuel : Fuel) (environment : List Binding) (done : List Param) (tokens : List Token) =>
   case fuel as guard in Fuel return Parsed Signature with
@@ -123,11 +164,23 @@ def rec parseSignature : Fuel -> List Binding -> List Param -> List Token -> Par
   | fuelMore more => (
     case (natEq (startsParam tokens) 1) as grouped return Parsed Signature with
     | 0 (x : prod ()) => (
+      case (natEq (markOf tokens) 40) as opening return Parsed Signature with
+      | 1 (x : prod ()) => (
+          case (parseSignature more environment done (dropToken tokens)) as inside in Parsed return Parsed Signature with
+          | parseError at message => parseError at message
+          | parsed found rest => closeParsed Signature found rest)
+      | 0 (x : prod ()) => (
+      case (namedSignature environment tokens) as known in Option return Parsed Signature with
+      | none => (
         case (parseType more 0 environment tokens) as declared in Parsed return Parsed Signature with
         | parseError at message => parseError at message
         | parsed result rest => select (Parsed Signature) (numberEq (typeLevel result) 0)
             (parsed (signature (reverseListOnto Param nil done) result) rest)
             (parseError (firstPosition tokens) eData))
+      | some found => (
+        case found as shape in Signature return Parsed Signature with
+        | signature params result =>
+            parsed (signature (reverseListOnto Param params done) result) (dropToken tokens))))
     | 1 (x : prod ()) => (
         case (parseParam more environment tokens) as first in Parsed return Parsed Signature with
         | parseError at message => parseError at message
@@ -225,7 +278,7 @@ def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
           case (expectMark 58 tail) as colon in Parsed return Parsed Binding with
           | parseError at message => parseError at message
           | parsed ignored rest => (
-            case (natEq (startsParam rest) 1) as signed return Parsed Binding with
+            case (natEq (startsArrow fuel environment rest) 1) as signed return Parsed Binding with
             | 1 (x : prod ()) => parseFunction fuel name environment rest
             | 0 (x : prod ()) => (
             case (declaredType fuel environment rest) as declared in Parsed return Parsed Binding with
@@ -240,17 +293,26 @@ def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
                     | parseError at message => parseError at message
                     | parsed value after => parsed (binding name ty value) after)
                 | 0 (x : prod ()) => (
+                  case (natEq (startsArrow fuel environment afterAssign) 1) as arrow return Parsed Binding with
+                  | 1 (x : prod ()) => (
+                    case (parseSignature fuel environment nil afterAssign) as defined in Parsed return Parsed Binding with
+                    | parseError at message => parseError at message
+                    | parsed found after => (
+                      case found as shape in Signature return Parsed Binding with
+                      | signature params result => select (Parsed Binding) (numberEq (typeLevel ty) 1)
+                          (parsed (arrowBinding name params result) after) (parseError (firstPosition afterAssign) eUniverse)))
+                  | 0 (x : prod ()) => (
                     case (parseType fuel 0 environment afterAssign) as defined in Parsed return Parsed Binding with
                     | parseError at message => parseError at message
                     | parsed inner after => select (Parsed Binding) (numberEq (typeLevel ty) (natAdd (typeLevel inner) 1))
-                        (parsed (typeBinding name ty inner) after) (parseError (firstPosition afterAssign) eUniverse))))))))))
+                        (parsed (typeBinding name ty inner) after) (parseError (firstPosition afterAssign) eUniverse)))))))))))
 
 def instanceValue : Text -> LType -> Value -> Value := fun (name : Text) (ty : LType) (value : Value) =>
   valueAttrs (attrsField kName (valueText name)
     (attrsField kType (valueText (typeName ty)) (attrsField kValue value attrsEnd)))
 
--- Type definitions, proofs and Query values are not instances, so the output
--- omits them.
+-- Type definitions, names of function types, proofs and Query values are
+-- not instances, so the output omits them.
 def recordInstance : Nat -> Binding -> List Located -> List Located :=
   fun (position : Nat) (item : Binding) (done : List Located) =>
   case item as self in Binding return List Located with
@@ -262,6 +324,7 @@ def recordInstance : Nat -> Binding -> List Located -> List Located :=
           | notEq => cons (located position (instanceValue name ty value)) done
           | eqSides a lhs rhs => done))
   | typeBinding name universe defined => done
+  | arrowBinding name params result => done
   | funBinding name params result body => done
 
 def rec parseProgram : Fuel -> Fuel -> List Binding -> List Located -> List Token -> Result (List Located) :=

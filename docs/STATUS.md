@@ -65,6 +65,11 @@ not complete the M0 milestone in `SPEC.md`.
   type. The compiler checks each of the 29 constructors against its answer
   type. A Query value is not an instance. A Query type is not an argument of
   a type former, a parameter type or a result type.
+- Function types in type definitions. A type definition in `Type 0` names a
+  function type of data types. The name stands for the function type as the
+  type of a function definition, in another type definition, and at the end
+  of a longer function type. `WritePath` is the built-in function type
+  `(log : Log) -> (write : Write) -> Step`.
 
 ## Remaining M0 work
 
@@ -72,9 +77,9 @@ not complete the M0 milestone in `SPEC.md`.
    functions as arguments. These need an internal value domain with neutral
    terms and a threaded work budget. Then add Sigma checking and evaluation,
    `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
-2. Add `WritePath` and `ReadPath`. They are function types, so they need
-   function types in type definitions. Until then the type parser refuses
-   these two names with `this type belongs to a later milestone`.
+2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
+   needs the dependent function types of item 1. Until then the type parser
+   refuses this name with `this type belongs to a later milestone`.
 3. Extend diagnostics with declaration context and improve source/output
    budgets as measurements justify changes.
 
@@ -92,6 +97,9 @@ not complete the M0 milestone in `SPEC.md`.
 - The source of `fold` must synthesize its type. A literal source such as
   `nil` or a string is refused. Name it in an earlier definition.
 
+- A function is not an argument, so the name of a function type is not a
+  parameter type. A function of type `WritePath` is a function of the
+  program. The compiler does not supply the write path of M1.
 - Hash wraps a Text value. The compiler does not compute or validate digest
   strings, resolve references to log entries, or apply record projections.
   Schema comments about business rules, such as a person's Party kind or a

@@ -164,9 +164,11 @@ mu Param : Type 0 with
 
 -- A function keeps its parameters, its result type and the tokens of its
 -- checked body. Its body can only name earlier definitions and parameters.
+-- An arrow binding is the name of a function type.
 mu Binding : Type 0 with
 | binding : Text -> LType -> Value -> Binding
 | typeBinding : Text -> LType -> LType -> Binding
+| arrowBinding : Text -> List Param -> LType -> Binding
 | funBinding : Text -> List Param -> LType -> List Token -> Binding
 
 -- A synthesized term carries its type with its value.
@@ -177,6 +179,7 @@ def bindingName : Binding -> Text := fun (item : Binding) =>
   case item as self in Binding return Text with
   | binding name ty value => name
   | typeBinding name universe defined => name
+  | arrowBinding name params result => name
   | funBinding name params result body => name
 
 def rec lookup : Text -> List Binding -> Option Binding :=

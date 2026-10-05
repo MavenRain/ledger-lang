@@ -145,6 +145,20 @@ reported at its byte in the body when an application supplies that value.
 Each application parses the body again with the fuel that remains at the
 application site. See [examples/functions.ledger](examples/functions.ledger).
 
+A type definition can name a function type of data types. The function type
+is in `Type 0`. The name then stands for the function type: as the type of a
+function definition, as the body of another type definition, and at the end
+of a longer function type. A function type is not a data type. Thus its name
+is not an argument of a type former or a parameter type, and the compiler
+stops with `expected a data type`.
+
+```
+def Rule : Type 0 := (count : Nat) -> Prod Nat Nat
+def Tagged : Type 0 := (label : Text) -> Rule
+def twin : Rule := fun (count : Nat) => pair count count
+def keep : Tagged := fun (label : Text) (count : Nat) => pair count 0
+```
+
 The structure forms `pure x`, `map f t`, `bind f t` and `filter f t` check
 against a declared `Option B`, `List B` or `Sum E B`. `filter` has no `Sum E`
 form. The argument `f` is the name of a function with one parameter: `map`
@@ -270,8 +284,18 @@ former, a parameter type or a result type.
 def isReconciled : Query Flag := queryAmountReconciled deal
 ```
 
-`WritePath` and `ReadPath` are reserved names. As a type, each of them stops
-the compiler with `this type belongs to a later milestone`. The compiler
-does not run the write path or the read path. The reactor loads
-`core/schema.mech` only. `compiler/operations.mech` holds the constructor
+`WritePath` is the function type `(log : Log) -> (write : Write) -> Step`.
+A function definition can have this type, a type definition can name it,
+and a longer function type can end with it. See
+[examples/paths.ledger](examples/paths.ledger).
+
+```
+def refuse : WritePath :=
+  fun (log : Log) (write : Write) => makeStep log (outcomeDenied none nil)
+```
+
+`ReadPath` is a reserved name. It has a type parameter, so it needs
+dependent function types. As a type, it stops the compiler with
+`this type belongs to a later milestone`. The compiler does not run the
+write path or the read path. The reactor loads `core/schema.mech` only. `compiler/operations.mech` holds the constructor
 and field data of `core/ops.mech`.
