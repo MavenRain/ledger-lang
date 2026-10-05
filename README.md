@@ -140,6 +140,8 @@ while the output is written reports the first byte of that definition.
   on a path. Each definition has its own fuel. The measured limits for one
   definition are 511 nested parentheses, 256 nested `Option` type formers,
   127 nested `textByte` or `cons` terms, and 102 nested `attrsField` terms.
+  These limits use only required parentheses. For example, the innermost
+  Option is `Option Nat`; writing `Option (Nat)` costs another fuel step.
   Each count includes the innermost form. The error reports the token where
   the fuel ran out. Split a longer list or attribute object across
   definitions, for example
