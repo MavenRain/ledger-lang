@@ -158,9 +158,15 @@ mu Parsed (0 A : Type 0) : Type 0 with
 | parsed : A -> List Token -> Parsed A
 | parseError : Nat -> Text -> Parsed A
 
+mu Param : Type 0 with
+| param : Text -> LType -> Param
+
+-- A function keeps its parameters, its result type and the tokens of its
+-- checked body. Its body can only name earlier definitions and parameters.
 mu Binding : Type 0 with
 | binding : Text -> LType -> Value -> Binding
 | typeBinding : Text -> LType -> LType -> Binding
+| funBinding : Text -> List Param -> LType -> List Token -> Binding
 
 -- A synthesized term carries its type with its value.
 mu Typed : Type 0 with
@@ -170,6 +176,7 @@ def bindingName : Binding -> Text := fun (item : Binding) =>
   case item as self in Binding return Text with
   | binding name ty value => name
   | typeBinding name universe defined => name
+  | funBinding name params result body => name
 
 def rec lookup : Text -> List Binding -> Option Binding :=
   fun (name : Text) (environment : List Binding) =>

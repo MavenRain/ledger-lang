@@ -18,6 +18,11 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
   of a data type A. The compiler compares them by their JSON encoding. An
   equality type is only the type of a definition, and proofs are not
   instances. `symm` and `trans` synthesize their types like `first`.
+- First-order functions: function types `(x : A) -> B` over data types,
+  `fun` with flat or curried binders, and saturated application. The
+  definition checks the body once. Each application evaluates the body again
+  with the argument values. A function body cannot apply a function.
+  Functions are not instances.
 - Reserved names for every SPEC form, also for forms of later slices.
 - Type-directed checking with exact types on references to earlier
   definitions. Duplicate and implemented schema names are refused.
@@ -40,10 +45,10 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
 
 ## Remaining M0 work
 
-1. Add function and Sigma checking and evaluation, `either`, `transport`,
-   and `cong`. Functions need an internal value domain with neutral terms.
-   Then `Eq` can appear inside Sigma and Pi types. Enforce the instance
-   boundary for functions.
+1. Add dependent function types, nested application, and functions as
+   arguments. These need an internal value domain with neutral terms and a
+   threaded work budget. Then add Sigma checking and evaluation, `either`,
+   `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
 2. Add Monad map/bind, Algebra fold/unfold,
    and Filterable filter with bounded evaluation.
 3. Add operation-family construction and encoding from `core/ops.mech`.
@@ -62,6 +67,12 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
   structurally recursive definition to examine its recursive argument at the
   start of its body, so the argument parser cannot skip this step. README.md
   gives the measured limits for the original scalar and container forms.
+- A function keeps the tokens of its body, not a syntax tree. Each
+  application parses and evaluates the body again. A body cannot apply a
+  function, so the work of all applications is at most the number of
+  application sites times the body size. The body check at the definition
+  binds each parameter to null. Thus a constructor error that depends on a
+  parameter is reported at the application.
 
 M1 remains the write path, entry hashes, and record projection. M2 remains
 the indexed read path. The core files and full specification retain their

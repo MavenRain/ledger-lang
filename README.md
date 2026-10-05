@@ -25,6 +25,7 @@ bin/ledgerc examples/values.ledger > values.json
 bin/ledgerc examples/crm.ledger > crm.json
 bin/ledgerc examples/formers.ledger > formers.json
 bin/ledgerc examples/equality.ledger > equality.json
+bin/ledgerc examples/functions.ledger > functions.json
 ```
 
 `make test` builds `build/ledgerc.wasm` and runs the integration suite.
@@ -111,6 +112,35 @@ def back : Eq Nat total price := symm same
 In this slice, `Eq` cannot occur inside another type former or a type
 definition. The checking budget of the definition limits the JSON size of
 each side. See [examples/equality.ledger](examples/equality.ledger).
+
+A function definition has a type `(x : A) -> B`. The parameter types and the
+result type are data types, and `B` cannot refer to a parameter. The term is
+`fun (x : A) => t`. Write more parameters as `fun (a : A) (b : B) => t` or as
+`fun (a : A) => fun (b : B) => t`. Each binder type must be equal to the
+declared parameter type. The body can refer to the parameters and to earlier
+definitions.
+
+```text
+def tag : (label : Text) -> (count : Nat) -> Prod Text Nat :=
+  fun (label : Text) (count : Nat) => pair label count
+def visits : Prod Text Nat := tag "acme" 3
+def count : Nat := second (tag "beta" 7)
+```
+
+The compiler checks the body once, at the definition. An application `f a b`
+supplies all arguments. Each argument is an atom, and the compiler checks it
+against its parameter type. The application then evaluates the body again
+with the argument values. An application synthesizes its result type. Thus,
+in parentheses, it can be the argument of `first` or `second`, or a side of
+`Eq`. Functions are not instances, so the output does not contain them.
+
+In this slice, a function type is only the type of a definition. A function
+body cannot apply a function, and a function is not an argument. The body
+check at the definition does not know the argument values. Thus a constructor
+error in the body, such as `textByte n textEnd` with `n` above 255, is
+reported at its byte in the body when an application supplies that value.
+Each application parses the body again with the fuel that remains at the
+application site. See [examples/functions.ledger](examples/functions.ledger).
 
 `Option` presence is preserved. `none` is `null`. When the payload type can
 encode `null` (an `Option` or a `Value`), `some v` is `{"some":v}`. For other

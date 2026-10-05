@@ -47,6 +47,10 @@ no cumulativity. `Option`, `List`, `Prod` and `Sum` take data types only.
 equal when their values have the same JSON encoding. A proof has no runtime
 content, so a definition of an `Eq` type is not an instance.
 
+`(x : A) -> B` is the type of a function. A function has no JSON encoding, so
+a function type is not a data type. An application `f a` checks `a` against
+`A` and evaluates the body of `f` with `x` bound to the value of `a`.
+
 ## 4. Structures
 
 - **Monad** gives `pure`, `map` and `bind`. M0 instances: `Option`, `List`,

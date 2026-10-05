@@ -108,8 +108,35 @@ def transProof : Nat -> Typed -> Typed -> List Token -> Parsed Typed :=
           | eqSides b u z => select (Parsed Typed) (boolAnd (sameType a b) (sameText y u))
               (parsed (typed (tyEq a x z) valueNull) tokens) (parseError position eTrans))))
 
+-- The definition of a function checks its body once, with null for each
+-- parameter. An unnamed binding marks this check. Constructor evaluation
+-- errors wait for an application, and the body cannot apply a function.
+def checkMarker : Binding := binding textEnd tyNat valueNull
+
+def checkingBody : List Binding -> Nat := fun (environment : List Binding) =>
+  case (lookup textEnd environment) as found in Option return Nat with
+  | none => 0
+  | some item => 1
+
+def rec paramTypes : List Param -> List LType := fun (params : List Param) =>
+  case params as self in List return List LType with
+  | nil => nil
+  | cons head tail => (
+      case head as item in Param return List LType with
+      | param name ty => cons ty (paramTypes tail))
+
+def rec bindParams : List Param -> List Value -> List Binding -> List Binding :=
+  fun (params : List Param) (values : List Value) (environment : List Binding) =>
+  case params as self in List return List Binding with
+  | nil => environment
+  | cons head tail => (
+      case head as item in Param return List Binding with
+      | param name ty => bindParams tail (argumentTail values)
+          (cons (binding name ty (argumentHead values)) environment))
+
 -- A synthesized argument is an earlier definition, a projection, symm,
--- trans, or one of these in parentheses.
+-- trans, an application, or one of these in parentheses. An application
+-- evaluates the checked body of the function with the argument values.
 def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
   fun (fuel : Fuel) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Parsed Typed with
@@ -133,7 +160,17 @@ def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
           | some item => (
               case item as bound in Binding return Parsed Typed with
               | binding other ty value => parsed (typed ty value) tail
-              | typeBinding other universe defined => parseError position eInfer)
+              | typeBinding other universe defined => parseError position eInfer
+              | funBinding other params result body => (
+                  case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Parsed Typed with
+                  | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
+                  | 0 (x : prod ()) => (
+                      case (parseArguments more 1 (paramTypes params) environment tail) as checked in Parsed return Parsed Typed with
+                      | parseError at message => parseError at message
+                      | parsed values rest => (
+                          case (parseTerm more 0 result (bindParams params values environment) body) as applied in Parsed return Parsed Typed with
+                          | parseError at message => parseError at message
+                          | parsed value after => parsed (typed result value) rest))))
           | none => (
               case (natEq (synthForm name) 0) as plain return Parsed Typed with
               | 1 (x : prod ()) => parseError position eInfer
@@ -157,7 +194,7 @@ def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
 -- Parsing, checking and constructor evaluation are fused in this M0 slice.
 -- An argument (atom = 1) is a literal, a reference, a nullary constructor or
 -- a parenthesized term.
-def rec parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
+and parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
   fun (fuel : Fuel) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Parsed Value with
   | fuelEnd => parseError (firstPosition tokens) eFuel
@@ -183,7 +220,8 @@ def rec parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed
               case item as known in Binding return Parsed Value with
               | binding other ty value => select (Parsed Value) (sameType expected ty)
                   (parsed value tail) (parseError position eTerm)
-              | typeBinding other universe defined => parseError position eTerm)
+              | typeBinding other universe defined => parseError position eTerm
+              | funBinding other params result body => checkSynthesized position expected (synthTerm more atom environment tokens))
           | none => (
               case (constructorPlan expected name) as selected in Option return Parsed Value with
               | none => (
@@ -199,7 +237,8 @@ def rec parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed
                           | parseError at message => parseError at message
                           | parsed values rest => (
                               case (evaluatePlan selected values) as evaluated in Result return Parsed Value with
-                              | failure at message => parseError position message
+                              | failure at message => select (Parsed Value) (checkingBody environment)
+                                  (parsed valueNull rest) (parseError position message)
                               | success value => parsed value rest)))))))
 and parseArguments : Fuel -> Nat -> List LType -> List Binding -> List Token -> Parsed (List Value) :=
   fun (fuel : Fuel) (atom : Nat) (types : List LType) (environment : List Binding) (tokens : List Token) =>

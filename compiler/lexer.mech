@@ -107,7 +107,9 @@ def rec lexFrom : Fuel -> Nat -> List Token -> Text -> Result (List Token) :=
               case (natEq byte 45) as comment return Result (List Token) with
               | 1 (x : prod ()) => (
                 case (natEq (textHead rest) 45) as dash return Result (List Token) with
-                | 0 (x : prod ()) => failure position eCharacter
+                | 0 (x : prod ()) => select (Result (List Token)) (numberEq (textHead rest) 62)
+                    (lexFrom more (natAdd position 2) (cons (punctuation position 62) done) (textTail rest))
+                    (failure position eCharacter)
                 | 1 (x : prod ()) => (
                   case (scanComment (natAdd position 2) (textTail rest)) as skipped in Scanned return Result (List Token) with
                   | scanError at message => failure at message
@@ -120,7 +122,9 @@ def rec lexFrom : Fuel -> Nat -> List Token -> Text -> Result (List Token) :=
                   | 1 (x : prod ()) => lexFrom more (natAdd position 2) (cons (punctuation position 61) done) (textTail rest))
                 | 0 (x : prod ()) => (
                   case (natEq (boolOr (numberEq byte 40) (numberEq byte 41)) 1) as paren return Result (List Token) with
-                  | 0 (x : prod ()) => failure position eCharacter
+                  | 0 (x : prod ()) => select (Result (List Token)) (boolAnd (numberEq byte 61) (numberEq (textHead rest) 62))
+                      (lexFrom more (natAdd position 2) (cons (punctuation position 63) done) (textTail rest))
+                      (failure position eCharacter)
                   | 1 (x : prod ()) => lexFrom more (natAdd position 1) (cons (punctuation position byte) done) rest)))))))
 
 def lex : Fuel -> Text -> Result (List Token) := fun (fuel : Fuel) (source : Text) =>

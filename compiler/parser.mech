@@ -33,6 +33,7 @@ def kindBinding : Binding -> Option Text := fun (item : Binding) =>
       | 0 (x : prod ()) => none
       | 1 (x : prod ()) => asText value)
   | typeBinding name universe defined => none
+  | funBinding name params result body => none
 
 def rec parseKindIndex : Fuel -> List Binding -> List Token -> Parsed Text :=
   fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
@@ -82,7 +83,8 @@ def namedType : Nat -> Text -> List Binding -> List Token -> Parsed LType :=
       | some item => (
           case item as known in Binding return Parsed LType with
           | binding other ty value => parseError position eType
-          | typeBinding other universe defined => parsed defined tokens)
+          | typeBinding other universe defined => parsed defined tokens
+          | funBinding other params result body => parseError position eType)
       | none => (
           case (schemaType name) as schema in Option return Parsed LType with
           | none => parseError position eType

@@ -4,8 +4,8 @@ Date: 2026-10-04. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 199 integration tests with zero failures. The current
-gate took 5.2 seconds; the test runner reported 3.0 seconds. In the
+Wasm reactor, and runs 222 integration tests with zero failures. The current
+gate took 3.3 seconds; the test runner reported 1.6 seconds. In the
 isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
@@ -40,6 +40,16 @@ constructor of the remaining 28 schema families. Conformance cases read
 - `examples/crm.ledger` through the public CLI, covering all eight business
   record families and a nested Entry. The test compares all 18 instances,
   including field order, with literal expected JSON.
+
+The 23 function tests in `test/functions.test.mjs` cover flat and curried
+binders, argument type checks, applications as arguments of projections,
+constructors and other applications, closed applications as `Eq` sides,
+constructor errors in a body reported at the application, and 13 rejected
+forms at their source bytes. The example `examples/functions.ledger` is
+compared with literal expected values. Regression cases reject empty `fun`
+parameter groups and check that earlier signature and lambda parameters
+shadow outer type aliases and Kind values in subsequent annotations. Valid
+mixed currying and value shadowing remain covered.
 
 Historical measurements for the initial slice included 169 review inputs
 through the CLI and a Bend 2 Wasm generation timeout at 600 seconds. Those
