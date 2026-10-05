@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createCompiler } from '../bin/bridge.mjs';
 
@@ -118,3 +119,72 @@ for (const [carrier, element, input, expected, empty] of [
     [expected, expected, empty]);
   });
 }
+
+const keep = 'def keep : (acc : Nat) -> Nat := fun (acc : Nat) => acc ';
+const again = 'def again : (s : Nat) -> Option Nat := fun (s : Nat) => some s ';
+const structureError = 'the type has no instance of this structure';
+const termError = 'term does not have the declared type';
+const stepError = 'expected the name of a function';
+
+test('fold refuses a source without a carrier at the source', () => {
+  reject(keep + 'def src : Flag := flagYes def r : Nat := fold keep 0 src', structureError, 'src');
+  reject(keep + 'def blank : Value := valueNull def r : Nat := fold keep 0 blank',
+    structureError, 'blank');
+});
+
+test('unfold refuses a declared type without a carrier at the keyword', () => {
+  reject(again + 'def r : Flag := unfold again 1 0', structureError, 'unfold');
+});
+
+test('fold and unfold are refused in a function body and bare as an argument', () => {
+  const nested = 'a function body cannot apply a function';
+  reject(keep + 'def h : (n : Nat) -> Nat := fun (n : Nat) => fold keep 0 n', nested, 'fold');
+  reject(again + 'def h : (n : Nat) -> Nat := fun (n : Nat) => unfold again 1 n', nested, 'unfold');
+  reject(keep + 'def n : Nat := 2 def r : Option Nat := some fold keep 0 n',
+    'argument needs parentheses', 'fold');
+  reject(again + 'def r : Option Nat := some unfold again 1 0', 'argument needs parentheses', 'unfold');
+  assert.deepEqual(values(keep + again + 'def n : Nat := 2 def r : Option Nat := some (fold keep 0 n) ' +
+    'def u : Option Nat := some (unfold again 2 0)'), [2, 0, 2]);
+});
+
+test('the function argument must name a function', () => {
+  reject('def zero : Nat := 0 def n : Nat := 2 def r : Nat := fold zero 0 n', stepError, 'zero');
+  reject('def n : Nat := 2 def r : Nat := fold missing 0 n', stepError, 'missing');
+  reject('def n : Nat := 2 def r : Nat := fold 3 0 n', stepError, '3');
+  reject('def r : Nat := unfold "g" 1 0', stepError, '"g"');
+});
+
+test('fold and unfold check the function, initial value, limit and seed types', () => {
+  reject('def add : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => a ' +
+    'def n : Nat := 2 def r : Nat := fold add 0 n', termError, 'add');
+  reject(keep + 'def xs : List Nat := cons 1 nil def r : Nat := fold keep 0 xs', termError, 'keep');
+  reject(again + 'def r : List Nat := unfold again 1 0', termError, 'again');
+  reject(keep + 'def n : Nat := 2 def r : Nat := fold keep "x" n', termError, '"x"');
+  reject(again + 'def r : Nat := unfold again "x" 0', termError, '"x"');
+  reject(again + 'def r : Nat := unfold again 1 "x"', termError, '"x"');
+});
+
+test('the fold source must synthesize its type', () => {
+  reject(keep + 'def r : Nat := fold keep 0 nil', 'cannot infer the type of this term', 'nil');
+});
+
+test('each element uses one step of the depth fuel', () => {
+  assert.deepEqual(values(keep + 'def n : Nat := 40 def r : Nat := fold keep 5 n'), [40, 5]);
+  reject(keep + 'def n : Nat := 600 def r : Nat := fold keep 0 n', 'compiler fuel exhausted', 'fold');
+  const source = again + 'def r : Nat := unfold again 600 0';
+  const result = run(source);
+  assert.deepEqual(Object.keys(result), ['error'], JSON.stringify(result));
+  assert.equal(result.error.message, 'compiler fuel exhausted');
+  assert.equal(result.error.byte, source.indexOf('some s') + 'some '.length);
+});
+
+test('the algebra example compiles', async () => {
+  const source = await readFile(new URL('../examples/algebra.ledger', import.meta.url), 'utf8');
+  const result = run(source);
+  assert.equal(result['ledger-lang'], 1, JSON.stringify(result));
+  assert.deepEqual(result.instances.map(item => [item.name, item.value]), [
+    ['counts', [1, 2]], ['copied', [1, 2]], ['three', 3], ['ticks', ['tick', 'tick', 'tick']],
+    ['greeting', 'Hi'], ['bytes', [72, 105]], ['alternating', [1, 2, 1, 2]], ['letters', 'ABA'],
+    ['fields', { id: null, name: null }], ['present', { id: null, name: null }], ['cleared', ''],
+  ]);
+});

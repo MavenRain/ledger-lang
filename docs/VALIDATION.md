@@ -1,11 +1,11 @@
 # Validation
 
-Date: 2026-10-04. Node: v23.10.0. Build host: the installed mechanism-lang
+Date: 2026-10-05. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 235 integration tests with zero failures. The test
-runner reported 1.4 seconds. In the
+Wasm reactor, and runs 258 integration tests with zero failures. The test
+runner reported 2.2 seconds. In the
 isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
@@ -47,6 +47,19 @@ structure forms, the refusals for a type without the structure, a function
 argument without exactly one parameter, mismatched function types, a bare
 form as an argument, and the forms that apply a function in a function body.
 The example `examples/structures.ledger` is compiled and its values compared.
+
+The 23 algebra tests in `test/algebra.test.mjs` cover `fold` over `Nat`,
+`List`, `Text`, `Values` and `Attrs`, including the right-to-left order and an
+empty source. They cover `unfold` into `Nat`, `List`, `Text`, `Values` and
+`Attrs`, the step limit, `none` from the coalgebra, and a non-byte element
+into `Text`. `filter` over `Text`, `Values` and `Attrs` keeps or removes all
+elements in order. Duplicate keys from `unfold` into `Attrs` are refused, also
+when a `fold` consumes the result. Refusals are checked at their source
+bytes: a type without the structure, the `Value` source, `fold` and `unfold`
+in a function body or bare as an argument, a function argument that does not
+name a function, function, initial value, limit and seed type mismatches, a
+source that does not synthesize its type, and depth fuel exhaustion. The
+example `examples/algebra.ledger` is compiled and its values compared.
 
 The 23 function tests in `test/functions.test.mjs` cover flat and curried
 binders, argument type checks, applications as arguments of projections,

@@ -71,6 +71,19 @@ with one parameter. For `map`, `f : A -> B` and `t : F A`. For `bind`,
 `s : Sum A B`. A function body can use `pure`, but it cannot use a form that
 applies a function.
 
+`fold f z t` checks against a declared type `C`. `z : C`, and `t`
+synthesizes its carrier like the argument of `first`. Over `Nat`,
+`f : C -> C`, and `fold` applies `f` to `z` as many times as `t`. Over
+`List A`, `Text`, `Values` and `Attrs`, `f : E -> C -> C`, and `fold`
+consumes the elements from the right. The elements are the bytes of `Text`
+as `Nat`, the `Value` items of `Values`, and the fields of `Attrs` as
+`Prod Text Value`. `unfold g n s` checks against a declared carrier. Into
+`Nat`, `g : S -> Option S`, and the result is the number of steps. Into a
+sequence of `E`, `g : S -> Option (Prod E S)`. `unfold` stops when `g` gives
+`none` or after `n` elements. `filter` also checks against `Text`, `Values`
+and `Attrs`, with `f : E -> Flag`. The `Value` carrier of Algebra is later
+work.
+
 ## 5. Instances and the target
 
 An instance is a top-level definition whose type is a data type. Definitions

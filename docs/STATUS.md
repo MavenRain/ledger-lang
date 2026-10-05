@@ -45,6 +45,10 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
 - Monad `pure`, `map` and `bind` over `Option`, `List` and `Sum E`,
   Filterable `filter` over `Option` and `List`, and `either`. The function
   argument names a definition with one parameter.
+- Algebra `fold` and `unfold` over `Nat`, `Text`, `List A`, `Values` and
+  `Attrs`, and Filterable `filter` over `Text`, `Values` and `Attrs`. The
+  source of `fold` synthesizes its type. `unfold` stops at `none` or at its
+  `Nat` limit. An `Attrs` result refuses duplicate keys.
 
 ## Remaining M0 work
 
@@ -52,18 +56,21 @@ in `core/schema.mech`. It does not complete the M0 milestone in `SPEC.md`.
    functions as arguments. These need an internal value domain with neutral
    terms and a threaded work budget. Then add Sigma checking and evaluation,
    `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
-2. Add Algebra fold/unfold, and Filterable filter over `Text`, `Values` and
-   `Attrs`, with bounded evaluation.
+2. Add the `Value` carrier of Algebra fold/unfold. It needs one algebra
+   case for each of the six `Value` constructors.
 3. Add operation-family construction and encoding from `core/ops.mech`.
 4. Extend diagnostics with declaration context and improve source/output
    budgets as measurements justify changes.
 
 ## Known limits of this slice
 
-- `map`, `bind` and `filter` over a list use one step of the depth fuel for
-  each item, and the depth fuel is at most 512 steps. Thus a long list made by
-  `bind` can stop with a fuel error. Their function argument is a name, not a
-  `fun` term or a partial application.
+- `map`, `bind`, `filter`, `fold` and `unfold` use one step of the depth
+  fuel for each element. The depth fuel is one step per source byte, at most
+  512 steps. Thus a long list made by `bind`, or a `fold` over a large `Nat`,
+  can stop with a fuel error. Their function argument is a name, not a `fun`
+  term or a partial application.
+- The source of `fold` must synthesize its type. A literal source such as
+  `nil` or a string is refused. Name it in an earlier definition.
 
 - Hash wraps a Text value. The compiler does not compute or validate digest
   strings, resolve references to log entries, or apply record projections.

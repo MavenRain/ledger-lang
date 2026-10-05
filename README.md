@@ -27,6 +27,7 @@ bin/ledgerc examples/formers.ledger > formers.json
 bin/ledgerc examples/equality.ledger > equality.json
 bin/ledgerc examples/functions.ledger > functions.json
 bin/ledgerc examples/structures.ledger > structures.json
+bin/ledgerc examples/algebra.ledger > algebra.json
 ```
 
 `make test` builds `build/ledgerc.wasm` and runs the integration suite.
@@ -155,6 +156,23 @@ payload of `inl` and `g` to the payload of `inr`, and its type is the result
 type of `f` and `g`. A function body can use `pure`, but it cannot use the
 other forms. Each list item uses one step of the depth fuel. See
 [examples/structures.ledger](examples/structures.ledger).
+
+The algebra forms `fold f z t` and `unfold g n s` check against a declared
+type `C`. For `fold`, `z : C`, and the source `t` synthesizes its type like
+the argument of `first`: an earlier definition, a projection, or one of these
+in parentheses. Thus `fold f z nil` is refused. Over `Nat`, `f : C -> C` is
+applied `t` times. Over `List A`, `Text`, `Values` and `Attrs`,
+`f : E -> C -> C` consumes the elements from the right. The elements of
+`Text` are its bytes as `Nat`, and the fields of `Attrs` are `Prod Text Value`
+pairs. For `unfold`, the declared type selects the carrier. Into `Nat`,
+`g : S -> Option S` and the result is the number of steps. Into a sequence of
+`E`, `g : S -> Option (Prod E S)`. `unfold` stops at `none` or after `n`
+elements. An element above 255 into `Text` and a duplicate key into `Attrs`
+are errors at `unfold`. `filter f t` also checks against `Text`, `Values` and
+`Attrs`, with `f : E -> Flag`, and keeps the order of the elements. A
+function body cannot use `fold` or `unfold`. Each element uses one step of
+the depth fuel, so a short program can fold or unfold only a short sequence.
+`Value` is not yet a carrier. See [examples/algebra.ledger](examples/algebra.ledger).
 
 `Option` presence is preserved. `none` is `null`. When the payload type can
 encode `null` (an `Option` or a `Value`), `some v` is `{"some":v}`. For other
