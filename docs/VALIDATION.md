@@ -116,6 +116,16 @@ of function type names and complete arrow types, the 511-parenthesis
 boundary, parameter shadowing, universe and data type restrictions, and
 missing closing parentheses. This slice has no mutation run.
 
+The nested application slice adds `test/nested.test.mjs` with 10 cases. They
+cover an application in a function body, a structure form that applies such
+a function, the scope of a body, the type check of an application in a body,
+a constructor error in a nested body, and `examples/nested.ledger`. The work
+budget cases cover the exact boundary (a program that evaluates 8,192 bodies
+passes in 1,016 source bytes and is refused in 1,015 bytes), the shared
+budget across definitions, a doubling chain of 41 functions, and the sides
+of an `Eq` type. The slice removes the old refusal case from
+`test/functions.test.mjs`. This slice has no mutation run.
+
 The full design in `SPEC.md` is not implemented. See [STATUS.md](STATUS.md)
 for remaining M0 work and [README.md](../README.md) for supported syntax and
 resource limits. Entry hashing and projection remain M1 work.

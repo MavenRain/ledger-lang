@@ -14,7 +14,7 @@ const values = source => {
 const structureError = 'the type has no instance of this structure';
 const unaryError = 'expected a function with one parameter';
 const typeError = 'term does not have the declared type';
-const nestedError = 'a function body cannot apply a function';
+const nestedError = 'a function body cannot use this form';
 // Each case names the last occurrence of `at` in the source as the error byte.
 const reject = (source, message, at) => {
   const result = run(source);
@@ -106,7 +106,7 @@ test('structure forms need parentheses as arguments', () => {
   reject(`${fns}def x : Option Nat := some either len id (inr 1)`, 'argument needs parentheses', 'either');
 });
 
-test('a function body can use pure but cannot apply a function', () => {
+test('a function body can use pure but cannot use the other forms', () => {
   assert.deepEqual(values(`${fns}def one : (n : Nat) -> List Nat := fun (n : Nat) => pure n ` +
     'def x : List Nat := one 8'), [[8]]);
   reject(`${fns}def h : (n : Nat) -> List Nat := fun (n : Nat) => map id nil`, nestedError, 'map');

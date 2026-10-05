@@ -22,8 +22,9 @@ not complete the M0 milestone in `SPEC.md`.
 - First-order functions: function types `(x : A) -> B` over data types,
   `fun` with flat or curried binders, and saturated application. The
   definition checks the body once. Each application evaluates the body again
-  with the argument values. A function body cannot apply a function.
-  Functions are not instances.
+  with the argument values. A function body can apply an earlier function.
+  The body evaluates in the scope of its definition. All evaluated bodies of
+  a program share one work budget. Functions are not instances.
 - Reserved names for every SPEC form, also for forms of later slices.
 - Type-directed checking with exact types on references to earlier
   definitions. Duplicate and implemented schema names are refused.
@@ -73,10 +74,11 @@ not complete the M0 milestone in `SPEC.md`.
 
 ## Remaining M0 work
 
-1. Add dependent function types, nested application, and inline or partial
-   functions as arguments. These need an internal value domain with neutral
-   terms and a threaded work budget. Then add Sigma checking and evaluation,
-   `transport`, and `cong`, and allow `Eq` inside Sigma and Pi types.
+1. Allow the structure forms, `fold` and `unfold` in a function body. Then
+   add dependent function types and inline or partial functions as
+   arguments. These need an internal value domain with neutral terms. Then
+   add Sigma checking and evaluation, `transport`, and `cong`, and allow
+   `Eq` inside Sigma and Pi types.
 2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
    needs the dependent function types of item 1. Until then the type parser
    refuses this name with `this type belongs to a later milestone`.
@@ -113,9 +115,9 @@ not complete the M0 milestone in `SPEC.md`.
   start of its body, so the argument parser cannot skip this step. README.md
   gives the measured limits for the original scalar and container forms.
 - A function keeps the tokens of its body, not a syntax tree. Each
-  application parses and evaluates the body again. A body cannot apply a
-  function, so the work of all applications is at most the number of
-  application sites times the body size. The body check at the definition
+  application parses and evaluates the body again. A body can apply an
+  earlier function, so the work budget limits the number of evaluated
+  bodies to 8 per source byte plus 64. The body check at the definition
   binds each parameter to null. Thus a constructor error that depends on a
   parameter is reported at the application.
 

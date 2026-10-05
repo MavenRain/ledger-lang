@@ -12,7 +12,7 @@ const instances = source => {
   return result.instances;
 };
 const funError = 'expected fun with the declared parameters';
-const nestedError = 'a function body cannot apply a function';
+const nestedError = 'a function body cannot use this form';
 // Each case names the last occurrence of `at` in the source as the error byte.
 const reject = (source, message, at) => {
   const result = run(source);
@@ -60,7 +60,6 @@ test('constructor errors in a body surface at the application', () => {
 const rejected = [
   ['an application without parentheses as an argument', `${id}def x : Option Nat := some id 4`, 'argument needs parentheses', 'id 4'],
   ['an application with the wrong result type', `${id}def x : Text := id 3`, 'term does not have the declared type', 'id 3'],
-  ['an application inside a function body', `${id}def g : (n : Nat) -> Nat := fun (n : Nat) => id n`, nestedError, 'id n'],
   ['a binder with another type', 'def f : (n : Nat) -> Nat := fun (n : Text) => n', funError, '(n : Text)'],
   ['a function without fun', 'def f : (n : Nat) -> Nat := n', funError, 'n'],
   ['too few binders', 'def f : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) => a', funError, '=>'],

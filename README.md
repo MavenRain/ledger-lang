@@ -137,13 +137,18 @@ in parentheses, it can be the argument of `first` or `second`, or a side of
 `Eq`. Functions are not instances, so the output does not contain them.
 
 In this slice, a function type is only the type of a definition. A function
-body cannot apply a function, and a function is an argument only of a
+body can apply an earlier function, and a function is an argument only of a
 structure form. The body
-check at the definition does not know the argument values. Thus a constructor
+check at the definition does not know the argument values, so it checks an
+application in the body only by type. Thus a constructor
 error in the body, such as `textByte n textEnd` with `n` above 255, is
 reported at its byte in the body when an application supplies that value.
 Each application parses the body again with the fuel that remains at the
-application site. See [examples/functions.ledger](examples/functions.ledger).
+application site. A body evaluates in the scope of its definition. Thus a
+name in the body refers to the definition before the function, also when a
+caller has a parameter with the same name. Each evaluated body uses one unit
+of the work budget. See [examples/functions.ledger](examples/functions.ledger)
+and [examples/nested.ledger](examples/nested.ledger).
 
 A type definition can name a function type of data types. The function type
 is in `Type 0`. The name then stands for the function type: as the type of a
@@ -246,6 +251,14 @@ while the output is written reports the first byte of that definition.
   the fuel ran out. Split a longer list or attribute object across
   definitions, for example
   `def rest : List Text := ...` and `def all : List Text := cons "a" rest`.
+- Function evaluation shares a work budget of 8 bodies per source byte plus
+  64 bodies across all definitions. Each application evaluates one body. This
+  includes an application in another body, each application that a structure
+  form, `fold` or `unfold` makes, and an application in a side of an `Eq`
+  type. When the budget runs out, the compiler reports
+  `work budget exceeded` at the body that the budget cannot pay for. Thus a
+  chain of functions that each apply the previous function twice cannot make
+  the compiler do exponential work.
 - Serialization shares a budget of 32 steps per source byte plus 128 steps
   across all instances. Each emitted byte costs one step. Thus the output is
   at most 32 bytes per source byte plus 128 bytes, also for shared values

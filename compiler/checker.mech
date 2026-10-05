@@ -120,7 +120,7 @@ def transProof : Nat -> Typed -> Typed -> List Token -> Parsed Typed :=
 
 -- The definition of a function checks its body once, with null for each
 -- parameter. An unnamed binding marks this check. Constructor evaluation
--- errors wait for an application, and the body cannot apply a function.
+-- errors wait for an application, and an application in the body gives null.
 def checkMarker : Binding := binding textEnd tyNat valueNull
 
 def checkingBody : List Binding -> Nat := fun (environment : List Binding) =>
@@ -646,462 +646,500 @@ def grownHead : Grown -> Value := fun (built : Grown) =>
 def grownLeaf : Value -> Nat -> Grown := fun (value : Value) (limit : Nat) =>
   grown (valuesItem value valuesEnd) limit
 
+-- The term block gives the work budget that remains with each result. The
+-- budget is one more than the number of function bodies that the program can
+-- still evaluate. parseTerm refuses the budget 0.
+mu Worked (0 A : Type 0) : Type 0 with
+| worked : A -> List Token -> Nat -> Worked A
+| workError : Nat -> Text -> Worked A
+
+def liftParsed : (0 A : Type 0) -> Nat -> Parsed A -> Worked A :=
+  fun (0 A : Type 0) (budget : Nat) (result : Parsed A) =>
+  case result as self in Parsed return Worked A with
+  | parseError at message => workError at message
+  | parsed found rest => worked found rest budget
+
+def checkWorked : Nat -> LType -> Worked Typed -> Worked Value :=
+  fun (position : Nat) (expected : LType) (result : Worked Typed) =>
+  case result as self in Worked return Worked Value with
+  | workError at message => workError at message
+  | worked found rest budget => liftParsed Value budget (checkSynthesized position expected (parsed found rest))
+
+-- The scope of a definition is the part of the environment that is older
+-- than the definition. A body evaluates in this scope, so the parameters of
+-- a caller cannot replace the names that the body uses.
+def rec definitionScope : Text -> List Binding -> List Binding :=
+  fun (name : Text) (environment : List Binding) =>
+  case environment as self in List return List Binding with
+  | nil => nil
+  | cons head tail => (
+      case (natEq (sameText name (bindingName head)) 1) as found return List Binding with
+      | 1 (x : prod ()) => tail
+      | 0 (x : prod ()) => definitionScope name tail)
+
 -- A synthesized argument is an earlier definition, a projection, symm,
 -- trans, either, an application, or one of these in parentheses. An
 -- application evaluates the checked body of the function with the argument
--- values.
-def rec synthTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
-  fun (fuel : Fuel) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Typed with
-  | fuelEnd => parseError (firstPosition tokens) eFuel
+-- values and uses one unit of the work budget. In the check of a function
+-- body, an application checks its arguments and gives null.
+def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked Typed :=
+  fun (fuel : Fuel) (budget : Nat) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Typed with
+  | fuelEnd => workError (firstPosition tokens) eFuel
   | fuelMore more => (
-    case tokens as self in List return Parsed Typed with
-    | nil => parseError 0 eInfer
+    case tokens as self in List return Worked Typed with
+    | nil => workError 0 eInfer
     | cons head tail => (
-      case head as token in Token return Parsed Typed with
-      | numberToken position number => parseError position eInfer
-      | stringToken position text => parseError position eInfer
+      case head as token in Token return Worked Typed with
+      | numberToken position number => workError position eInfer
+      | stringToken position text => workError position eInfer
       | punctuation position mark => (
-          case (natEq mark 40) as opening return Parsed Typed with
-          | 0 (x : prod ()) => parseError position eInfer
+          case (natEq mark 40) as opening return Worked Typed with
+          | 0 (x : prod ()) => workError position eInfer
           | 1 (x : prod ()) => (
-              case (synthTerm more 0 environment tail) as inside in Parsed return Parsed Typed with
-              | parseError at message => parseError at message
-              | parsed found rest => closeParsed Typed found rest))
+              case (synthTerm more budget 0 environment tail) as inside in Worked return Worked Typed with
+              | workError at message => workError at message
+              | worked found rest budget => liftParsed Typed budget (closeParsed Typed found rest)))
       | identifier position name => (
-          case (lookup name environment) as known in Option return Parsed Typed with
+          case (lookup name environment) as known in Option return Worked Typed with
           | some item => (
-              case item as bound in Binding return Parsed Typed with
-              | binding other ty value => parsed (typed ty value) tail
-              | typeBinding other universe defined => parseError position eInfer
-              | arrowBinding other params result => parseError position eInfer
+              case item as bound in Binding return Worked Typed with
+              | binding other ty value => worked (typed ty value) tail budget
+              | typeBinding other universe defined => workError position eInfer
+              | arrowBinding other params result => workError position eInfer
               | funBinding other params result body => (
-                  case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Parsed Typed with
-                  | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
+                  case (natEq atom 1) as refused return Worked Typed with
+                  | 1 (x : prod ()) => workError position eParen
                   | 0 (x : prod ()) => (
-                      case (parseArguments more 1 (paramTypes params) environment tail) as checked in Parsed return Parsed Typed with
-                      | parseError at message => parseError at message
-                      | parsed values rest => (
-                          case (parseTerm more 0 result (bindParams params values environment) body) as applied in Parsed return Parsed Typed with
-                          | parseError at message => parseError at message
-                          | parsed value after => parsed (typed result value) rest))))
-          | none => (
-              case (natEq (synthForm name) 0) as plain return Parsed Typed with
-              | 1 (x : prod ()) => parseError position eInfer
-              | 0 (x : prod ()) => (
-                  case (natEq atom 1) as bare return Parsed Typed with
-                  | 1 (x : prod ()) => parseError position eParen
-                  | 0 (x : prod ()) => (
-                    case (natEq (synthForm name) 5) as choice return Parsed Typed with
-                    | 1 (x : prod ()) => eitherTerm more position environment tail
-                    | 0 (x : prod ()) => (
-                      case (synthTerm more 1 environment tail) as argument in Parsed return Parsed Typed with
-                      | parseError at message => parseError at message
-                      | parsed found rest => (
-                          case (natLt (synthForm name) 3) as projection return Parsed Typed with
-                          | 1 (x : prod ()) => project position (synthForm name) found rest
+                      case (parseArguments more budget 1 (paramTypes params) environment tail) as checked in Worked return Worked Typed with
+                      | workError at message => workError at message
+                      | worked values rest budget => (
+                          case (natEq (checkingBody environment) 1) as marked return Worked Typed with
+                          | 1 (x : prod ()) => worked (typed result valueNull) rest budget
                           | 0 (x : prod ()) => (
-                              case (natEq (synthForm name) 3) as symmetric return Parsed Typed with
-                              | 1 (x : prod ()) => symmProof position found rest
+                              case (parseTerm more (natSub budget 1) 0 result (bindParams params values (definitionScope other environment)) body) as applied in Worked return Worked Typed with
+                              | workError at message => workError at message
+                              | worked value after budget => worked (typed result value) rest budget)))))
+          | none => (
+              case (natEq (synthForm name) 0) as plain return Worked Typed with
+              | 1 (x : prod ()) => workError position eInfer
+              | 0 (x : prod ()) => (
+                  case (natEq atom 1) as bare return Worked Typed with
+                  | 1 (x : prod ()) => workError position eParen
+                  | 0 (x : prod ()) => (
+                    case (natEq (synthForm name) 5) as choice return Worked Typed with
+                    | 1 (x : prod ()) => eitherTerm more budget position environment tail
+                    | 0 (x : prod ()) => (
+                      case (synthTerm more budget 1 environment tail) as argument in Worked return Worked Typed with
+                      | workError at message => workError at message
+                      | worked found rest budget => (
+                          case (natLt (synthForm name) 3) as projection return Worked Typed with
+                          | 1 (x : prod ()) => liftParsed Typed budget (project position (synthForm name) found rest)
+                          | 0 (x : prod ()) => (
+                              case (natEq (synthForm name) 3) as symmetric return Worked Typed with
+                              | 1 (x : prod ()) => liftParsed Typed budget (symmProof position found rest)
                               | 0 (x : prod ()) => (
-                                  case (synthTerm more 1 environment rest) as second in Parsed return Parsed Typed with
-                                  | parseError at message => parseError at message
-                                  | parsed other after => transProof position found other after))))))))))
+                                  case (synthTerm more budget 1 environment rest) as second in Worked return Worked Typed with
+                                  | workError at message => workError at message
+                                  | worked other after budget => liftParsed Typed budget (transProof position found other after)))))))))))
 
 -- Parsing, checking and constructor evaluation are fused in this M0 slice.
 -- An argument (atom = 1) is a literal, a reference, a nullary constructor or
 -- a parenthesized term.
-and parseTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
-  fun (fuel : Fuel) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError (firstPosition tokens) eFuel
+and parseTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError (firstPosition tokens) eFuel
   | fuelMore more => (
-    case tokens as self in List return Parsed Value with
-    | nil => parseError 0 eTerm
+    case (natEq budget 0) as spent return Worked Value with
+    | 1 (x : prod ()) => workError (firstPosition tokens) eBudget
+    | 0 (x : prod ()) => (
+    case tokens as self in List return Worked Value with
+    | nil => workError 0 eTerm
     | cons head tail => (
-      case head as token in Token return Parsed Value with
-      | numberToken position number => select (Parsed Value) (sameType expected tyNat)
-          (parsed (valueNat number) tail) (parseError position eTerm)
-      | stringToken position text => select (Parsed Value) (sameType expected tyText)
-          (parsed (valueText text) tail) (parseError position eTerm)
+      case head as token in Token return Worked Value with
+      | numberToken position number => select (Worked Value) (sameType expected tyNat)
+          (worked (valueNat number) tail budget) (workError position eTerm)
+      | stringToken position text => select (Worked Value) (sameType expected tyText)
+          (worked (valueText text) tail budget) (workError position eTerm)
       | punctuation position mark => (
-          case (natEq mark 40) as opening return Parsed Value with
-          | 0 (x : prod ()) => parseError position eTerm
+          case (natEq mark 40) as opening return Worked Value with
+          | 0 (x : prod ()) => workError position eTerm
           | 1 (x : prod ()) => (
-              case (parseTerm more 0 expected environment tail) as inside in Parsed return Parsed Value with
-              | parseError at message => parseError at message
-              | parsed value rest => closeParsed Value value rest))
+              case (parseTerm more budget 0 expected environment tail) as inside in Worked return Worked Value with
+              | workError at message => workError at message
+              | worked value rest budget => liftParsed Value budget (closeParsed Value value rest)))
       | identifier position name => (
-          case (lookup name environment) as found in Option return Parsed Value with
+          case (lookup name environment) as found in Option return Worked Value with
           | some item => (
-              case item as known in Binding return Parsed Value with
-              | binding other ty value => select (Parsed Value) (sameType expected ty)
-                  (parsed value tail) (parseError position eTerm)
-              | typeBinding other universe defined => parseError position eTerm
-              | arrowBinding other params result => parseError position eTerm
-              | funBinding other params result body => checkSynthesized position expected (synthTerm more atom environment tokens))
+              case item as known in Binding return Worked Value with
+              | binding other ty value => select (Worked Value) (sameType expected ty)
+                  (worked value tail budget) (workError position eTerm)
+              | typeBinding other universe defined => workError position eTerm
+              | arrowBinding other params result => workError position eTerm
+              | funBinding other params result body => checkWorked position expected (synthTerm more budget atom environment tokens))
           | none => (
-              case (constructorPlan expected name) as selected in Option return Parsed Value with
+              case (constructorPlan expected name) as selected in Option return Worked Value with
               | none => (
-                  case (natEq (synthForm name) 0) as plain return Parsed Value with
+                  case (natEq (synthForm name) 0) as plain return Worked Value with
                   | 1 (x : prod ()) => (
-                      case (natEq (structureForm name) 0) as structural return Parsed Value with
-                      | 1 (x : prod ()) => select (Parsed Value) (sameText name srefl)
-                          (reflCheck position expected tail) (parseError position (unknownName expected name))
+                      case (natEq (structureForm name) 0) as structural return Worked Value with
+                      | 1 (x : prod ()) => select (Worked Value) (sameText name srefl)
+                          (liftParsed Value budget (reflCheck position expected tail)) (workError position (unknownName expected name))
                       | 0 (x : prod ()) => (
-                          case (natLt (structureForm name) 5) as monadic return Parsed Value with
-                          | 1 (x : prod ()) => structureTerm more position (structureForm name) atom expected environment tail
+                          case (natLt (structureForm name) 5) as monadic return Worked Value with
+                          | 1 (x : prod ()) => structureTerm more budget position (structureForm name) atom expected environment tail
                           | 0 (x : prod ()) => (
-                              case (natEq (structureForm name) 5) as folding return Parsed Value with
-                              | 1 (x : prod ()) => foldTerm more position atom expected environment tail
-                              | 0 (x : prod ()) => unfoldTerm more position atom expected environment tail)))
-                  | 0 (x : prod ()) => checkSynthesized position expected (synthTerm more atom environment tokens))
+                              case (natEq (structureForm name) 5) as folding return Worked Value with
+                              | 1 (x : prod ()) => foldTerm more budget position atom expected environment tail
+                              | 0 (x : prod ()) => unfoldTerm more budget position atom expected environment tail)))
+                  | 0 (x : prod ()) => checkWorked position expected (synthTerm more budget atom environment tokens))
               | some selected => (
-                      case (natEq (boolAnd atom (hasArguments (planArguments selected))) 1) as bare return Parsed Value with
-                      | 1 (x : prod ()) => parseError position eParen
+                      case (natEq (boolAnd atom (hasArguments (planArguments selected))) 1) as bare return Worked Value with
+                      | 1 (x : prod ()) => workError position eParen
                       | 0 (x : prod ()) => (
-                          case (parseArguments more 1 (planArguments selected) environment tail) as checked in Parsed return Parsed Value with
-                          | parseError at message => parseError at message
-                          | parsed values rest => (
-                              case (evaluatePlan selected values) as evaluated in Result return Parsed Value with
-                              | failure at message => select (Parsed Value) (checkingBody environment)
-                                  (parsed valueNull rest) (parseError position message)
-                              | success value => parsed value rest)))))))
-and parseArguments : Fuel -> Nat -> List LType -> List Binding -> List Token -> Parsed (List Value) :=
-  fun (fuel : Fuel) (atom : Nat) (types : List LType) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed (List Value) with
-  | fuelEnd => parseError (firstPosition tokens) eFuel
+                          case (parseArguments more budget 1 (planArguments selected) environment tail) as checked in Worked return Worked Value with
+                          | workError at message => workError at message
+                          | worked values rest budget => (
+                              case (evaluatePlan selected values) as evaluated in Result return Worked Value with
+                              | failure at message => select (Worked Value) (checkingBody environment)
+                                  (worked valueNull rest budget) (workError position message)
+                              | success value => worked value rest budget))))))))
+and parseArguments : Fuel -> Nat -> Nat -> List LType -> List Binding -> List Token -> Worked (List Value) :=
+  fun (fuel : Fuel) (budget : Nat) (atom : Nat) (types : List LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked (List Value) with
+  | fuelEnd => workError (firstPosition tokens) eFuel
   | fuelMore more => (
-    case types as self in List return Parsed (List Value) with
-    | nil => parsed nil tokens
+    case types as self in List return Worked (List Value) with
+    | nil => worked nil tokens budget
     | cons head tail => (
-        case (parseTerm more atom head environment tokens) as first in Parsed return Parsed (List Value) with
-        | parseError at message => parseError at message
-        | parsed value rest => (
-            case (parseArguments more atom tail environment rest) as remaining in Parsed return Parsed (List Value) with
-            | parseError at message => parseError at message
-            | parsed values after => parsed (cons value values) after)))
+        case (parseTerm more budget atom head environment tokens) as first in Worked return Worked (List Value) with
+        | workError at message => workError at message
+        | worked value rest budget => (
+            case (parseArguments more budget atom tail environment rest) as remaining in Worked return Worked (List Value) with
+            | workError at message => workError at message
+            | worked values after budget => worked (cons value values) after budget)))
 -- pure x lifts x. map, bind and filter name a function, then take the
 -- source as an argument. A function body can use pure, but it cannot use
 -- the forms that apply a function.
-and structureTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
-  fun (fuel : Fuel) (position : Nat) (form : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError position eFuel
+and structureTerm : Fuel -> Nat -> Nat -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (form : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq atom 1) as bare return Parsed Value with
-    | 1 (x : prod ()) => parseError position eParen
+    case (natEq atom 1) as bare return Worked Value with
+    | 1 (x : prod ()) => workError position eParen
     | 0 (x : prod ()) => (
-      case (natEq (shapeCode form expected) 0) as shapeless return Parsed Value with
-      | 1 (x : prod ()) => parseError position eStructure
+      case (natEq (shapeCode form expected) 0) as shapeless return Worked Value with
+      | 1 (x : prod ()) => workError position eStructure
       | 0 (x : prod ()) => (
-        case (natEq form 1) as lifting return Parsed Value with
+        case (natEq form 1) as lifting return Worked Value with
         | 1 (x : prod ()) => (
-            case (parseTerm more 1 (shapeElement expected) environment tokens) as lifted in Parsed return Parsed Value with
-            | parseError at message => parseError at message
-            | parsed value rest => parsed (pureValue expected value) rest)
+            case (parseTerm more budget 1 (shapeElement expected) environment tokens) as lifted in Worked return Worked Value with
+            | workError at message => workError at message
+            | worked value rest budget => worked (pureValue expected value) rest budget)
         | 0 (x : prod ()) => (
-          case (natEq (checkingBody environment) 1) as nested return Parsed Value with
-          | 1 (x : prod ()) => parseError position eNested
+          case (natEq (checkingBody environment) 1) as nested return Worked Value with
+          | 1 (x : prod ()) => workError position eNested
           | 0 (x : prod ()) => (
-            case (unaryArgument environment tokens) as named in Parsed return Parsed Value with
-            | parseError at message => parseError at message
+            case (unaryArgument environment tokens) as named in Parsed return Worked Value with
+            | parseError at message => workError at message
             | parsed op afterFunction => (
-              case (natEq (structureFits form expected op) 1) as fits return Parsed Value with
-              | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+              case (natEq (structureFits form expected op) 1) as fits return Worked Value with
+              | 0 (x : prod ()) => workError (firstPosition tokens) eTerm
               | 1 (x : prod ()) => (
-                case (parseTerm more 1 (structureSource form expected op) environment afterFunction) as argument in Parsed return Parsed Value with
-                | parseError at message => parseError at message
-                | parsed source rest => (
-                  case (natEq (carrierCode expected) 2) as listed return Parsed Value with
+                case (parseTerm more budget 1 (structureSource form expected op) environment afterFunction) as argument in Worked return Worked Value with
+                | workError at message => workError at message
+                | worked source rest budget => (
+                  case (natEq (carrierCode expected) 2) as listed return Worked Value with
                   | 1 (x : prod ()) => (
-                      case (mapItems more position form op environment (sequenceElements source)) as mapped in Parsed return Parsed Value with
-                      | parseError at message => parseError at message
-                      | parsed items ignored => (
-                          case (rebuild expected items) as rebuilt in Result return Parsed Value with
-                          | failure at message => parseError position message
-                          | success value => parsed value rest))
+                      case (mapItems more budget position form op environment (sequenceElements source)) as mapped in Worked return Worked Value with
+                      | workError at message => workError at message
+                      | worked items ignored budget => (
+                          case (rebuild expected items) as rebuilt in Result return Worked Value with
+                          | failure at message => workError position message
+                          | success value => worked value rest budget))
                   | 0 (x : prod ()) => (
-                      case (payloadOf expected (unaryParam op) source) as payload in Option return Parsed Value with
-                      | none => parsed source rest
+                      case (payloadOf expected (unaryParam op) source) as payload in Option return Worked Value with
+                      | none => worked source rest budget
                       | some item => (
-                          case (parseTerm more 0 (unaryResult op) (unaryEnvironment op item environment) (unaryBody op)) as applied in Parsed return Parsed Value with
-                          | parseError at message => parseError at message
-                          | parsed value after => parsed (stepOne form expected source value) rest))))))))))
+                          case (parseTerm more (natSub budget 1) 0 (unaryResult op) (unaryEnvironment op item environment) (unaryBody op)) as applied in Worked return Worked Value with
+                          | workError at message => workError at message
+                          | worked value after budget => worked (stepOne form expected source value) rest budget))))))))))
 -- Over a list, the function applies to each item in order: 2 map keeps
 -- each result, 3 bind joins the result lists, 4 filter keeps the items with
 -- the result flagYes. Each item uses one step of the depth fuel.
-and mapItems : Fuel -> Nat -> Nat -> Unary -> List Binding -> Values -> Parsed Values :=
-  fun (fuel : Fuel) (position : Nat) (form : Nat) (op : Unary) (environment : List Binding) (items : Values) =>
-  case fuel as guard in Fuel return Parsed Values with
-  | fuelEnd => parseError position eFuel
+and mapItems : Fuel -> Nat -> Nat -> Nat -> Unary -> List Binding -> Values -> Worked Values :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (form : Nat) (op : Unary) (environment : List Binding) (items : Values) =>
+  case fuel as guard in Fuel return Worked Values with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case items as self in Values return Parsed Values with
-    | valuesEnd => parsed valuesEnd nil
+    case items as self in Values return Worked Values with
+    | valuesEnd => worked valuesEnd nil budget
     | valuesItem item rest => (
-        case (parseTerm more 0 (unaryResult op) (unaryEnvironment op item environment) (unaryBody op)) as applied in Parsed return Parsed Values with
-        | parseError at message => parseError at message
-        | parsed value after => (
-            case (mapItems more position form op environment rest) as remaining in Parsed return Parsed Values with
-            | parseError at message => parseError at message
-            | parsed values ignored => parsed (stepItems form item value values) nil)))
+        case (parseTerm more (natSub budget 1) 0 (unaryResult op) (unaryEnvironment op item environment) (unaryBody op)) as applied in Worked return Worked Values with
+        | workError at message => workError at message
+        | worked value after budget => (
+            case (mapItems more budget position form op environment rest) as remaining in Worked return Worked Values with
+            | workError at message => workError at message
+            | worked values ignored budget => worked (stepItems form item value values) nil budget)))
 -- either f g s applies f to the payload of inl and g to the payload of inr.
 -- The two functions must have the same result type.
-and eitherTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Typed :=
-  fun (fuel : Fuel) (position : Nat) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Typed with
-  | fuelEnd => parseError position eFuel
+and eitherTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked Typed :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Typed with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq (checkingBody environment) 1) as nested return Parsed Typed with
-    | 1 (x : prod ()) => parseError position eNested
+    case (natEq (checkingBody environment) 1) as nested return Worked Typed with
+    | 1 (x : prod ()) => workError position eNested
     | 0 (x : prod ()) => (
-      case (unaryArgument environment tokens) as left in Parsed return Parsed Typed with
-      | parseError at message => parseError at message
+      case (unaryArgument environment tokens) as left in Parsed return Worked Typed with
+      | parseError at message => workError at message
       | parsed onLeft afterLeft => (
-        case (unaryArgument environment afterLeft) as right in Parsed return Parsed Typed with
-        | parseError at message => parseError at message
+        case (unaryArgument environment afterLeft) as right in Parsed return Worked Typed with
+        | parseError at message => workError at message
         | parsed onRight afterRight => (
-          case (natEq (sameType (unaryResult onLeft) (unaryResult onRight)) 1) as agree return Parsed Typed with
-          | 0 (x : prod ()) => parseError (firstPosition afterLeft) eTerm
+          case (natEq (sameType (unaryResult onLeft) (unaryResult onRight)) 1) as agree return Worked Typed with
+          | 0 (x : prod ()) => workError (firstPosition afterLeft) eTerm
           | 1 (x : prod ()) => (
-            case (parseTerm more 1 (tySum (unaryParam onLeft) (unaryParam onRight)) environment afterRight) as scrutinee in Parsed return Parsed Typed with
-            | parseError at message => parseError at message
-            | parsed source rest => (
-              case (parseTerm more 0 (unaryResult onLeft)
+            case (parseTerm more budget 1 (tySum (unaryParam onLeft) (unaryParam onRight)) environment afterRight) as scrutinee in Worked return Worked Typed with
+            | workError at message => workError at message
+            | worked source rest budget => (
+              case (parseTerm more (natSub budget 1) 0 (unaryResult onLeft)
                   (unaryEnvironment (select Unary (sumLeft source) onLeft onRight) (projectValue 1 source) environment)
-                  (unaryBody (select Unary (sumLeft source) onLeft onRight))) as applied in Parsed return Parsed Typed with
-              | parseError at message => parseError at message
-              | parsed value after => parsed (typed (unaryResult onLeft) value) rest))))))
+                  (unaryBody (select Unary (sumLeft source) onLeft onRight))) as applied in Worked return Worked Typed with
+              | workError at message => workError at message
+              | worked value after budget => worked (typed (unaryResult onLeft) value) rest budget))))))
 -- fold f z t synthesizes the type of t. Over a sequence it applies f from the
 -- last element: fold f z nil is z, and fold f z (cons x xs) is
 -- f x (fold f z xs). Over the number n it applies f n times to z. With five
 -- functions the source is a Value.
-and foldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
-  fun (fuel : Fuel) (position : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError position eFuel
+and foldTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Parsed Value with
-    | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
+    case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Worked Value with
+    | 1 (x : prod ()) => workError position (select Text atom eParen eNested)
     | 0 (x : prod ()) => (
-      case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
-      | parseError at message => parseError at message
+      case (stepperArgument environment tokens) as named in Parsed return Worked Value with
+      | parseError at message => workError at message
       | parsed op afterFunction => (
-        case (natEq (namesFunction environment afterFunction) 1) as several return Parsed Value with
-        | 1 (x : prod ()) => foldValueTerm more position expected environment tokens
+        case (natEq (namesFunction environment afterFunction) 1) as several return Worked Value with
+        | 1 (x : prod ()) => foldValueTerm more budget position expected environment tokens
         | 0 (x : prod ()) => (
-        case (parseTerm more 1 expected environment afterFunction) as initial in Parsed return Parsed Value with
-        | parseError at message => parseError at message
-        | parsed start afterStart => (
-          case (synthTerm more 1 environment afterStart) as source in Parsed return Parsed Value with
-          | parseError at message => parseError at message
-          | parsed found rest => (
-            case found as item in Typed return Parsed Value with
+        case (parseTerm more budget 1 expected environment afterFunction) as initial in Worked return Worked Value with
+        | workError at message => workError at message
+        | worked start afterStart budget => (
+          case (synthTerm more budget 1 environment afterStart) as source in Worked return Worked Value with
+          | workError at message => workError at message
+          | worked found rest budget => (
+            case found as item in Typed return Worked Value with
             | typed ty value => (
-              case (natEq (carrierCode ty) 0) as carried return Parsed Value with
-              | 1 (x : prod ()) => parseError (firstPosition afterStart) (select Text (sameType ty tyValue) eCases eStructure)
+              case (natEq (carrierCode ty) 0) as carried return Worked Value with
+              | 1 (x : prod ()) => workError (firstPosition afterStart) (select Text (sameType ty tyValue) eCases eStructure)
               | 0 (x : prod ()) => (
-                case (natEq (foldFits ty expected op) 1) as fits return Parsed Value with
-                | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+                case (natEq (foldFits ty expected op) 1) as fits return Worked Value with
+                | 0 (x : prod ()) => workError (firstPosition tokens) eTerm
                 | 1 (x : prod ()) => (
-                  case (elementsOf more value) as elements in Option return Parsed Value with
-                  | none => parseError position eFuel
+                  case (elementsOf more value) as elements in Option return Worked Value with
+                  | none => workError position eFuel
                   | some items => (
-                    case (foldItems more position op (carrierCode ty) environment items start) as folded in Parsed return Parsed Value with
-                    | parseError at message => parseError at message
-                    | parsed result ignored => parsed result rest))))))))))
+                    case (foldItems more budget position op (carrierCode ty) environment items start) as folded in Worked return Worked Value with
+                    | workError at message => workError at message
+                    | worked result ignored budget => worked result rest budget))))))))))
 -- Each element uses one step of the depth fuel. Over Nat (code 1) the
 -- function takes only the accumulator.
-and foldItems : Fuel -> Nat -> Stepper -> Nat -> List Binding -> Values -> Value -> Parsed Value :=
-  fun (fuel : Fuel) (position : Nat) (op : Stepper) (code : Nat) (environment : List Binding) (items : Values) (start : Value) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError position eFuel
+and foldItems : Fuel -> Nat -> Nat -> Stepper -> Nat -> List Binding -> Values -> Value -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (op : Stepper) (code : Nat) (environment : List Binding) (items : Values) (start : Value) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case items as self in Values return Parsed Value with
-    | valuesEnd => parsed start nil
+    case items as self in Values return Worked Value with
+    | valuesEnd => worked start nil budget
     | valuesItem item rest => (
-        case (foldItems more position op code environment rest start) as inner in Parsed return Parsed Value with
-        | parseError at message => parseError at message
-        | parsed acc ignored => parseTerm more 0 (stepperResult op)
+        case (foldItems more budget position op code environment rest start) as inner in Worked return Worked Value with
+        | workError at message => workError at message
+        | worked acc ignored budget => parseTerm more (natSub budget 1) 0 (stepperResult op)
             (stepperEnvironment op (select (List Value) (numberEq code 1) (cons acc nil) (cons item (cons acc nil))) environment)
             (stepperBody op)))
 -- unfold g n s checks against a carrier. It applies g to the seed s until g
 -- gives none or n elements exist.
-and unfoldTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
-  fun (fuel : Fuel) (position : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError position eFuel
+and unfoldTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (atom : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Parsed Value with
-    | 1 (x : prod ()) => parseError position (select Text atom eParen eNested)
+    case (natEq (boolOr atom (checkingBody environment)) 1) as refused return Worked Value with
+    | 1 (x : prod ()) => workError position (select Text atom eParen eNested)
     | 0 (x : prod ()) => (
-      case (natEq (carrierCode expected) 0) as carried return Parsed Value with
+      case (natEq (carrierCode expected) 0) as carried return Worked Value with
       | 1 (x : prod ()) => (
-          case (natEq (sameType expected tyValue) 1) as tree return Parsed Value with
-          | 1 (x : prod ()) => unfoldValueTerm more position environment tokens
-          | 0 (x : prod ()) => parseError position eStructure)
+          case (natEq (sameType expected tyValue) 1) as tree return Worked Value with
+          | 1 (x : prod ()) => unfoldValueTerm more budget position environment tokens
+          | 0 (x : prod ()) => workError position eStructure)
       | 0 (x : prod ()) => (
-        case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
-        | parseError at message => parseError at message
+        case (stepperArgument environment tokens) as named in Parsed return Worked Value with
+        | parseError at message => workError at message
         | parsed op afterFunction => (
-          case (natEq (unfoldFits expected op) 1) as fits return Parsed Value with
-          | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+          case (natEq (unfoldFits expected op) 1) as fits return Worked Value with
+          | 0 (x : prod ()) => workError (firstPosition tokens) eTerm
           | 1 (x : prod ()) => (
-            case (parseTerm more 1 tyNat environment afterFunction) as bounded in Parsed return Parsed Value with
-            | parseError at message => parseError at message
-            | parsed limit afterLimit => (
-              case (parseTerm more 1 (unfoldSeed op) environment afterLimit) as seeded in Parsed return Parsed Value with
-              | parseError at message => parseError at message
-              | parsed seed rest => (
-                case (unfoldItems more position op (carrierCode expected) environment (countOf limit) seed) as built in Parsed return Parsed Value with
-                | parseError at message => parseError at message
-                | parsed items ignored => (
-                  case (rebuild expected items) as rebuilt in Result return Parsed Value with
-                  | failure at message => parseError position message
-                  | success result => parsed result rest))))))))
+            case (parseTerm more budget 1 tyNat environment afterFunction) as bounded in Worked return Worked Value with
+            | workError at message => workError at message
+            | worked limit afterLimit budget => (
+              case (parseTerm more budget 1 (unfoldSeed op) environment afterLimit) as seeded in Worked return Worked Value with
+              | workError at message => workError at message
+              | worked seed rest budget => (
+                case (unfoldItems more budget position op (carrierCode expected) environment (countOf limit) seed) as built in Worked return Worked Value with
+                | workError at message => workError at message
+                | worked items ignored budget => (
+                  case (rebuild expected items) as rebuilt in Result return Worked Value with
+                  | failure at message => workError position message
+                  | success result => worked result rest budget))))))))
 -- Each element uses one step of the depth fuel. Into Nat (code 1) the payload
 -- of g is the next seed. Otherwise it is the pair of the element and the
 -- next seed.
-and unfoldItems : Fuel -> Nat -> Stepper -> Nat -> List Binding -> Nat -> Value -> Parsed Values :=
-  fun (fuel : Fuel) (position : Nat) (op : Stepper) (code : Nat) (environment : List Binding) (limit : Nat) (seed : Value) =>
-  case fuel as guard in Fuel return Parsed Values with
-  | fuelEnd => parseError position eFuel
+and unfoldItems : Fuel -> Nat -> Nat -> Stepper -> Nat -> List Binding -> Nat -> Value -> Worked Values :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (op : Stepper) (code : Nat) (environment : List Binding) (limit : Nat) (seed : Value) =>
+  case fuel as guard in Fuel return Worked Values with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq limit 0) as done return Parsed Values with
-    | 1 (x : prod ()) => parsed valuesEnd nil
+    case (natEq limit 0) as done return Worked Values with
+    | 1 (x : prod ()) => worked valuesEnd nil budget
     | 0 (x : prod ()) => (
-      case (parseTerm more 0 (stepperResult op) (stepperEnvironment op (cons seed nil) environment) (stepperBody op)) as applied in Parsed return Parsed Values with
-      | parseError at message => parseError at message
-      | parsed result after => (
-        case (payloadOf (stepperResult op) (shapeElement (stepperResult op)) result) as next in Option return Parsed Values with
-        | none => parsed valuesEnd nil
+      case (parseTerm more (natSub budget 1) 0 (stepperResult op) (stepperEnvironment op (cons seed nil) environment) (stepperBody op)) as applied in Worked return Worked Values with
+      | workError at message => workError at message
+      | worked result after budget => (
+        case (payloadOf (stepperResult op) (shapeElement (stepperResult op)) result) as next in Option return Worked Values with
+        | none => worked valuesEnd nil budget
         | some payload => (
-          case (unfoldItems more position op code environment (natSub limit 1)
-              (select Value (numberEq code 1) payload (projectValue 2 payload))) as remaining in Parsed return Parsed Values with
-          | parseError at message => parseError at message
-          | parsed items ignored => parsed (valuesItem (select Value (numberEq code 1) valueNull (projectValue 1 payload)) items) nil))))
+          case (unfoldItems more budget position op code environment (natSub limit 1)
+              (select Value (numberEq code 1) payload (projectValue 2 payload))) as remaining in Worked return Worked Values with
+          | workError at message => workError at message
+          | worked items ignored budget => worked (valuesItem (select Value (numberEq code 1) valueNull (projectValue 1 payload)) items) nil budget))))
 -- A fold over Value takes five functions before z. Each function is checked
 -- against the declared type before the source is read.
-and foldValueTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Parsed Value :=
-  fun (fuel : Fuel) (position : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError position eFuel
+and foldValueTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (algebraArguments expected environment tokens) as named in Parsed return Parsed Value with
-    | parseError at message => parseError at message
+    case (algebraArguments expected environment tokens) as named in Parsed return Worked Value with
+    | parseError at message => workError at message
     | parsed ops afterFunctions => (
-      case (parseTerm more 1 expected environment afterFunctions) as initial in Parsed return Parsed Value with
-      | parseError at message => parseError at message
-      | parsed start afterStart => (
-        case (synthTerm more 1 environment afterStart) as source in Parsed return Parsed Value with
-        | parseError at message => parseError at message
-        | parsed found rest => (
-          case found as item in Typed return Parsed Value with
+      case (parseTerm more budget 1 expected environment afterFunctions) as initial in Worked return Worked Value with
+      | workError at message => workError at message
+      | worked start afterStart budget => (
+        case (synthTerm more budget 1 environment afterStart) as source in Worked return Worked Value with
+        | workError at message => workError at message
+        | worked found rest budget => (
+          case found as item in Typed return Worked Value with
           | typed ty value => (
-            case (natEq (sameType ty tyValue) 1) as carried return Parsed Value with
-            | 0 (x : prod ()) => parseError (firstPosition afterStart) eCases
+            case (natEq (sameType ty tyValue) 1) as carried return Worked Value with
+            | 0 (x : prod ()) => workError (firstPosition afterStart) eCases
             | 1 (x : prod ()) => (
-              case (foldValue more position ops environment start value) as folded in Parsed return Parsed Value with
-              | parseError at message => parseError at message
-              | parsed result ignored => parsed result rest))))))
+              case (foldValue more budget position ops environment start value) as folded in Worked return Worked Value with
+              | workError at message => workError at message
+              | worked result ignored budget => worked result rest budget))))))
 -- valueNull gives z. A scalar applies its function to the payload. Items and
 -- fields fold each child first, in order, and then apply their function to
 -- the list of the results. Each node and each child uses one step of the
 -- depth fuel.
-and foldValue : Fuel -> Nat -> ValueAlgebra -> List Binding -> Value -> Value -> Parsed Value :=
-  fun (fuel : Fuel) (position : Nat) (ops : ValueAlgebra) (environment : List Binding) (start : Value) (value : Value) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError position eFuel
+and foldValue : Fuel -> Nat -> Nat -> ValueAlgebra -> List Binding -> Value -> Value -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (ops : ValueAlgebra) (environment : List Binding) (start : Value) (value : Value) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq (valueIndex value) 0) as empty return Parsed Value with
-    | 1 (x : prod ()) => parsed start nil
+    case (natEq (valueIndex value) 0) as empty return Worked Value with
+    | 1 (x : prod ()) => worked start nil budget
     | 0 (x : prod ()) => (
-      case (foldChildren more position ops environment start (numberEq (valueIndex value) 5) (childElements value)) as inner in Parsed return Parsed Value with
-      | parseError at message => parseError at message
-      | parsed results ignored => parseTerm more 0 (stepperResult (algebraStep (valueIndex value) ops))
+      case (foldChildren more budget position ops environment start (numberEq (valueIndex value) 5) (childElements value)) as inner in Worked return Worked Value with
+      | workError at message => workError at message
+      | worked results ignored budget => parseTerm more (natSub budget 1) 0 (stepperResult (algebraStep (valueIndex value) ops))
           (stepperEnvironment (algebraStep (valueIndex value) ops) (cons (algebraInput value results) nil) environment)
           (stepperBody (algebraStep (valueIndex value) ops))))
 -- A child of the fields (keyed = 1) is the pair of its key and its value.
 -- Its result is the pair of the key and the folded value.
-and foldChildren : Fuel -> Nat -> ValueAlgebra -> List Binding -> Value -> Nat -> Values -> Parsed Values :=
-  fun (fuel : Fuel) (position : Nat) (ops : ValueAlgebra) (environment : List Binding) (start : Value) (keyed : Nat) (elements : Values) =>
-  case fuel as guard in Fuel return Parsed Values with
-  | fuelEnd => parseError position eFuel
+and foldChildren : Fuel -> Nat -> Nat -> ValueAlgebra -> List Binding -> Value -> Nat -> Values -> Worked Values :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (ops : ValueAlgebra) (environment : List Binding) (start : Value) (keyed : Nat) (elements : Values) =>
+  case fuel as guard in Fuel return Worked Values with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case elements as self in Values return Parsed Values with
-    | valuesEnd => parsed valuesEnd nil
+    case elements as self in Values return Worked Values with
+    | valuesEnd => worked valuesEnd nil budget
     | valuesItem head rest => (
-        case (foldValue more position ops environment start (select Value keyed (projectValue 2 head) head)) as first in Parsed return Parsed Values with
-        | parseError at message => parseError at message
-        | parsed result ignored => (
-            case (foldChildren more position ops environment start keyed rest) as remaining in Parsed return Parsed Values with
-            | parseError at message => parseError at message
-            | parsed results unused => parsed (valuesItem
-                (select Value keyed (objectTwo kFirst (projectValue 1 head) kSecond result) result) results) nil)))
+        case (foldValue more budget position ops environment start (select Value keyed (projectValue 2 head) head)) as first in Worked return Worked Values with
+        | workError at message => workError at message
+        | worked result ignored budget => (
+            case (foldChildren more budget position ops environment start keyed rest) as remaining in Worked return Worked Values with
+            | workError at message => workError at message
+            | worked results unused budget => worked (valuesItem
+                (select Value keyed (objectTwo kFirst (projectValue 1 head) kSecond result) result) results) nil budget)))
 -- unfold g n s into Value. g gives the layer of a seed. unfold applies g to
 -- the seeds in depth-first order, at most n times. A seed that is left after
 -- n applications becomes valueNull.
-and unfoldValueTerm : Fuel -> Nat -> List Binding -> List Token -> Parsed Value :=
-  fun (fuel : Fuel) (position : Nat) (environment : List Binding) (tokens : List Token) =>
-  case fuel as guard in Fuel return Parsed Value with
-  | fuelEnd => parseError position eFuel
+and unfoldValueTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (stepperArgument environment tokens) as named in Parsed return Parsed Value with
-    | parseError at message => parseError at message
+    case (stepperArgument environment tokens) as named in Parsed return Worked Value with
+    | parseError at message => workError at message
     | parsed op afterFunction => (
-      case (natEq (unfoldValueFits op) 1) as fits return Parsed Value with
-      | 0 (x : prod ()) => parseError (firstPosition tokens) eTerm
+      case (natEq (unfoldValueFits op) 1) as fits return Worked Value with
+      | 0 (x : prod ()) => workError (firstPosition tokens) eTerm
       | 1 (x : prod ()) => (
-        case (parseTerm more 1 tyNat environment afterFunction) as bounded in Parsed return Parsed Value with
-        | parseError at message => parseError at message
-        | parsed limit afterLimit => (
-          case (parseTerm more 1 (unfoldSeed op) environment afterLimit) as seeded in Parsed return Parsed Value with
-          | parseError at message => parseError at message
-          | parsed seed rest => (
-            case (unfoldNode more position op environment (countOf limit) seed) as built in Parsed return Parsed Value with
-            | parseError at message => parseError at message
-            | parsed node ignored => parsed (grownHead node) rest)))))
+        case (parseTerm more budget 1 tyNat environment afterFunction) as bounded in Worked return Worked Value with
+        | workError at message => workError at message
+        | worked limit afterLimit budget => (
+          case (parseTerm more budget 1 (unfoldSeed op) environment afterLimit) as seeded in Worked return Worked Value with
+          | workError at message => workError at message
+          | worked seed rest budget => (
+            case (unfoldNode more budget position op environment (countOf limit) seed) as built in Worked return Worked Value with
+            | workError at message => workError at message
+            | worked node ignored budget => worked (grownHead node) rest budget)))))
 -- Each application of g uses one step of the depth fuel and one of the n
 -- applications. Duplicate keys of the fields are an error at unfold.
-and unfoldNode : Fuel -> Nat -> Stepper -> List Binding -> Nat -> Value -> Parsed Grown :=
-  fun (fuel : Fuel) (position : Nat) (op : Stepper) (environment : List Binding) (limit : Nat) (seed : Value) =>
-  case fuel as guard in Fuel return Parsed Grown with
-  | fuelEnd => parseError position eFuel
+and unfoldNode : Fuel -> Nat -> Nat -> Stepper -> List Binding -> Nat -> Value -> Worked Grown :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (op : Stepper) (environment : List Binding) (limit : Nat) (seed : Value) =>
+  case fuel as guard in Fuel return Worked Grown with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq limit 0) as done return Parsed Grown with
-    | 1 (x : prod ()) => parsed (grownLeaf valueNull 0) nil
+    case (natEq limit 0) as done return Worked Grown with
+    | 1 (x : prod ()) => worked (grownLeaf valueNull 0) nil budget
     | 0 (x : prod ()) => (
-      case (parseTerm more 0 (stepperResult op) (stepperEnvironment op (cons seed nil) environment) (stepperBody op)) as applied in Parsed return Parsed Grown with
-      | parseError at message => parseError at message
-      | parsed layer after => (
-        case (natLt (layerIndex layer) 4) as leaf return Parsed Grown with
-        | 1 (x : prod ()) => parsed (grownLeaf (layerPayload layer) (natSub limit 1)) nil
+      case (parseTerm more (natSub budget 1) 0 (stepperResult op) (stepperEnvironment op (cons seed nil) environment) (stepperBody op)) as applied in Worked return Worked Grown with
+      | workError at message => workError at message
+      | worked layer after budget => (
+        case (natLt (layerIndex layer) 4) as leaf return Worked Grown with
+        | 1 (x : prod ()) => worked (grownLeaf (layerPayload layer) (natSub limit 1)) nil budget
         | 0 (x : prod ()) => (
-          case (unfoldSeeds more position op environment (numberEq (layerIndex layer) 5) (natSub limit 1) (itemsOf (layerPayload layer))) as children in Parsed return Parsed Grown with
-          | parseError at message => parseError at message
-          | parsed built ignored => (
-            case (natEq (layerIndex layer) 5) as fielded return Parsed Grown with
-            | 0 (x : prod ()) => parsed (grownLeaf (valueItems (grownItems built)) (grownLimit built)) nil
+          case (unfoldSeeds more budget position op environment (numberEq (layerIndex layer) 5) (natSub limit 1) (itemsOf (layerPayload layer))) as children in Worked return Worked Grown with
+          | workError at message => workError at message
+          | worked built ignored budget => (
+            case (natEq (layerIndex layer) 5) as fielded return Worked Grown with
+            | 0 (x : prod ()) => worked (grownLeaf (valueItems (grownItems built)) (grownLimit built)) nil budget
             | 1 (x : prod ()) => (
-              case (fieldsOf (grownItems built)) as attrs in Result return Parsed Grown with
-              | failure at message => parseError position message
-              | success fields => parsed (grownLeaf (valueAttrs fields) (grownLimit built)) nil))))))
+              case (fieldsOf (grownItems built)) as attrs in Result return Worked Grown with
+              | failure at message => workError position message
+              | success fields => worked (grownLeaf (valueAttrs fields) (grownLimit built)) nil budget))))))
 -- The seeds of the items, or the keys and seeds of the fields (keyed = 1),
 -- from the left. The applications that remain pass from each seed to the
 -- next seed.
-and unfoldSeeds : Fuel -> Nat -> Stepper -> List Binding -> Nat -> Nat -> Values -> Parsed Grown :=
-  fun (fuel : Fuel) (position : Nat) (op : Stepper) (environment : List Binding) (keyed : Nat) (limit : Nat) (seeds : Values) =>
-  case fuel as guard in Fuel return Parsed Grown with
-  | fuelEnd => parseError position eFuel
+and unfoldSeeds : Fuel -> Nat -> Nat -> Stepper -> List Binding -> Nat -> Nat -> Values -> Worked Grown :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (op : Stepper) (environment : List Binding) (keyed : Nat) (limit : Nat) (seeds : Values) =>
+  case fuel as guard in Fuel return Worked Grown with
+  | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case seeds as self in Values return Parsed Grown with
-    | valuesEnd => parsed (grown valuesEnd limit) nil
+    case seeds as self in Values return Worked Grown with
+    | valuesEnd => worked (grown valuesEnd limit) nil budget
     | valuesItem head rest => (
-        case (unfoldNode more position op environment limit (select Value keyed (projectValue 2 head) head)) as first in Parsed return Parsed Grown with
-        | parseError at message => parseError at message
-        | parsed node ignored => (
-            case (unfoldSeeds more position op environment keyed (grownLimit node) rest) as remaining in Parsed return Parsed Grown with
-            | parseError at message => parseError at message
-            | parsed others unused => parsed (grown (valuesItem
+        case (unfoldNode more budget position op environment limit (select Value keyed (projectValue 2 head) head)) as first in Worked return Worked Grown with
+        | workError at message => workError at message
+        | worked node ignored budget => (
+            case (unfoldSeeds more budget position op environment keyed (grownLimit node) rest) as remaining in Worked return Worked Grown with
+            | workError at message => workError at message
+            | worked others unused budget => worked (grown (valuesItem
                 (select Value keyed (objectTwo kFirst (projectValue 1 head) kSecond (grownHead node)) (grownHead node))
-                (grownItems others)) (grownLimit others)) nil)))
+                (grownItems others)) (grownLimit others)) nil budget)))

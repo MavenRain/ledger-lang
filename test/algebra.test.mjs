@@ -138,7 +138,7 @@ test('unfold refuses a declared type without a carrier at the keyword', () => {
 });
 
 test('fold and unfold are refused in a function body and bare as an argument', () => {
-  const nested = 'a function body cannot apply a function';
+  const nested = 'a function body cannot use this form';
   reject(keep + 'def h : (n : Nat) -> Nat := fun (n : Nat) => fold keep 0 n', nested, 'fold');
   reject(again + 'def h : (n : Nat) -> Nat := fun (n : Nat) => unfold again 1 n', nested, 'unfold');
   reject(keep + 'def n : Nat := 2 def r : Option Nat := some fold keep 0 n',
@@ -270,7 +270,7 @@ test('the number of functions must fit the source of a fold', () => {
 
 test('a fold over Value is refused in a function body and bare as an argument', () => {
   reject(onValue + `def h : (v : Value) -> Text := fun (v : Value) => ${foldValue} v`,
-    'a function body cannot apply a function', 'fold');
+    'a function body cannot use this form', 'fold');
   reject(onValue + `def v : Value := valueNull def r : Option Text := some ${foldValue} v`,
     'argument needs parentheses', 'fold');
   assert.deepEqual(values(onValue +
@@ -318,7 +318,7 @@ test('unfold into Value checks the coalgebra, the limit and the seed', () => {
   reject(growChain + 'def r : Value := unfold growChain "x" 0', termError, '"x"');
   reject(growChain + 'def r : Value := unfold growChain 1 "x"', termError, '"x"');
   reject(growChain + 'def h : (n : Nat) -> Value := fun (n : Nat) => unfold growChain 1 n',
-    'a function body cannot apply a function', 'unfold');
+    'a function body cannot use this form', 'unfold');
 });
 
 test('fold consumes a Value that unfold built', () => {

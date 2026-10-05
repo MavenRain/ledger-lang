@@ -17,6 +17,13 @@ def rec outputFuelFrom : Fuel -> Text -> Fuel := fun (done : Fuel) (source : Tex
   | textEnd => fuelAppend done fuel128
   | textByte byte rest => outputFuelFrom (fuelAppend done fuel32) rest
 
+-- The work budget is 8 function bodies for each source byte, plus 64. The
+-- count starts at 65 because the budget 0 is the error.
+def rec workBudgetFrom : Nat -> Text -> Nat := fun (done : Nat) (source : Text) =>
+  case source as self in Text return Nat with
+  | textEnd => done
+  | textByte byte rest => workBudgetFrom (natAdd done 8) rest
+
 -- A checked instance keeps the source byte of its definition for print errors.
 mu Located : Type 0 with
 | located : Nat -> Value -> Located
@@ -33,34 +40,34 @@ def eqType : Nat -> Fuel -> LType -> Value -> Value -> List Token -> Parsed LTyp
 
 -- `Eq A x y` is only the type of a definition. A is an atom that is a data
 -- type, and the sides x and y are atoms of type A.
-def parseEqType : Nat -> Fuel -> List Binding -> List Token -> Parsed LType :=
-  fun (position : Nat) (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
-  case (parseType fuel 1 environment tokens) as carrier in Parsed return Parsed LType with
-  | parseError at message => parseError at message
+def parseEqType : Nat -> Fuel -> Nat -> List Binding -> List Token -> Worked LType :=
+  fun (position : Nat) (fuel : Fuel) (budget : Nat) (environment : List Binding) (tokens : List Token) =>
+  case (parseType fuel 1 environment tokens) as carrier in Parsed return Worked LType with
+  | parseError at message => workError at message
   | parsed a afterType => (
-    case (natEq (typeLevel a) 0) as data return Parsed LType with
-    | 0 (x : prod ()) => parseError (firstPosition tokens) eData
+    case (natEq (typeLevel a) 0) as data return Worked LType with
+    | 0 (x : prod ()) => workError (firstPosition tokens) eData
     | 1 (x : prod ()) => (
-      case (parseTerm fuel 1 a environment afterType) as left in Parsed return Parsed LType with
-      | parseError at message => parseError at message
-      | parsed lhs afterLeft => (
-        case (parseTerm fuel 1 a environment afterLeft) as right in Parsed return Parsed LType with
-        | parseError at message => parseError at message
-        | parsed rhs afterRight => eqType position fuel a lhs rhs afterRight)))
+      case (parseTerm fuel budget 1 a environment afterType) as left in Worked return Worked LType with
+      | workError at message => workError at message
+      | worked lhs afterLeft budget => (
+        case (parseTerm fuel budget 1 a environment afterLeft) as right in Worked return Worked LType with
+        | workError at message => workError at message
+        | worked rhs afterRight budget => liftParsed LType budget (eqType position fuel a lhs rhs afterRight))))
 
-def declaredType : Fuel -> List Binding -> List Token -> Parsed LType :=
-  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
-  case tokens as self in List return Parsed LType with
-  | nil => parseType fuel 0 environment tokens
+def declaredType : Fuel -> Nat -> List Binding -> List Token -> Worked LType :=
+  fun (fuel : Fuel) (budget : Nat) (environment : List Binding) (tokens : List Token) =>
+  case tokens as self in List return Worked LType with
+  | nil => liftParsed LType budget (parseType fuel 0 environment tokens)
   | cons head tail => (
-      case head as token in Token return Parsed LType with
-      | numberToken position number => parseType fuel 0 environment tokens
-      | stringToken position text => parseType fuel 0 environment tokens
-      | punctuation position mark => parseType fuel 0 environment tokens
+      case head as token in Token return Worked LType with
+      | numberToken position number => liftParsed LType budget (parseType fuel 0 environment tokens)
+      | stringToken position text => liftParsed LType budget (parseType fuel 0 environment tokens)
+      | punctuation position mark => liftParsed LType budget (parseType fuel 0 environment tokens)
       | identifier position name => (
-          case (natEq (sameText name sEq) 1) as equality return Parsed LType with
-          | 1 (x : prod ()) => parseEqType position fuel environment tail
-          | 0 (x : prod ()) => parseType fuel 0 environment tokens))
+          case (natEq (sameText name sEq) 1) as equality return Worked LType with
+          | 1 (x : prod ()) => parseEqType position fuel budget environment tail
+          | 0 (x : prod ()) => liftParsed LType budget (parseType fuel 0 environment tokens)))
 
 def dropToken : List Token -> List Token := fun (tokens : List Token) =>
   case tokens as self in List return List Token with
@@ -239,8 +246,8 @@ def rec parseBinders : Fuel -> List Binding -> List Param -> List Param -> List 
                       (parseError (firstPosition tokens) eFun))))))))
 
 -- A function definition checks its body once. It is not an instance.
-def parseFunction : Fuel -> Text -> List Binding -> List Token -> Parsed Binding :=
-  fun (fuel : Fuel) (name : Text) (environment : List Binding) (tokens : List Token) =>
+def parseFunction : Fuel -> Nat -> Text -> List Binding -> List Token -> Parsed Binding :=
+  fun (fuel : Fuel) (budget : Nat) (name : Text) (environment : List Binding) (tokens : List Token) =>
   case (parseSignature fuel environment nil tokens) as declared in Parsed return Parsed Binding with
   | parseError at message => parseError at message
   | parsed found afterType => (
@@ -255,57 +262,57 @@ def parseFunction : Fuel -> Text -> List Binding -> List Token -> Parsed Binding
           case (parseBinders fuel environment params nil (dropToken afterAssign)) as bound in Parsed return Parsed Binding with
           | parseError at message => parseError at message
           | parsed binders body => (
-            case (parseTerm fuel 0 result (cons checkMarker (bindParams binders nil environment)) body) as checked in Parsed return Parsed Binding with
-            | parseError at message => parseError at message
-            | parsed value after => parsed (funBinding name binders result body) after)))))
+            case (parseTerm fuel budget 0 result (cons checkMarker (bindParams binders nil environment)) body) as checked in Worked return Parsed Binding with
+            | workError at message => parseError at message
+            | worked value after left => parsed (funBinding name binders result body) after)))))
 
-def parseDefinition : Fuel -> List Binding -> List Token -> Parsed Binding :=
-  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
-  case tokens as self in List return Parsed Binding with
-  | nil => parseError 0 eDef
+def parseDefinition : Fuel -> Nat -> List Binding -> List Token -> Worked Binding :=
+  fun (fuel : Fuel) (budget : Nat) (environment : List Binding) (tokens : List Token) =>
+  case tokens as self in List return Worked Binding with
+  | nil => workError 0 eDef
   | cons head tail => (
-    case head as nameToken in Token return Parsed Binding with
-    | numberToken position number => parseError position eDef
-    | stringToken position text => parseError position eDef
-    | punctuation position mark => parseError position eDef
+    case head as nameToken in Token return Worked Binding with
+    | numberToken position number => workError position eDef
+    | stringToken position text => workError position eDef
+    | punctuation position mark => workError position eDef
     | identifier position name => (
-      case (natEq (reservedName name) 1) as reserved return Parsed Binding with
-      | 1 (x : prod ()) => parseError position eReserved
+      case (natEq (reservedName name) 1) as reserved return Worked Binding with
+      | 1 (x : prod ()) => workError position eReserved
       | 0 (x : prod ()) => (
-        case (lookup name environment) as previous in Option return Parsed Binding with
-        | some item => parseError position eDuplicate
+        case (lookup name environment) as previous in Option return Worked Binding with
+        | some item => workError position eDuplicate
         | none => (
-          case (expectMark 58 tail) as colon in Parsed return Parsed Binding with
-          | parseError at message => parseError at message
+          case (expectMark 58 tail) as colon in Parsed return Worked Binding with
+          | parseError at message => workError at message
           | parsed ignored rest => (
-            case (natEq (startsArrow fuel environment rest) 1) as signed return Parsed Binding with
-            | 1 (x : prod ()) => parseFunction fuel name environment rest
+            case (natEq (startsArrow fuel environment rest) 1) as signed return Worked Binding with
+            | 1 (x : prod ()) => liftParsed Binding budget (parseFunction fuel budget name environment rest)
             | 0 (x : prod ()) => (
-            case (declaredType fuel environment rest) as declared in Parsed return Parsed Binding with
-            | parseError at message => parseError at message
-            | parsed ty afterType => (
-              case (expectMark 61 afterType) as assign in Parsed return Parsed Binding with
-              | parseError at message => parseError at message
+            case (declaredType fuel budget environment rest) as declared in Worked return Worked Binding with
+            | workError at message => workError at message
+            | worked ty afterType budget => (
+              case (expectMark 61 afterType) as assign in Parsed return Worked Binding with
+              | parseError at message => workError at message
               | parsed ignored afterAssign => (
-                case (natEq (isTermType ty) 1) as data return Parsed Binding with
+                case (natEq (isTermType ty) 1) as data return Worked Binding with
                 | 1 (x : prod ()) => (
-                    case (parseTerm fuel 0 ty environment afterAssign) as checked in Parsed return Parsed Binding with
-                    | parseError at message => parseError at message
-                    | parsed value after => parsed (binding name ty value) after)
+                    case (parseTerm fuel budget 0 ty environment afterAssign) as checked in Worked return Worked Binding with
+                    | workError at message => workError at message
+                    | worked value after budget => worked (binding name ty value) after budget)
                 | 0 (x : prod ()) => (
-                  case (natEq (startsArrow fuel environment afterAssign) 1) as arrow return Parsed Binding with
+                  case (natEq (startsArrow fuel environment afterAssign) 1) as arrow return Worked Binding with
                   | 1 (x : prod ()) => (
-                    case (parseSignature fuel environment nil afterAssign) as defined in Parsed return Parsed Binding with
-                    | parseError at message => parseError at message
+                    case (parseSignature fuel environment nil afterAssign) as defined in Parsed return Worked Binding with
+                    | parseError at message => workError at message
                     | parsed found after => (
-                      case found as shape in Signature return Parsed Binding with
-                      | signature params result => select (Parsed Binding) (numberEq (typeLevel ty) 1)
-                          (parsed (arrowBinding name params result) after) (parseError (firstPosition afterAssign) eUniverse)))
+                      case found as shape in Signature return Worked Binding with
+                      | signature params result => select (Worked Binding) (numberEq (typeLevel ty) 1)
+                          (worked (arrowBinding name params result) after budget) (workError (firstPosition afterAssign) eUniverse)))
                   | 0 (x : prod ()) => (
-                    case (parseType fuel 0 environment afterAssign) as defined in Parsed return Parsed Binding with
-                    | parseError at message => parseError at message
-                    | parsed inner after => select (Parsed Binding) (numberEq (typeLevel ty) (natAdd (typeLevel inner) 1))
-                        (parsed (typeBinding name ty inner) after) (parseError (firstPosition afterAssign) eUniverse)))))))))))
+                    case (parseType fuel 0 environment afterAssign) as defined in Parsed return Worked Binding with
+                    | parseError at message => workError at message
+                    | parsed inner after => select (Worked Binding) (numberEq (typeLevel ty) (natAdd (typeLevel inner) 1))
+                        (worked (typeBinding name ty inner) after budget) (workError (firstPosition afterAssign) eUniverse)))))))))))
 
 def instanceValue : Text -> LType -> Value -> Value := fun (name : Text) (ty : LType) (value : Value) =>
   valueAttrs (attrsField kName (valueText name)
@@ -327,8 +334,8 @@ def recordInstance : Nat -> Binding -> List Located -> List Located :=
   | arrowBinding name params result => done
   | funBinding name params result body => done
 
-def rec parseProgram : Fuel -> Fuel -> List Binding -> List Located -> List Token -> Result (List Located) :=
-  fun (fuel : Fuel) (checkingFuel : Fuel) (environment : List Binding) (done : List Located) (tokens : List Token) =>
+def rec parseProgram : Fuel -> Nat -> Fuel -> List Binding -> List Located -> List Token -> Result (List Located) :=
+  fun (fuel : Fuel) (budget : Nat) (checkingFuel : Fuel) (environment : List Binding) (done : List Located) (tokens : List Token) =>
   case fuel as guard in Fuel return Result (List Located) with
   | fuelEnd => failure (firstPosition tokens) eFuel
   | fuelMore more => (
@@ -344,9 +351,9 @@ def rec parseProgram : Fuel -> Fuel -> List Binding -> List Located -> List Toke
           case (natEq (sameText word sdef) 1) as definition return Result (List Located) with
           | 0 (x : prod ()) => failure position eDef
           | 1 (x : prod ()) => (
-              case (parseDefinition checkingFuel environment tail) as next in Parsed return Result (List Located) with
-              | parseError at message => failure at message
-              | parsed item rest => parseProgram more checkingFuel (cons item environment)
+              case (parseDefinition checkingFuel budget environment tail) as next in Worked return Result (List Located) with
+              | workError at message => failure at message
+              | worked item rest left => parseProgram more left checkingFuel (cons item environment)
                   (recordInstance position item done) rest))))
 
 -- A print error reports the first byte of the definition being printed.
@@ -377,7 +384,7 @@ def compile : Text -> Text := fun (source : Text) =>
       case (lex (fuelFor source) source) as tokens in Result return Text with
       | failure at message => errorText at message
       | success tokens => (
-          case (parseProgram (fuelFor source) (depthFuelFrom 0 fuelEnd source) nil nil tokens) as program in Result return Text with
+          case (parseProgram (fuelFor source) (workBudgetFrom 65 source) (depthFuelFrom 0 fuelEnd source) nil nil tokens) as program in Result return Text with
           | failure at message => errorText at message
           | success instances => (
               case (emitText (outputFuelFrom fuelEnd source) textEnd jHeader) as header in Printed return Text with
