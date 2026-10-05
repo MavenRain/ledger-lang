@@ -137,6 +137,15 @@ compiles. The earlier paragraphs that name this refusal describe the rows
 before this slice. The full suite has 394 tests. This slice has no example
 file and no mutation run.
 
+The coverage slice for in-body forms adds 6 cases to
+`test/bodies.test.mjs` and adds `examples/bodies.ledger`. The cases use
+literal values. They cover `bind`, `filter` and `map` over `Option`,
+`Sum E` and `Text` in a function body, `fold` over `Nat`, `Text` and
+`List A`, `fold` and `unfold` over `Value`, the scope of a function that
+`unfold` applies, a source of the wrong type in a body for each form, and
+the example. The slice changes no compiler file. The full suite has 400
+tests. This slice has no mutation run.
+
 The full design in `SPEC.md` is not implemented. See [STATUS.md](STATUS.md)
 for remaining M0 work and [README.md](../README.md) for supported syntax and
 resource limits. Entry hashing and projection remain M1 work.

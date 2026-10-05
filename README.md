@@ -150,8 +150,9 @@ Each application parses the body again with the fuel that remains at the
 application site. A body evaluates in the scope of its definition. Thus a
 name in the body refers to the definition before the function, also when a
 caller has a parameter with the same name. Each evaluated body uses one unit
-of the work budget. See [examples/functions.ledger](examples/functions.ledger)
-and [examples/nested.ledger](examples/nested.ledger).
+of the work budget. See [examples/functions.ledger](examples/functions.ledger),
+[examples/nested.ledger](examples/nested.ledger) and
+[examples/bodies.ledger](examples/bodies.ledger).
 
 A type definition can name a function type of data types. The function type
 is in `Type 0`. The name then stands for the function type: as the type of a
