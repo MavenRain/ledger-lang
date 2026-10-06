@@ -79,7 +79,8 @@ not complete the M0 milestone in `SPEC.md`.
   type, or partially applies a function by binding its leading parameters.
   `map`, `bind` and `filter` take a name or a partial application that
   binds all but the last parameter. `fold` and `unfold` take a name or a
-  partial application whose written arguments bind the leading parameters.
+  partial application whose written arguments bind the leading parameters,
+  as do the five functions of a fold over `Value`.
   The parameter keeps the argument's definition scope and can be
   applied, forwarded, or used by a structure or algebra form. Function
   types with type parameters cannot be parameter types.
@@ -111,14 +112,16 @@ not complete the M0 milestone in `SPEC.md`.
   fuel for each element. The depth fuel is one step per source byte, at most
   512 steps. Thus a long list made by `bind`, or a `fold` over a large `Nat`,
   can stop with a fuel error. Every form takes a function name or a
-  parenthesized partial application. The five functions of a fold over
-  `Value` are names. No form takes a `fun` term.
+  parenthesized partial application, including the five functions of a fold
+  over `Value`. No form takes a `fun` term.
 - Over `Value`, `fold` and `unfold` use one step of the depth fuel for each
   level and for each earlier child of the same list. The limit of `unfold`
   into `Value` counts applications, not elements or levels. A fold over
   `Value` needs all five functions. It cannot leave out a case.
 - The source of `fold` must synthesize its type. A literal source such as
-  `nil` or a string is refused. Name it in an earlier definition.
+  `nil` or a string is refused. Name it in an earlier definition. The initial
+  value of a `fold` over a sequence can be parenthesized, including a fully
+  applied function such as `(pickK 3 4)`.
 
 - A function argument is a name, optionally grouped, or a parenthesized
   partial application binding leading parameters. The remaining signature

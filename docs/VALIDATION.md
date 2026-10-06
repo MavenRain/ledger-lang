@@ -34,6 +34,18 @@ Refusals cover mistyped, nested, extra and fully bound arguments, type
 parameters, data names, a number in parentheses for `unfold`, the bare form,
 and unclosed or empty parentheses.
 
+The Value fold partial application review adds six cases in
+`test/value-fold-partial.test.mjs`. They check a fold over `Value` whose
+functions are partial applications in each of the five positions and in all
+five at once, grouped and two-parameter functions, a computed bound argument,
+caller-scope and captured-scope bound arguments, partial application of a
+function parameter, parenthesized initial values still selecting the fold
+over a sequence, and the example file. A work-budget regression verifies
+that a computed argument to the first function is evaluated once and that
+multiple computed arguments still share the same budget. Refusals cover a mistyped bound
+argument, partial applications that do not fit their position, type
+parameters, a data name, a fully bound function, and an unclosed parenthesis.
+
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for
 `Option` and `Value` payloads, UTF-8, escaping, control and DEL bytes, Nat

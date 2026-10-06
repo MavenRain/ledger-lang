@@ -821,33 +821,6 @@ def algebraParam : Nat -> LType -> LType := fun (index : Nat) (result : LType) =
     (select LType (numberEq index 3) tyText (select LType (numberEq index 4) (tyList result)
       (tyList (tyProd tyText result)))))
 
-def algebraArgument : Nat -> LType -> List Binding -> List Token -> Parsed Stepper :=
-  fun (index : Nat) (result : LType) (environment : List Binding) (tokens : List Token) =>
-  case (stepperArgument environment tokens) as named in Parsed return Parsed Stepper with
-  | parseError at message => parseError at message
-  | parsed op rest => select (Parsed Stepper)
-      (boolAnd (sameType (stepperResult op) result)
-        (sameTypes (paramTypes (stepperParams op)) (cons (algebraParam index result) nil)))
-      (parsed op rest) (parseError (firstPosition tokens) eTerm)
-
-def algebraArguments : LType -> List Binding -> List Token -> Parsed ValueAlgebra :=
-  fun (result : LType) (environment : List Binding) (tokens : List Token) =>
-  case (algebraArgument 1 result environment tokens) as first in Parsed return Parsed ValueAlgebra with
-  | parseError at message => parseError at message
-  | parsed onNat afterNat => (
-    case (algebraArgument 2 result environment afterNat) as second in Parsed return Parsed ValueAlgebra with
-    | parseError at message => parseError at message
-    | parsed onFlag afterFlag => (
-      case (algebraArgument 3 result environment afterFlag) as third in Parsed return Parsed ValueAlgebra with
-      | parseError at message => parseError at message
-      | parsed onText afterText => (
-        case (algebraArgument 4 result environment afterText) as fourth in Parsed return Parsed ValueAlgebra with
-        | parseError at message => parseError at message
-        | parsed onItems afterItems => (
-          case (algebraArgument 5 result environment afterItems) as fifth in Parsed return Parsed ValueAlgebra with
-          | parseError at message => parseError at message
-          | parsed onAttrs rest => parsed (valueAlgebra onNat onFlag onText onItems onAttrs) rest))))
-
 -- A second function name after the first selects the fold over Value. The
 -- initial value is a data value, so it is never the bare name of a function.
 def namesFunction : List Binding -> List Token -> Nat :=
@@ -1398,8 +1371,8 @@ and foldTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List Token 
       case (stepperTerm more budget environment tokens) as named in Worked return Worked Value with
       | workError at message => workError at message
       | worked op afterFunction budget => (
-        case (natEq (namesFunction environment afterFunction) 1) as several return Worked Value with
-        | 1 (x : prod ()) => foldValueTerm more budget position expected environment tokens
+        case (natEq (secondFunction more budget expected environment afterFunction) 1) as several return Worked Value with
+        | 1 (x : prod ()) => foldValueTerm more budget position (firstPosition tokens) expected op environment afterFunction
         | 0 (x : prod ()) => (
         case (parseTerm more budget 1 expected environment afterFunction) as initial in Worked return Worked Value with
         | workError at message => workError at message
@@ -1497,16 +1470,68 @@ and unfoldItems : Fuel -> Nat -> Nat -> Stepper -> Nat -> Nat -> Value -> Worked
               (select Value (numberEq code 1) payload (projectValue 2 payload))) as remaining in Worked return Worked Values with
           | workError at message => workError at message
           | worked items ignored budget => worked (valuesItem (select Value (numberEq code 1) valueNull (projectValue 1 payload)) items) nil budget))))
+-- One of the five functions of a fold over Value is a name or a partial
+-- application. Its parameter is the payload of its constructor and its
+-- result is the declared type.
+and algebraTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Stepper :=
+  fun (fuel : Fuel) (budget : Nat) (index : Nat) (result : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Stepper with
+  | fuelEnd => workError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case (stepperTerm more budget environment tokens) as named in Worked return Worked Stepper with
+    | workError at message => workError at message
+    | worked op rest budget => select (Worked Stepper)
+        (boolAnd (sameType (stepperResult op) result)
+          (sameTypes (paramTypes (stepperParams op)) (cons (algebraParam index result) nil)))
+        (worked op rest budget) (workError (firstPosition tokens) eTerm))
+-- The remaining four functions of a fold over Value. The first function
+-- has already been parsed and checked by foldValueTerm.
+and algebraTerms : Fuel -> Nat -> LType -> Stepper -> List Binding -> List Token -> Worked ValueAlgebra :=
+  fun (fuel : Fuel) (budget : Nat) (result : LType) (onNat : Stepper) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked ValueAlgebra with
+  | fuelEnd => workError (firstPosition tokens) eFuel
+  | fuelMore more => (
+      case (algebraTerm more budget 2 result environment tokens) as second in Worked return Worked ValueAlgebra with
+      | workError at message => workError at message
+      | worked onFlag afterFlag budget => (
+        case (algebraTerm more budget 3 result environment afterFlag) as third in Worked return Worked ValueAlgebra with
+        | workError at message => workError at message
+        | worked onText afterText budget => (
+          case (algebraTerm more budget 4 result environment afterText) as fourth in Worked return Worked ValueAlgebra with
+          | workError at message => workError at message
+          | worked onItems afterItems budget => (
+            case (algebraTerm more budget 5 result environment afterItems) as fifth in Worked return Worked ValueAlgebra with
+            | workError at message => workError at message
+            | worked onAttrs rest budget => worked (valueAlgebra onNat onFlag onText onItems onAttrs) rest budget))))
+-- A second function after the first selects the fold over Value. A name
+-- selects it, as the initial value is never the bare name of a function. A
+-- partial application selects it only when it fits the Flag position, as a
+-- parenthesized initial value also starts with an opening parenthesis.
+and secondFunction : Fuel -> Nat -> LType -> List Binding -> List Token -> Nat :=
+  fun (fuel : Fuel) (budget : Nat) (result : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Nat with
+  | fuelEnd => 0
+  | fuelMore more => (
+    case (natEq (namesFunction environment tokens) 1) as named return Nat with
+    | 1 (x : prod ()) => 1
+    | 0 (x : prod ()) => (
+      case (algebraTerm more budget 2 result environment tokens) as partial in Worked return Nat with
+      | workError at message => 0
+      | worked op rest budget => 1))
 -- A fold over Value takes five functions before z. Each function is checked
 -- against the declared type before the source is read.
-and foldValueTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Value :=
-  fun (fuel : Fuel) (budget : Nat) (position : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+and foldValueTerm : Fuel -> Nat -> Nat -> Nat -> LType -> Stepper -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (functionPosition : Nat) (expected : LType) (onNat : Stepper) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Value with
   | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (algebraArguments expected environment tokens) as named in Parsed return Worked Value with
-    | parseError at message => workError at message
-    | parsed ops afterFunctions => (
+    case (natEq (boolAnd (sameType (stepperResult onNat) expected)
+      (sameTypes (paramTypes (stepperParams onNat)) (cons tyNat nil))) 1) as fits return Worked Value with
+    | 0 (x : prod ()) => workError functionPosition eTerm
+    | 1 (x : prod ()) => (
+    case (algebraTerms more budget expected onNat environment tokens) as named in Worked return Worked Value with
+    | workError at message => workError at message
+    | worked ops afterFunctions budget => (
       case (parseTerm more budget 1 expected environment afterFunctions) as initial in Worked return Worked Value with
       | workError at message => workError at message
       | worked start afterStart budget => (
@@ -1523,7 +1548,7 @@ and foldValueTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token ->
               | 0 (x : prod ()) => (
                 case (foldValue more budget position ops start value) as folded in Worked return Worked Value with
                 | workError at message => workError at message
-                | worked result ignored budget => worked result rest budget)))))))
+                | worked result ignored budget => worked result rest budget))))))))
 -- valueNull gives z. A scalar applies its function to the payload. Items and
 -- fields fold each child first, in order, and then apply their function to
 -- the list of the results. Each node and each child uses one step of the

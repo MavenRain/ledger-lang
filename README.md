@@ -153,6 +153,9 @@ The function of `fold` and `unfold` can also be a parenthesized partial
 application: the written arguments bind the leading parameters, and the
 parameters that are left must fit the form, as in `fold (pick3 9) 0 xs`.
 See [examples/fold-partial.ledger](examples/fold-partial.ledger).
+The five functions of a fold over `Value` can also be partial applications,
+as in `fold (pickK 7) onFlag onText onItems onAttrs 0 v`.
+See [examples/value-fold-partial.ledger](examples/value-fold-partial.ledger).
 For example:
 
 ```text
@@ -245,6 +248,9 @@ from the left, and then give the list of the results to their function. The
 result of a field is the pair of its key and the folded value. One function
 with a `Value` source, or five functions with another source, stops the
 compiler with `the number of functions does not fit the source of this fold`.
+Each of the five functions is a name or a parenthesized partial application
+whose written arguments bind the leading parameters. A parenthesized second
+term is `fFlag` when the parameter it leaves is a `Flag`; otherwise it is `z`.
 
 `unfold g n s` checks against `Value` when `g` gives the layer of a seed of
 type `S`:
