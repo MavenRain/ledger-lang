@@ -173,6 +173,7 @@ parameter type, as in `(f : (Rule))`. A function parameter keeps the scope
 of its argument and can be passed to `map`, `bind`, `filter`, `either`,
 `fold` and `unfold`. A function type is not a data type, so its name is not
 an argument of a type former or a type argument of a polymorphic function.
+See [examples/higher.ledger](examples/higher.ledger).
 
 ```
 def Rule : Type 0 := (count : Nat) -> Prod Nat Nat

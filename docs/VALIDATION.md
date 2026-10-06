@@ -165,3 +165,18 @@ new name, a constructor at an opaque type, a term of another type parameter,
 and a polymorphic function as the argument of `map`. One case in
 `test/functions.test.mjs` changes: `Type 0` is now the type of a type
 parameter, so the case uses `Type 1`. No mutation run covers this slice.
+
+The function parameter slice adds `test/higher-order.test.mjs` with 13
+cases and `examples/higher.ledger`. The positive cases apply a function
+parameter, group a parameter type and an argument in parentheses, give a
+`WritePath` argument, forward a function parameter to a second function,
+bind a function argument through a parameter whose type itself takes a
+function, keep the scope of an argument when the caller has parameters with
+the same names, give a function parameter to `map` and to `fold`, use a
+function parameter next to a renamed type parameter, and run the example.
+Three cases refuse a program at its byte: an argument with another
+parameter type, result type or arity, a parameter of a polymorphic function
+type (also in grouping parentheses), and a grouped parameter type without
+its closing parenthesis. Two cases in `test/paths.test.mjs` change: `Rule`
+and `WritePath` are now parameter types, so the cases use `List Rule` and
+`List WritePath`. No mutation run covers this slice.

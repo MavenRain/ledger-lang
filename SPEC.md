@@ -67,6 +67,17 @@ all type parameters with the type arguments in one step. The type of a type
 parameter is opaque in the body of the function, so the body is correct for
 each type argument. A type that depends on a value parameter is later work.
 
+A named function type without type parameters is also a parameter type:
+`(f : Rule) -> (count : Nat) -> Prod Nat Nat`. Parentheses can group the
+parameter type. An argument for the parameter names an earlier function or
+another function parameter of the same type. The parameter keeps the scope
+of its argument, so the body of the argument refers to the definitions
+before it and not to the parameters of the caller. The body of the function
+can apply the parameter, pass it to another function, or give it to `map`,
+`bind`, `filter`, `either`, `fold` and `unfold`. An inline `fun` term or a
+partial application is not an argument. A function type with a type
+parameter is not a parameter type.
+
 ## 4. Structures
 
 - **Monad** gives `pure`, `map` and `bind`. M0 instances: `Option`, `List`,

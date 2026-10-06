@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createCompiler } from '../bin/bridge.mjs';
 
@@ -111,4 +112,15 @@ test('grouped function parameter types require every closing parenthesis', () =>
     assert.ok(result.error, source);
     assert.equal(result.error.byte, source.length, source);
   }
+});
+
+test('the higher-order example compiles with captured scopes', () => {
+  const source = readFileSync(new URL('../examples/higher.ledger', import.meta.url), 'utf8');
+  const result = run(source);
+  assert.equal(result['ledger-lang'], 1, JSON.stringify(result));
+  const values = Object.fromEntries(result.instances.map(instance => [instance.name, instance.value]));
+  assert.deepEqual(values.paired, { first: 3, second: 3 });
+  assert.deepEqual(values.captured, { first: 5, second: 10 });
+  assert.deepEqual(values.pairs, [{ first: 4, second: 4 }, { first: 7, second: 7 }]);
+  assert.deepEqual(values.items, [4, 7]);
 });
