@@ -1,11 +1,11 @@
 # Validation
 
-Date: 2026-10-05. Node: v23.10.0. Build host: the installed mechanism-lang
+Date: 2026-10-06. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 441 integration tests with zero failures. The test
-runner reported 1.5 seconds. In the isolated checkout the host was selected with
+Wasm reactor, and runs 451 integration tests with zero failures. The test
+runner reported 6.2 seconds. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
 The partial application review adds eight cases in `test/partial.test.mjs`.
@@ -24,6 +24,15 @@ bound arguments, grouped and one-parameter functions, partial application of
 a function parameter, and the example file. Refusals cover mistyped, nested,
 missing and extra bound arguments, type parameters, data names and the
 unchanged bare form.
+
+The fold partial application review adds five cases in
+`test/fold-partial.test.mjs`. They check `fold` over a partial application
+with literal, computed, list, caller-scope and function-name bound arguments,
+grouped and two-parameter functions, partial application of a function
+parameter, two bound arguments, a `Nat` source, and the example file.
+Refusals cover mistyped, nested, extra and fully bound arguments, type
+parameters, data names, a number in parentheses for `unfold`, the bare form,
+and unclosed or empty parentheses.
 
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for

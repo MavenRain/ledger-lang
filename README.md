@@ -149,6 +149,10 @@ parameters cannot be partially applied, and inline `fun` arguments are
 unsupported. The function of `map`, `bind` and `filter` can also be a
 parenthesized partial application that binds all but the last parameter, as
 in `map (pick 1) xs`. See [examples/form-partial.ledger](examples/form-partial.ledger).
+The function of `fold` and `unfold` can also be a parenthesized partial
+application: the written arguments bind the leading parameters, and the
+parameters that are left must fit the form, as in `fold (pick3 9) 0 xs`.
+See [examples/fold-partial.ledger](examples/fold-partial.ledger).
 For example:
 
 ```text

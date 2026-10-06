@@ -78,7 +78,8 @@ not complete the M0 milestone in `SPEC.md`.
   An argument names a function or another function parameter of the same
   type, or partially applies a function by binding its leading parameters.
   `map`, `bind` and `filter` take a name or a partial application that
-  binds all but the last parameter.
+  binds all but the last parameter. `fold` and `unfold` take a name or a
+  partial application whose written arguments bind the leading parameters.
   The parameter keeps the argument's definition scope and can be
   applied, forwarded, or used by a structure or algebra form. Function
   types with type parameters cannot be parameter types.
@@ -109,10 +110,9 @@ not complete the M0 milestone in `SPEC.md`.
 - `map`, `bind`, `filter`, `fold` and `unfold` use one step of the depth
   fuel for each element. The depth fuel is one step per source byte, at most
   512 steps. Thus a long list made by `bind`, or a `fold` over a large `Nat`,
-  can stop with a fuel error. The function argument of `fold` and `unfold`
-  is a name. `map`, `bind` and `filter` also take a parenthesized partial
-  application that binds all but the last parameter. No form takes a `fun`
-  term.
+  can stop with a fuel error. Every form takes a function name or a
+  parenthesized partial application. The five functions of a fold over
+  `Value` are names. No form takes a `fun` term.
 - Over `Value`, `fold` and `unfold` use one step of the depth fuel for each
   level and for each earlier child of the same list. The limit of `unfold`
   into `Value` counts applications, not elements or levels. A fold over

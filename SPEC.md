@@ -78,7 +78,10 @@ must be a name, optionally grouped, which can itself name a parameter
 holding a partial application. Partial application of a function with type
 parameters is unsupported. The function of `map`, `bind` and `filter` is a
 name or a parenthesized partial application that binds all but the last
-parameter of a function without type parameters. The parameter keeps the scope
+parameter of a function without type parameters. The function of `fold` and
+`unfold` is a name or a parenthesized partial application whose written
+arguments bind the leading parameters; the parameters that are left must fit
+the form. The parameter keeps the scope
 of its argument, so the body of the argument refers to the definitions
 before it and not to the parameters of the caller. The body of the function
 can apply the parameter, pass it to another function, or give it to `map`,

@@ -385,6 +385,17 @@ def rec plainBound : List Param -> List Value -> Nat :=
 -- boundParams gives the parameters of a function that a partial application
 -- binds: all but the last ones, as many as the expected function type has.
 -- The front parameters of a function are all but the last one.
+-- closesNext is 1 when the next token is a closing parenthesis.
+def closesNext : List Token -> Nat := fun (tokens : List Token) =>
+  case tokens as self in List return Nat with
+  | nil => 0
+  | cons head tail => (
+      case head as token in Token return Nat with
+      | numberToken position number => 0
+      | stringToken position text => 0
+      | identifier position name => 0
+      | punctuation position mark => numberEq mark 41)
+
 def frontParams : List Param -> List Param := fun (params : List Param) =>
   case params as self in List return List Param with
   | nil => nil
@@ -1191,6 +1202,96 @@ and boundUnary : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Bindi
           case (unaryOf environment (partialClosure name (arrowType (dropCount Param Param (frontParams params) params) result) name values environment)) as shaped in Option return Worked Unary with
           | none => workError position eUnary
           | some op => worked op rest budget))))
+-- The function of fold or unfold is a name, or a parenthesized partial
+-- application. The bound arguments are the arguments written before the
+-- closing parenthesis; the form then checks the parameters that are left.
+and stepperTerm : Fuel -> Nat -> List Binding -> List Token -> Worked Stepper :=
+  fun (fuel : Fuel) (budget : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Stepper with
+  | fuelEnd => workError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case tokens as self in List return Worked Stepper with
+    | nil => liftParsed Stepper budget (stepperArgument environment tokens)
+    | cons head tail => (
+      case head as token in Token return Worked Stepper with
+      | numberToken position number => liftParsed Stepper budget (stepperArgument environment tokens)
+      | stringToken position text => liftParsed Stepper budget (stepperArgument environment tokens)
+      | identifier position name => liftParsed Stepper budget (stepperArgument environment tokens)
+      | punctuation position mark => (
+        case (natEq mark 40) as opening return Worked Stepper with
+        | 0 (x : prod ()) => workError position eStep
+        | 1 (x : prod ()) => (
+          case (partialStepper more budget environment tail) as inside in Worked return Worked Stepper with
+          | workError at message => workError at message
+          | worked op rest budget => liftParsed Stepper budget (closeParsed Stepper op rest)))))
+-- Inside the parentheses: a group, or the name of a function followed by
+-- its bound arguments.
+and partialStepper : Fuel -> Nat -> List Binding -> List Token -> Worked Stepper :=
+  fun (fuel : Fuel) (budget : Nat) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Stepper with
+  | fuelEnd => workError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case tokens as self in List return Worked Stepper with
+    | nil => workError 0 eStep
+    | cons head tail => (
+      case head as token in Token return Worked Stepper with
+      | numberToken position number => workError position eStep
+      | stringToken position text => workError position eStep
+      | punctuation position mark => (
+        case (natEq mark 40) as opening return Worked Stepper with
+        | 0 (x : prod ()) => workError position eStep
+        | 1 (x : prod ()) => stepperTerm more budget environment tokens)
+      | identifier position name => (
+        case (lookup name environment) as found in Option return Worked Stepper with
+        | none => workError position eStep
+        | some item => (
+          case item as known in Binding return Worked Stepper with
+          | binding other ty value => workError position eStep
+          | typeBinding other universe defined => workError position eStep
+          | arrowBinding other params result => workError position eStep
+          | funBinding other params result body => boundStepper more budget position name params result environment tail
+          | closureBinding other params result body captured => boundStepper more budget position name params result environment tail))))
+-- The bound arguments are checked in the caller scope, one per parameter,
+-- up to the closing parenthesis. A bound function argument is a plain name.
+and boundStepper : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Binding -> List Token -> Worked Stepper :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (name : Text) (params : List Param) (result : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Stepper with
+  | fuelEnd => workError position eFuel
+  | fuelMore more => (
+    case (natEq (hasTypeParam params) 1) as polymorphic return Worked Stepper with
+    | 1 (x : prod ()) => workError position eStep
+    | 0 (x : prod ()) => (
+      case (boundArguments more budget params environment tokens) as checked in Worked return Worked Stepper with
+      | workError at message => workError at message
+      | worked values rest budget => (
+        case (natEq (plainBound (takeCount Value Param values params) values) 0) as nested return Worked Stepper with
+        | 1 (x : prod ()) => workError position eTerm
+        | 0 (x : prod ()) => (
+          case (partialClosure name (arrowType (dropCount Value Param values params) result) name values environment) as made in Binding return Worked Stepper with
+          | binding other ty value => workError position eStep
+          | typeBinding other universe defined => workError position eStep
+          | arrowBinding other given target => workError position eStep
+          | funBinding other given target body => worked (stepper given target body (definitionScope other environment)) rest budget
+          | closureBinding other given target body scope => worked (stepper given target body (scopeList scope)) rest budget))))
+-- One bound argument per parameter, until the closing parenthesis or the
+-- last parameter.
+and boundArguments : Fuel -> Nat -> List Param -> List Binding -> List Token -> Worked (List Value) :=
+  fun (fuel : Fuel) (budget : Nat) (params : List Param) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked (List Value) with
+  | fuelEnd => workError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case params as self in List return Worked (List Value) with
+    | nil => worked nil tokens budget
+    | cons first others => (
+      case (natEq (closesNext tokens) 1) as closing return Worked (List Value) with
+      | 1 (x : prod ()) => worked nil tokens budget
+      | 0 (x : prod ()) => (
+        case (parseArguments more budget 1 (paramTypes (cons first nil)) environment tokens) as checked in Worked return Worked (List Value) with
+        | workError at message => workError at message
+        | worked values rest budget => (
+          case (boundArguments more budget others environment rest) as remaining in Worked return Worked (List Value) with
+          | workError at message => workError at message
+          | worked later after budget => worked (reverseListOnto Value later (reverseListOnto Value nil values)) after budget))))
 -- pure x lifts x. map, bind and filter name or partially apply a function,
 -- then take the source as an argument. In the check of a function body,
 -- map, bind and filter check the function and the source and give null.
@@ -1294,9 +1395,9 @@ and foldTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List Token 
     case (natEq atom 1) as bare return Worked Value with
     | 1 (x : prod ()) => workError position eParen
     | 0 (x : prod ()) => (
-      case (stepperArgument environment tokens) as named in Parsed return Worked Value with
-      | parseError at message => workError at message
-      | parsed op afterFunction => (
+      case (stepperTerm more budget environment tokens) as named in Worked return Worked Value with
+      | workError at message => workError at message
+      | worked op afterFunction budget => (
         case (natEq (namesFunction environment afterFunction) 1) as several return Worked Value with
         | 1 (x : prod ()) => foldValueTerm more budget position expected environment tokens
         | 0 (x : prod ()) => (
@@ -1354,9 +1455,9 @@ and unfoldTerm : Fuel -> Nat -> Nat -> Nat -> LType -> List Binding -> List Toke
           | 1 (x : prod ()) => unfoldValueTerm more budget position environment tokens
           | 0 (x : prod ()) => workError position eStructure)
       | 0 (x : prod ()) => (
-        case (stepperArgument environment tokens) as named in Parsed return Worked Value with
-        | parseError at message => workError at message
-        | parsed op afterFunction => (
+        case (stepperTerm more budget environment tokens) as named in Worked return Worked Value with
+        | workError at message => workError at message
+        | worked op afterFunction budget => (
           case (natEq (unfoldFits expected op) 1) as fits return Worked Value with
           | 0 (x : prod ()) => workError (firstPosition tokens) eTerm
           | 1 (x : prod ()) => (
@@ -1465,9 +1566,9 @@ and unfoldValueTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked
   case fuel as guard in Fuel return Worked Value with
   | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (stepperArgument environment tokens) as named in Parsed return Worked Value with
-    | parseError at message => workError at message
-    | parsed op afterFunction => (
+    case (stepperTerm more budget environment tokens) as named in Worked return Worked Value with
+    | workError at message => workError at message
+    | worked op afterFunction budget => (
       case (natEq (unfoldValueFits op) 1) as fits return Worked Value with
       | 0 (x : prod ()) => workError (firstPosition tokens) eTerm
       | 1 (x : prod ()) => (
