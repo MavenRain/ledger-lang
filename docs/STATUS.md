@@ -109,6 +109,12 @@ not complete the M0 milestone in `SPEC.md`.
   is checked at the argument against the expected result type, with each
   binder bound to null. The parameter keeps the scope of the application.
   A bare `fun` argument needs parentheses.
+- Inline bound arguments. A partial application can bind a parameter of a
+  function type with a parenthesized `(fun (x : A) .. => body)`. This applies
+  to a partial application that is a function argument, the function of a
+  structure form, or the function of `fold`. The body is checked at the
+  partial application against the parameter type. The closure keeps the
+  scope of the partial application.
 
 ## Remaining M0 work
 
@@ -145,8 +151,9 @@ not complete the M0 milestone in `SPEC.md`.
 
 - A function argument is a name, optionally grouped, or a parenthesized
   partial application binding leading parameters. The remaining signature
-  must match the expected type. Bound function arguments must be names,
-  optionally grouped, and not inline functions. Partial applications of
+  must match the expected type. A bound function argument is a name,
+  optionally grouped, or a parenthesized inline function. It cannot be a
+  partial application. Partial applications of
   functions with type parameters are unsupported.
   A function of type `WritePath`
   is a function of the program. The compiler does not supply the write

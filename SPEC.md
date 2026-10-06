@@ -94,9 +94,11 @@ also be an inline `fun` with one or more binders of data types. The binders
 must match the parameters of the expected function type, and the body is
 checked at the argument against the expected result type with each binder
 bound to null. An inline argument keeps the scope of the application, so its
-body refers to the definitions and parameters around the application. A
-bound argument of a partial application is not an inline `fun`. The body of
-the function can apply the parameter, pass it to another function, or give
+body refers to the definitions and parameters around the application.
+A partial application can also bind a parameter of a function type with a
+parenthesized inline `fun`. Its body is checked at the partial application
+and keeps the scope of the partial application.
+The body of the function can apply the parameter, pass it to another function, or give
 it to `map`, `bind`, `filter`, `either`, `fold` and `unfold`. Structure forms still require a name for their function argument.
 A function type with a type parameter is not a parameter type.
 

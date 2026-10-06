@@ -78,10 +78,21 @@ body that uses a parameter of the enclosing function, an earlier
 definition, a function parameter or a structure form, a shadowed
 definition, and the example file. Refusals cover a bare `fun` argument,
 binders that do not match the expected function type, a `fun` term where a
-data type is expected, an inline bound argument of a partial application, a
-mistyped body, a missing `=>`, a reserved binder name, an unknown name in
+data type is expected, a partial application bound by a partial application,
+a mistyped body, a missing `=>`, a reserved binder name, an unknown name in
 the body, an unclosed parenthesis, and a mistyped body in a function that
 is not applied.
+
+The inline bound argument review adds five cases in
+`test/inline-bound.test.mjs`. They check a partial application that binds an
+inline function as a function argument, with a grouped inline function, at a
+later parameter, as the function of `map`, and as the function of `fold`.
+They check a body that uses a parameter of the enclosing function, a
+function parameter, a partial application in a structure form of a function
+body, a shadowed definition, and the example file. Refusals cover binders
+that do not match the parameter type, a bare `fun`, a mistyped body, an
+unknown name in the body, and a partial application bound by a partial
+application.
 
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for

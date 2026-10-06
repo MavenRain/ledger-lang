@@ -168,6 +168,10 @@ A function argument can also be an inline function, as in
 `apply (fun (x : Nat) => x) 5`. The binders must match the parameters of the
 expected function type. The body sees the definitions and parameters around
 the application. See [examples/inline-argument.ledger](examples/inline-argument.ledger).
+A partial application can bind an inline function, as in
+`use (apply (fun (x : Nat) => x))` or `map (apply (fun (x : Nat) => 2)) xs`.
+The body sees the definitions and parameters around the partial application.
+See [examples/inline-bound.ledger](examples/inline-bound.ledger).
 For example:
 
 ```text

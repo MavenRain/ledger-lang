@@ -292,42 +292,6 @@ def rec valuesOfList : List Value -> Values := fun (items : List Value) =>
   | nil => valuesEnd
   | cons head tail => valuesItem head (valuesOfList tail)
 
--- A partial application `(g a1 .. ak)` binds the first k parameters of g in
--- the scope of the closure. A bound argument of a function type is a name.
-def boundBinding : Text -> LType -> Value -> List Binding -> Binding :=
-  fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
-  case (natEq (isArrowType ty) 1) as higher return Binding with
-  | 0 (x : prod ()) => binding name ty value
-  | 1 (x : prod ()) => (
-      case (asText value) as named in Option return Binding with
-      | none => opaqueClosure name ty
-      | some target => closureOfName name ty target caller)
-
-def rec bindBound : List Param -> List Value -> List Binding -> List Binding -> List Binding :=
-  fun (params : List Param) (values : List Value) (caller : List Binding) (scope : List Binding) =>
-  case params as self in List return List Binding with
-  | nil => scope
-  | cons head tail => (
-      case head as item in Param return List Binding with
-      | param bound ty => bindBound tail (argumentTail values) caller
-          (cons (boundBinding bound ty (argumentHead values) caller) scope))
-
-def partialClosure : Text -> LType -> Text -> List Value -> List Binding -> Binding :=
-  fun (name : Text) (ty : LType) (target : Text) (bound : List Value) (caller : List Binding) =>
-  case (lookup target caller) as found in Option return Binding with
-  | none => opaqueClosure name ty
-  | some item => (
-      case item as known in Binding return Binding with
-      | binding other given held => opaqueClosure name ty
-      | typeBinding other universe defined => opaqueClosure name ty
-      | arrowBinding other params result => opaqueClosure name ty
-      | funBinding other params result body =>
-          closureBinding name (dropCount Value Param bound params) result body
-            (scopeOf (bindBound (takeCount Value Param bound params) bound caller (definitionScope other caller)))
-      | closureBinding other params result body scope =>
-          closureBinding name (dropCount Value Param bound params) result body
-            (scopeOf (bindBound (takeCount Value Param bound params) bound caller (scopeList scope))))
-
 -- An inline function argument is a value: the names of its binders, then
 -- the tokens of its body. A token is its kind, its position and its payload.
 -- The head of the value is not a text, so it is not a partial application.
@@ -411,6 +375,68 @@ def inlineClosure : Text -> LType -> Value -> Values -> List Binding -> Binding 
   closureBinding name (inlineParams (inlineParts names) (arrowParams ty)) (arrowResult ty)
     (inlineTokens body) (scopeOf caller)
 
+-- isInline is 1 when a value is an inline function argument: a list whose
+-- head is not a text.
+def isInline : Value -> Nat := fun (value : Value) =>
+  case (asValues value) as parts in Option return Nat with
+  | none => 0
+  | some items => (
+      case items as self in Values return Nat with
+      | valuesEnd => 0
+      | valuesItem head rest => (
+          case (asText head) as applied in Option return Nat with
+          | none => 1
+          | some target => 0))
+
+-- A bound argument of a partial application that is not a name is an inline
+-- function. It keeps the scope where the checker checked the application.
+def inlineBound : Text -> LType -> Value -> List Binding -> Binding :=
+  fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
+  case (asValues value) as parts in Option return Binding with
+  | none => opaqueClosure name ty
+  | some items => (
+      case items as self in Values return Binding with
+      | valuesEnd => opaqueClosure name ty
+      | valuesItem head rest => select Binding (isInline value)
+          (inlineClosure name ty head rest caller) (opaqueClosure name ty))
+
+-- A partial application `(g a1 .. ak)` binds the first k parameters of g in
+-- the scope of the closure. A bound argument of a function type is a name
+-- or an inline function.
+def boundBinding : Text -> LType -> Value -> List Binding -> Binding :=
+  fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
+  case (natEq (isArrowType ty) 1) as higher return Binding with
+  | 0 (x : prod ()) => binding name ty value
+  | 1 (x : prod ()) => (
+      case (asText value) as named in Option return Binding with
+      | none => inlineBound name ty value caller
+      | some target => closureOfName name ty target caller)
+
+def rec bindBound : List Param -> List Value -> List Binding -> List Binding -> List Binding :=
+  fun (params : List Param) (values : List Value) (caller : List Binding) (scope : List Binding) =>
+  case params as self in List return List Binding with
+  | nil => scope
+  | cons head tail => (
+      case head as item in Param return List Binding with
+      | param bound ty => bindBound tail (argumentTail values) caller
+          (cons (boundBinding bound ty (argumentHead values) caller) scope))
+
+def partialClosure : Text -> LType -> Text -> List Value -> List Binding -> Binding :=
+  fun (name : Text) (ty : LType) (target : Text) (bound : List Value) (caller : List Binding) =>
+  case (lookup target caller) as found in Option return Binding with
+  | none => opaqueClosure name ty
+  | some item => (
+      case item as known in Binding return Binding with
+      | binding other given held => opaqueClosure name ty
+      | typeBinding other universe defined => opaqueClosure name ty
+      | arrowBinding other params result => opaqueClosure name ty
+      | funBinding other params result body =>
+          closureBinding name (dropCount Value Param bound params) result body
+            (scopeOf (bindBound (takeCount Value Param bound params) bound caller (definitionScope other caller)))
+      | closureBinding other params result body scope =>
+          closureBinding name (dropCount Value Param bound params) result body
+            (scopeOf (bindBound (takeCount Value Param bound params) bound caller (scopeList scope))))
+
 -- The value of a function argument is a name, the name of a function
 -- followed by its bound arguments, or an inline function.
 def closureOf : Text -> LType -> Value -> List Binding -> Binding :=
@@ -450,7 +476,8 @@ def bindParams : List Param -> List Value -> List Binding -> List Binding :=
   fun (params : List Param) (values : List Value) (environment : List Binding) =>
   bindArguments nil params values environment
 
--- plainBound is 1 when every bound argument of a function type is a name.
+-- plainBound is 1 when every bound argument of a function type is a name or
+-- an inline function. A bound partial application is not supported.
 def rec plainBound : List Param -> List Value -> Nat :=
   fun (params : List Param) (values : List Value) =>
   case params as self in List return Nat with
@@ -462,7 +489,7 @@ def rec plainBound : List Param -> List Value -> Nat :=
           | 0 (x : prod ()) => plainBound tail (argumentTail values)
           | 1 (x : prod ()) => (
               case (asText (argumentHead values)) as named in Option return Nat with
-              | none => 0
+              | none => select Nat (isInline (argumentHead values)) (plainBound tail (argumentTail values)) 0
               | some target => plainBound tail (argumentTail values))))
 
 -- boundParams gives the parameters of a function that a partial application
@@ -1229,8 +1256,8 @@ and parseTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Wor
 -- function type, or a parenthesized partial application `(g a1 .. ak)` of a
 -- function whose last parameters and result form the expected function type.
 -- The bound arguments are checked in the environment of the application. A
--- bound argument of a function type is a name. A bare partial application
--- needs parentheses.
+-- bound argument of a function type is a name or a parenthesized inline
+-- function. A bare partial application needs parentheses.
 and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -> LType -> List Binding -> List Token -> Worked Value :=
   fun (fuel : Fuel) (budget : Nat) (atom : Nat) (position : Nat) (expected : LType) (name : Text) (params : List Param) (result : LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Value with
@@ -1384,8 +1411,8 @@ and inlineUnary : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> W
                           (unary label ty wanted (takeCount Token Token (dropCount Token Token rest body) body) environment)
                           rest budget))))))))))
 -- The bound arguments are checked in the caller scope against the front
--- parameters. A bound function argument is a plain name. The closure
--- keeps the last parameter.
+-- parameters. A bound function argument is a name or an inline function.
+-- The closure keeps the last parameter.
 and boundUnary : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Binding -> List Token -> Worked Unary :=
   fun (fuel : Fuel) (budget : Nat) (position : Nat) (name : Text) (params : List Param) (result : LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Unary with
@@ -1475,7 +1502,8 @@ and inlineStepper : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token ->
           (stepper params (inlineResult mode expected params) (takeCount Token Token (dropCount Token Token rest body) body) environment)
           rest budget))
 -- The bound arguments are checked in the caller scope, one per parameter,
--- up to the closing parenthesis. A bound function argument is a plain name.
+-- up to the closing parenthesis. A bound function argument is a name
+-- or an inline function.
 and boundStepper : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Binding -> List Token -> Worked Stepper :=
   fun (fuel : Fuel) (budget : Nat) (position : Nat) (name : Text) (params : List Param) (result : LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Stepper with

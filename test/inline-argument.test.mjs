@@ -54,7 +54,7 @@ test('an inline argument must fit the parameter type', () => {
   refused(`${prefix}def n : Nat := both (fun (a : Nat) => a)`, typeError);
   refused(`${prefix}def n : Nat := (fun (x : Nat) => x)`, /./);
   const use = 'def use : (h : Rule) -> Nat := fun (h : Rule) => h 1 ';
-  refused(`${prefix}${use}def n : Nat := use (apply (fun (x : Nat) => x))`, typeError);
+  refused(`${prefix}${use}def n : Nat := use (apply (apply (fun (x : Nat) => x)))`, typeError);
 });
 
 test('the body of an inline argument is checked at the argument', () => {
