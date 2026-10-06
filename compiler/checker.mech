@@ -328,8 +328,91 @@ def partialClosure : Text -> LType -> Text -> List Value -> List Binding -> Bind
           closureBinding name (dropCount Value Param bound params) result body
             (scopeOf (bindBound (takeCount Value Param bound params) bound caller (scopeList scope))))
 
--- The value of a function argument is a name, or the name of a function
--- followed by its bound arguments.
+-- An inline function argument is a value: the names of its binders, then
+-- the tokens of its body. A token is its kind, its position and its payload.
+-- The head of the value is not a text, so it is not a partial application.
+def inlineItem : Nat -> Nat -> Value -> Value := fun (kind : Nat) (position : Nat) (payload : Value) =>
+  valueItems (valuesItem (valueNat kind) (valuesItem (valueNat position) (valuesItem payload valuesEnd)))
+
+def inlineTokenValue : Token -> Value := fun (token : Token) =>
+  case token as self in Token return Value with
+  | identifier position name => inlineItem 0 position (valueText name)
+  | numberToken position number => inlineItem 1 position (valueNat number)
+  | stringToken position text => inlineItem 2 position (valueText text)
+  | punctuation position mark => inlineItem 3 position (valueNat mark)
+
+def rec inlineTokenValues : List Token -> Values := fun (tokens : List Token) =>
+  case tokens as self in List return Values with
+  | nil => valuesEnd
+  | cons head tail => valuesItem (inlineTokenValue head) (inlineTokenValues tail)
+
+def rec inlineNames : List Param -> Values := fun (params : List Param) =>
+  case params as self in List return Values with
+  | nil => valuesEnd
+  | cons head tail => (
+      case head as item in Param return Values with
+      | param name ty => valuesItem (valueText name) (inlineNames tail))
+
+def inlineValue : List Param -> List Token -> Value := fun (params : List Param) (body : List Token) =>
+  valueItems (valuesItem (valueItems (inlineNames params)) (inlineTokenValues body))
+
+def inlineNat : Value -> Nat := fun (value : Value) =>
+  case (asNat value) as number in Option return Nat with
+  | none => 0
+  | some given => given
+
+def inlineText : Value -> Text := fun (value : Value) =>
+  case (asText value) as named in Option return Text with
+  | none => textEnd
+  | some given => given
+
+def inlineToken : Nat -> Nat -> Value -> Token := fun (kind : Nat) (position : Nat) (payload : Value) =>
+  case (natEq kind 0) as named return Token with
+  | 1 (x : prod ()) => identifier position (inlineText payload)
+  | 0 (x : prod ()) => (
+    case (natEq kind 1) as counted return Token with
+    | 1 (x : prod ()) => numberToken position (inlineNat payload)
+    | 0 (x : prod ()) => (
+      case (natEq kind 2) as quoted return Token with
+      | 1 (x : prod ()) => stringToken position (inlineText payload)
+      | 0 (x : prod ()) => punctuation position (inlineNat payload)))
+
+def inlineParts : Value -> List Value := fun (value : Value) =>
+  case (asValues value) as items in Option return List Value with
+  | none => nil
+  | some parts => listOfValues parts
+
+def inlineTokenOf : List Value -> Token := fun (parts : List Value) =>
+  inlineToken (inlineNat (argumentHead parts)) (inlineNat (argumentHead (argumentTail parts)))
+    (argumentHead (argumentTail (argumentTail parts)))
+
+def rec inlineTokens : Values -> List Token := fun (items : Values) =>
+  case items as self in Values return List Token with
+  | valuesEnd => nil
+  | valuesItem head rest => cons (inlineTokenOf (inlineParts head)) (inlineTokens rest)
+
+-- The binders of an inline argument take the parameter types of the
+-- function type that the checker matched at the argument.
+def rec inlineParams : List Value -> List Param -> List Param :=
+  fun (names : List Value) (params : List Param) =>
+  case names as self in List return List Param with
+  | nil => nil
+  | cons head tail => (
+      case params as others in List return List Param with
+      | nil => nil
+      | cons first rest => (
+          case first as item in Param return List Param with
+          | param label ty => cons (param (inlineText head) ty) (inlineParams tail rest)))
+
+-- An inline argument keeps the scope of the application, where the checker
+-- checked it.
+def inlineClosure : Text -> LType -> Value -> Values -> List Binding -> Binding :=
+  fun (name : Text) (ty : LType) (names : Value) (body : Values) (caller : List Binding) =>
+  closureBinding name (inlineParams (inlineParts names) (arrowParams ty)) (arrowResult ty)
+    (inlineTokens body) (scopeOf caller)
+
+-- The value of a function argument is a name, the name of a function
+-- followed by its bound arguments, or an inline function.
 def closureOf : Text -> LType -> Value -> List Binding -> Binding :=
   fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
   case (asText value) as named in Option return Binding with
@@ -342,7 +425,7 @@ def closureOf : Text -> LType -> Value -> List Binding -> Binding :=
           | valuesEnd => opaqueClosure name ty
           | valuesItem head rest => (
               case (asText head) as applied in Option return Binding with
-              | none => opaqueClosure name ty
+              | none => inlineClosure name ty head rest caller
               | some target => partialClosure name ty target (listOfValues rest) caller)))
 
 def bindParam : Text -> LType -> Value -> List Binding -> Binding :=
@@ -1094,6 +1177,12 @@ and parseTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Wor
               | workError at message => workError at message
               | worked value rest budget => liftParsed Value budget (closeParsed Value value rest)))
       | identifier position name => (
+          case (natEq (boolAnd (sameText name sfun) (isArrowType expected)) 1) as inlined return Worked Value with
+          | 1 (x : prod ()) => (
+              case (natEq atom 1) as bare return Worked Value with
+              | 1 (x : prod ()) => workError position eParen
+              | 0 (x : prod ()) => inlineArgument more budget position expected environment tail)
+          | 0 (x : prod ()) => (
           case (lookup name environment) as found in Option return Worked Value with
           | some item => (
               case item as known in Binding return Worked Value with
@@ -1135,7 +1224,7 @@ and parseTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Wor
                               case (evaluatePlan selected values) as evaluated in Result return Worked Value with
                               | failure at message => select (Worked Value) (checkingBody environment)
                                   (worked valueNull rest budget) (workError position message)
-                              | success value => worked value rest budget))))))))
+                              | success value => worked value rest budget)))))))))
 -- A function argument is the name of a function whose type is the expected
 -- function type, or a parenthesized partial application `(g a1 .. ak)` of a
 -- function whose last parameters and result form the expected function type.
@@ -1167,7 +1256,26 @@ and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -
               | worked values rest budget => select (Worked Value) (plainBound (cons first others) values)
                   (worked (valueItems (valuesOfList (cons (valueText name) values))) rest budget)
                   (workError position eTerm)))))))
-and parseArguments : Fuel -> Nat -> Nat -> List LType -> List Binding -> List Token -> Worked (List Value) :=
+-- An inline function argument `(fun (x : A) .. => body)` has one or more
+-- binders of data types that match the parameters of the expected function
+-- type. Its body is checked against the expected result type with each
+-- binder bound to null. The value keeps the binder names and the body tokens.
+and inlineArgument : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (position : Nat) (expected : LType) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
+  | fuelMore more => (
+    case (inlineBinders more environment nil tokens) as binders in Parsed return Worked Value with
+    | parseError spot message => workError spot message
+    | parsed params body => (
+      case (natEq (sameType expected (arrowType params (arrowResult expected))) 1) as fits return Worked Value with
+      | 0 (x : prod ()) => workError position eTerm
+      | 1 (x : prod ()) => (
+        case (parseTerm more budget 0 (arrowResult expected) (bindParams params nil (cons checkMarker environment)) body) as checked in Worked return Worked Value with
+        | workError spot message => workError spot message
+        | worked value rest budget => worked
+            (inlineValue params (takeCount Token Token (dropCount Token Token rest body) body)) rest budget)))
+and parseArguments :Fuel -> Nat -> Nat -> List LType -> List Binding -> List Token -> Worked (List Value) :=
   fun (fuel : Fuel) (budget : Nat) (atom : Nat) (types : List LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked (List Value) with
   | fuelEnd => workError (firstPosition tokens) eFuel

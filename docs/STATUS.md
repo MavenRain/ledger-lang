@@ -103,11 +103,16 @@ not complete the M0 milestone in `SPEC.md`.
   and the layer type of `S` for `unfold` into `Value`. The form checks the
   binders against its source or its seed. The body is checked at the form
   with each binder bound to null.
+- Inline function arguments. A function argument can be
+  `(fun (x : A) .. => body)` with one or more binders of data types. The
+  binders must match the parameters of the expected function type. The body
+  is checked at the argument against the expected result type, with each
+  binder bound to null. The parameter keeps the scope of the application.
+  A bare `fun` argument needs parentheses.
 
 ## Remaining M0 work
 
-1. Add dependent function types and inline functions as arguments of
-   functions. Extend
+1. Add dependent function types. Extend
    partial application to type parameters and nested function expressions.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
@@ -128,7 +133,7 @@ not complete the M0 milestone in `SPEC.md`.
   over `Value`. `map`, `bind` and `filter` also take an inline `fun` with one
   binder. `fold` and `unfold` also take an inline `fun` with one or more
   binders, and so do the five functions of a fold over `Value`. A function
-  argument of a function is not a `fun` term.
+  argument of a function can also be a `fun` term.
 - Over `Value`, `fold` and `unfold` use one step of the depth fuel for each
   level and for each earlier child of the same list. The limit of `unfold`
   into `Value` counts applications, not elements or levels. A fold over
@@ -141,8 +146,8 @@ not complete the M0 milestone in `SPEC.md`.
 - A function argument is a name, optionally grouped, or a parenthesized
   partial application binding leading parameters. The remaining signature
   must match the expected type. Bound function arguments must be names,
-  optionally grouped. Inline functions as arguments of a function, and
-  partial applications of functions with type parameters, are unsupported.
+  optionally grouped, and not inline functions. Partial applications of
+  functions with type parameters are unsupported.
   A function of type `WritePath`
   is a function of the program. The compiler does not supply the write
   path of M1.

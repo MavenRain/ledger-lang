@@ -87,12 +87,17 @@ an inline `fun` with one binder of a data type. Its body is checked against
 the result type the form expects and keeps the scope of the form. The function
 of `fold` and `unfold`, and each of the five functions of a fold over `Value`,
 can also be an inline `fun` with one or more binders of data types; the form
-gives its result type. The parameter keeps the scope
-of its argument, so the body of the argument refers to the definitions
-before it and not to the parameters of the caller. The body of the function
-can apply the parameter, pass it to another function, or give it to `map`,
-`bind`, `filter`, `either`, `fold` and `unfold`. An inline `fun` term is not an
-argument. Structure forms still require a name for their function argument.
+gives its result type. A named or partially applied argument keeps the
+scope of its function, so its body refers to the definitions before that
+function and not to the parameters of the caller. A function argument can
+also be an inline `fun` with one or more binders of data types. The binders
+must match the parameters of the expected function type, and the body is
+checked at the argument against the expected result type with each binder
+bound to null. An inline argument keeps the scope of the application, so its
+body refers to the definitions and parameters around the application. A
+bound argument of a partial application is not an inline `fun`. The body of
+the function can apply the parameter, pass it to another function, or give
+it to `map`, `bind`, `filter`, `either`, `fold` and `unfold`. Structure forms still require a name for their function argument.
 A function type with a type parameter is not a parameter type.
 
 ## 4. Structures

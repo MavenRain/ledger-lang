@@ -145,8 +145,8 @@ bind the leading parameters, and the remaining parameters and result must
 match the expected function type. Bound values are evaluated in the caller's
 scope. A bound function argument must be a name, optionally grouped; that
 name can be a parameter holding a partial application. A function with type
-parameters cannot be partially applied, and inline `fun` arguments are
-unsupported. The function of `map`, `bind` and `filter` can also be a
+parameters cannot be partially applied. The function of `map`, `bind` and
+`filter` can also be a
 parenthesized partial application that binds all but the last parameter, as
 in `map (pick 1) xs`. See [examples/form-partial.ledger](examples/form-partial.ledger).
 The function of `fold` and `unfold` can also be a parenthesized partial
@@ -164,6 +164,10 @@ take an inline function with one or more binders, as in
 `fold (fun (x : Nat) (acc : List Nat) => cons x acc) nil xs`. The binders
 give the parameter types and the form gives the result type.
 See [examples/inline-step.ledger](examples/inline-step.ledger).
+A function argument can also be an inline function, as in
+`apply (fun (x : Nat) => x) 5`. The binders must match the parameters of the
+expected function type. The body sees the definitions and parameters around
+the application. See [examples/inline-argument.ledger](examples/inline-argument.ledger).
 For example:
 
 ```text
