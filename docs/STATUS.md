@@ -81,6 +81,9 @@ not complete the M0 milestone in `SPEC.md`.
   binds all but the last parameter. `fold` and `unfold` take a name or a
   partial application whose written arguments bind the leading parameters,
   as do the five functions of a fold over `Value`.
+  `map`, `bind` and `filter` also take an inline `fun` with one binder of a
+  data type. The body is checked once against the result type of the form,
+  with the binder bound to null, and keeps the scope of the form.
   The parameter keeps the argument's definition scope and can be
   applied, forwarded, or used by a structure or algebra form. Function
   types with type parameters cannot be parameter types.
@@ -95,7 +98,8 @@ not complete the M0 milestone in `SPEC.md`.
 
 ## Remaining M0 work
 
-1. Add dependent function types and inline functions as arguments. Extend
+1. Add dependent function types and inline functions as arguments of
+   functions and of `fold` and `unfold`. Extend
    partial application to type parameters and nested function expressions.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
@@ -113,7 +117,9 @@ not complete the M0 milestone in `SPEC.md`.
   512 steps. Thus a long list made by `bind`, or a `fold` over a large `Nat`,
   can stop with a fuel error. Every form takes a function name or a
   parenthesized partial application, including the five functions of a fold
-  over `Value`. No form takes a `fun` term.
+  over `Value`. `map`, `bind` and `filter` also take an inline `fun` with one
+  binder. `fold` and `unfold` do not take a `fun` term, and a function
+  argument of a function is not a `fun` term.
 - Over `Value`, `fold` and `unfold` use one step of the depth fuel for each
   level and for each earlier child of the same list. The limit of `unfold`
   into `Value` counts applications, not elements or levels. A fold over
@@ -126,8 +132,9 @@ not complete the M0 milestone in `SPEC.md`.
 - A function argument is a name, optionally grouped, or a parenthesized
   partial application binding leading parameters. The remaining signature
   must match the expected type. Bound function arguments must be names,
-  optionally grouped. Inline functions and partial applications of functions
-  with type parameters are unsupported. A function of type `WritePath`
+  optionally grouped. Inline functions as arguments of a function, and
+  partial applications of functions with type parameters, are unsupported.
+  A function of type `WritePath`
   is a function of the program. The compiler does not supply the write
   path of M1.
 - Hash wraps a Text value. The compiler does not compute or validate digest

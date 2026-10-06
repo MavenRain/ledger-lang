@@ -156,6 +156,9 @@ See [examples/fold-partial.ledger](examples/fold-partial.ledger).
 The five functions of a fold over `Value` can also be partial applications,
 as in `fold (pickK 7) onFlag onText onItems onAttrs 0 v`.
 See [examples/value-fold-partial.ledger](examples/value-fold-partial.ledger).
+`map`, `bind` and `filter` also take an inline function with one binder,
+as in `map (fun (x : Nat) => cons x nil) xs`. The body sees the definitions
+and parameters around the form. See [examples/inline-fun.ledger](examples/inline-fun.ledger).
 For example:
 
 ```text

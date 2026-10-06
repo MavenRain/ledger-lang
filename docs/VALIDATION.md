@@ -4,8 +4,8 @@ Date: 2026-10-06. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 451 integration tests with zero failures. The test
-runner reported 6.2 seconds. In the isolated checkout the host was selected with
+Wasm reactor, and runs 462 integration tests with zero failures. The test
+runner reported 10.1 seconds. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
 The partial application review adds eight cases in `test/partial.test.mjs`.
@@ -45,6 +45,17 @@ that a computed argument to the first function is evaluated once and that
 multiple computed arguments still share the same budget. Refusals cover a mistyped bound
 argument, partial applications that do not fit their position, type
 parameters, a data name, a fully bound function, and an unclosed parenthesis.
+
+The inline function review adds five cases in `test/inline-fun.test.mjs`.
+They check `map`, `bind` and `filter` over an inline `fun` with one binder,
+over a list and an option, a body that applies an earlier function and a
+parameter of the enclosing function, a binder that shadows a definition, a
+grouped inline function, a nested inline function, a definition whose body
+is only checked, and the example file. Refusals cover a reserved binder
+name, a missing `=>`, two binders, a mistyped body, a binder that does not
+fit the source, a filter body that is not a `Flag`, a bare `fun` without
+parentheses, a universe binder, an arrow binder, an unclosed parenthesis, an
+inline function given to `fold`, and an unknown name in the body.
 
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for
