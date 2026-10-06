@@ -95,11 +95,19 @@ not complete the M0 milestone in `SPEC.md`.
   type for each type parameter, and the checker replaces all type parameters
   in one step. A binder can give a new name to a type parameter. A type
   definition of a function type with a type parameter is in `Type 1`.
+- Inline functions of `fold` and `unfold`. The function of `fold` or
+  `unfold`, and each of the five functions of a fold over `Value`, can be
+  `(fun (x : A) .. => body)`. The binders give the parameter types. The form
+  gives the result type: the declared type for `fold`, `Option (Prod E S)`
+  or `Option S` for `unfold` with the seed type `S` of the first binder,
+  and the layer type of `S` for `unfold` into `Value`. The form checks the
+  binders against its source or its seed. The body is checked at the form
+  with each binder bound to null.
 
 ## Remaining M0 work
 
 1. Add dependent function types and inline functions as arguments of
-   functions and of `fold` and `unfold`. Extend
+   functions. Extend
    partial application to type parameters and nested function expressions.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
@@ -118,7 +126,8 @@ not complete the M0 milestone in `SPEC.md`.
   can stop with a fuel error. Every form takes a function name or a
   parenthesized partial application, including the five functions of a fold
   over `Value`. `map`, `bind` and `filter` also take an inline `fun` with one
-  binder. `fold` and `unfold` do not take a `fun` term, and a function
+  binder. `fold` and `unfold` also take an inline `fun` with one or more
+  binders, and so do the five functions of a fold over `Value`. A function
   argument of a function is not a `fun` term.
 - Over `Value`, `fold` and `unfold` use one step of the depth fuel for each
   level and for each earlier child of the same list. The limit of `unfold`

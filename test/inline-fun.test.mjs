@@ -78,7 +78,7 @@ test('an inline function needs parentheses, one data binder, and a structure for
   } });
   const folded = `${prefix}def n : Nat := fold (fun (x : Nat) => x) 0 xs`;
   assert.deepEqual(run(folded), { error: {
-    byte: folded.lastIndexOf('fun'), message: 'expected the name of a function',
+    byte: folded.lastIndexOf('(fun'), message: 'term does not have the declared type',
   } });
   assert.ok(run(`${prefix}def ys : List Nat := map (fun (x : Nat) (y : Nat) => x) xs`).error);
   assert.ok(run(`${prefix}def ys : List Nat := map (fun (f : (n : Nat) -> Nat) => 1) xs`).error);

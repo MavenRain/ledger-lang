@@ -55,7 +55,21 @@ is only checked, and the example file. Refusals cover a reserved binder
 name, a missing `=>`, two binders, a mistyped body, a binder that does not
 fit the source, a filter body that is not a `Flag`, a bare `fun` without
 parentheses, a universe binder, an arrow binder, an unclosed parenthesis, an
-inline function given to `fold`, and an unknown name in the body.
+inline function with one binder given to `fold`, and an unknown name in the
+body.
+
+The inline fold review adds seven cases in `test/inline-step.test.mjs`.
+They check `fold` over a list and over `Nat`, `unfold` into a list and into
+`Value`, and each of the five functions of a fold over `Value`, with inline
+functions that are grouped, nested, use a parameter of the enclosing
+function or shadow a definition, and the example file. Refusals cover
+binders that do not fit the source, a mistyped body, a reserved binder name,
+a universe binder, a missing `=>`, an `unfold` body that does not give the
+seed type, an unclosed parenthesis, and an unknown name in the body.
+Regressions reject repeated binder names, including on an empty source,
+and outer type aliases or `Kind` indices shadowed by an earlier binder.
+A binder can use an outer alias in its own annotation, and its scope does
+not leak into later definitions.
 
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for

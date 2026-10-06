@@ -84,7 +84,10 @@ arguments bind the leading parameters; the parameters that are left must fit
 the form. Each of the five functions of a fold over `Value` is such a name or
 partial application. The function of `map`, `bind` and `filter` can also be
 an inline `fun` with one binder of a data type. Its body is checked against
-the result type the form expects and keeps the scope of the form. The parameter keeps the scope
+the result type the form expects and keeps the scope of the form. The function
+of `fold` and `unfold`, and each of the five functions of a fold over `Value`,
+can also be an inline `fun` with one or more binders of data types; the form
+gives its result type. The parameter keeps the scope
 of its argument, so the body of the argument refers to the definitions
 before it and not to the parameters of the caller. The body of the function
 can apply the parameter, pass it to another function, or give it to `map`,

@@ -159,6 +159,11 @@ See [examples/value-fold-partial.ledger](examples/value-fold-partial.ledger).
 `map`, `bind` and `filter` also take an inline function with one binder,
 as in `map (fun (x : Nat) => cons x nil) xs`. The body sees the definitions
 and parameters around the form. See [examples/inline-fun.ledger](examples/inline-fun.ledger).
+`fold` and `unfold`, and each of the five functions of a fold over `Value`,
+take an inline function with one or more binders, as in
+`fold (fun (x : Nat) (acc : List Nat) => cons x acc) nil xs`. The binders
+give the parameter types and the form gives the result type.
+See [examples/inline-step.ledger](examples/inline-step.ledger).
 For example:
 
 ```text
