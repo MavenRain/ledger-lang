@@ -146,7 +146,10 @@ match the expected function type. Bound values are evaluated in the caller's
 scope. A bound function argument must be a name, optionally grouped; that
 name can be a parameter holding a partial application. A function with type
 parameters cannot be partially applied, and inline `fun` arguments are
-unsupported. For example:
+unsupported. The function of `map`, `bind` and `filter` can also be a
+parenthesized partial application that binds all but the last parameter, as
+in `map (pick 1) xs`. See [examples/form-partial.ledger](examples/form-partial.ledger).
+For example:
 
 ```text
 def Rule : Type 0 := (n : Nat) -> Nat

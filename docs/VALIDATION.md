@@ -17,6 +17,14 @@ type parameters, and nested partial function arguments. The existing
 higher-order test keeps all five rejection cases and checks the parentheses
 diagnostic for a compatible function with an unbound prefix.
 
+The form partial application review adds five cases in
+`test/form-partial.test.mjs`. They check `map`, `bind` and `filter` over a
+partial application with literal, computed, caller-scope and function-name
+bound arguments, grouped and one-parameter functions, partial application of
+a function parameter, and the example file. Refusals cover mistyped, nested,
+missing and extra bound arguments, type parameters, data names and the
+unchanged bare form.
+
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for
 `Option` and `Value` payloads, UTF-8, escaping, control and DEL bytes, Nat

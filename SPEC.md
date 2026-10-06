@@ -76,7 +76,9 @@ the remaining parameters and result must match the expected function type.
 Bound values are evaluated in the caller's scope. A bound function argument
 must be a name, optionally grouped, which can itself name a parameter
 holding a partial application. Partial application of a function with type
-parameters is unsupported. The parameter keeps the scope
+parameters is unsupported. The function of `map`, `bind` and `filter` is a
+name or a parenthesized partial application that binds all but the last
+parameter of a function without type parameters. The parameter keeps the scope
 of its argument, so the body of the argument refers to the definitions
 before it and not to the parameters of the caller. The body of the function
 can apply the parameter, pass it to another function, or give it to `map`,
