@@ -107,18 +107,6 @@ def startsParam : List Token -> Nat := fun (tokens : List Token) =>
   boolAnd (numberEq (markOf tokens) 40) (boolAnd (numberEq (markOf (dropToken tokens)) 1)
     (numberEq (markOf (dropToken (dropToken tokens))) 58))
 
-def parseParam : Fuel -> List Binding -> List Token -> Parsed Param :=
-  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
-  case (nameOf (dropToken tokens)) as named in Option return Parsed Param with
-  | none => parseError (firstPosition tokens) eFun
-  | some name => (
-      case (parseType fuel 0 environment (dropToken (dropToken (dropToken tokens)))) as declared in Parsed return Parsed Param with
-      | parseError at message => parseError at message
-      | parsed ty rest => (
-          case (natEq (boolOr (numberEq (typeLevel ty) 0) (sameType ty (tyUniverse 0))) 1) as data return Parsed Param with
-          | 0 (x : prod ()) => parseError (firstPosition (dropToken (dropToken (dropToken tokens)))) eData
-          | 1 (x : prod ()) => closeParsed Param (param name ty) rest))
-
 mu Signature : Type 0 with
 | signature : List Param -> LType -> Signature
 
@@ -142,7 +130,41 @@ def namedSignature : List Binding -> List Token -> Option Signature :=
           | binding other ty value => none
           | typeBinding other universe defined => none
           | arrowBinding other params result => some (signature params result)
-          | funBinding other params result body => none))
+          | funBinding other params result body => none
+          | closureBinding other params result body scope => none))
+
+-- The type of a parameter can also be the name of a function type that has
+-- no type parameter. The argument of this parameter is a function.
+def rec parameterType : Fuel -> List Binding -> List Token -> Parsed LType :=
+  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
+  case fuel as guard in Fuel return Parsed LType with
+  | fuelEnd => parseError (firstPosition tokens) eFuel
+  | fuelMore more => (
+      case (natEq (markOf tokens) 40) as grouped return Parsed LType with
+      | 1 (x : prod ()) => (
+          case (parameterType more environment (dropToken tokens)) as inside in Parsed return Parsed LType with
+          | parseError at message => parseError at message
+          | parsed ty rest => closeParsed LType ty rest)
+      | 0 (x : prod ()) => (
+          case (namedSignature environment tokens) as arrow in Option return Parsed LType with
+          | some found => (
+              case found as self in Signature return Parsed LType with
+              | signature params result => select (Parsed LType) (hasTypeParam params)
+                  (parseError (firstPosition tokens) eData)
+                  (parsed (arrowType params result) (dropToken tokens)))
+          | none => parseType fuel 0 environment tokens))
+
+def parseParam : Fuel -> List Binding -> List Token -> Parsed Param :=
+  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
+  case (nameOf (dropToken tokens)) as named in Option return Parsed Param with
+  | none => parseError (firstPosition tokens) eFun
+  | some name => (
+      case (parameterType fuel environment (dropToken (dropToken (dropToken tokens)))) as declared in Parsed return Parsed Param with
+      | parseError at message => parseError at message
+      | parsed ty rest => (
+          case (natEq (boolOr (isArrowType ty) (boolOr (numberEq (typeLevel ty) 0) (sameType ty (tyUniverse 0)))) 1) as allowed return Parsed Param with
+          | 0 (x : prod ()) => parseError (firstPosition (dropToken (dropToken (dropToken tokens)))) eData
+          | 1 (x : prod ()) => closeParsed Param (param name ty) rest))
 
 -- A function type starts with a parameter group or is the name of one.
 -- Grouping parentheses preserve this distinction from data types.
@@ -365,6 +387,7 @@ def recordInstance : Nat -> Binding -> List Located -> List Located :=
   | typeBinding name universe defined => done
   | arrowBinding name params result => done
   | funBinding name params result body => done
+  | closureBinding name params result body scope => done
 
 def rec parseProgram : Fuel -> Nat -> Fuel -> List Binding -> List Located -> List Token -> Result (List Located) :=
   fun (fuel : Fuel) (budget : Nat) (checkingFuel : Fuel) (environment : List Binding) (done : List Located) (tokens : List Token) =>

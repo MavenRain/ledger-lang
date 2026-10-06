@@ -18,6 +18,7 @@ def encodesNull : LType -> Nat := fun (ty : LType) =>
   | tyUniverse level => 0
   | tyEq a x y => 1
   | tyQuery a => 0
+  | tyArrow a b => 0
 
 def hasArguments : List LType -> Nat := fun (types : List LType) =>
   case types as self in List return Nat with
@@ -56,6 +57,8 @@ def rec typeName : LType -> Text := fun (ty : LType) =>
       (textByte 32 (textByte 40 (appendText x (textByte 41 (textByte 32
         (textByte 40 (appendText y (textByte 41 textEnd))))))))
   | tyQuery a => unaryTypeName opsTextQuery (typeName a)
+  | tyArrow a b => textByte 40 (appendText (typeName a) (textByte 41 (textByte 32
+      (textByte 45 (textByte 62 (textByte 32 (typeName b)))))))
 
 -- Data types have level 0. Type 0 has level 1 and Type 1 has level 2.
 -- A Query type is in Type 1, so it has level 1.
@@ -78,6 +81,7 @@ def typeLevel : LType -> Nat := fun (ty : LType) =>
   | tyUniverse level => natAdd level 1
   | tyEq a x y => 0
   | tyQuery a => 1
+  | tyArrow a b => 1
 
 -- The current type grammar has unique canonical names, so equality of
 -- these names is structural type equality for this supported subset.
@@ -111,6 +115,7 @@ def constructorPlan : LType -> Text -> Option Plan := fun (ty : LType) (name : T
       case (opsQueryAnswer name) as answer in Option return Option Plan with
       | none => none
       | some index => select (Option Plan) (sameType index a) (opsQueryPlan name) none)
+  | tyArrow a b => none
 
 -- A definition of a Query type is a term, but a Query type is not a data type.
 def isQueryType : LType -> Nat := fun (ty : LType) =>
@@ -132,6 +137,64 @@ def isQueryType : LType -> Nat := fun (ty : LType) =>
   | tyUniverse level => 0
   | tyEq a x y => 0
   | tyQuery a => 1
+  | tyArrow a b => 0
+
+-- A function type is a chain of tyArrow. The result of a function type is
+-- not a function type, so the chain gives the parameter types in order. A
+-- parameter of this chain has a name that the source cannot contain.
+def rec arrowParams : LType -> List Param := fun (ty : LType) =>
+  case ty as self in LType return List Param with
+  | tyNat => nil
+  | tyText => nil
+  | tyFlag => nil
+  | tyValue => nil
+  | tyValues => nil
+  | tyAttrs => nil
+  | tyKind => nil
+  | tyHash => nil
+  | tyRef kind => nil
+  | tySchema name => nil
+  | tyOption a => nil
+  | tyList a => nil
+  | tyProd a b => nil
+  | tySum a b => nil
+  | tyUniverse level => nil
+  | tyEq a x y => nil
+  | tyQuery a => nil
+  | tyArrow a b => cons (param (textByte 32 textEnd) a) (arrowParams b)
+
+def rec arrowResult : LType -> LType := fun (ty : LType) =>
+  case ty as self in LType return LType with
+  | tyNat => tyNat
+  | tyText => tyText
+  | tyFlag => tyFlag
+  | tyValue => tyValue
+  | tyValues => tyValues
+  | tyAttrs => tyAttrs
+  | tyKind => tyKind
+  | tyHash => tyHash
+  | tyRef kind => tyRef kind
+  | tySchema name => tySchema name
+  | tyOption a => tyOption a
+  | tyList a => tyList a
+  | tyProd a b => tyProd a b
+  | tySum a b => tySum a b
+  | tyUniverse level => tyUniverse level
+  | tyEq a x y => tyEq a x y
+  | tyQuery a => tyQuery a
+  | tyArrow a b => arrowResult b
+
+def isArrowType : LType -> Nat := fun (ty : LType) =>
+  case (arrowParams ty) as self in List return Nat with
+  | nil => 0
+  | cons head tail => 1
+
+def rec arrowType : List Param -> LType -> LType := fun (params : List Param) (result : LType) =>
+  case params as self in List return LType with
+  | nil => result
+  | cons head tail => (
+      case head as item in Param return LType with
+      | param name ty => tyArrow ty (arrowType tail result))
 
 -- A definition of a data type or of a Query type is a term.
 def isTermType : LType -> Nat := fun (ty : LType) =>

@@ -126,6 +126,7 @@ mu LType : Type 0 with
 | tyUniverse : Nat -> LType
 | tyEq : LType -> Text -> Text -> LType
 | tyQuery : LType -> LType
+| tyArrow : LType -> LType -> LType
 
 mu Plan : Type 0 with
 | plan : List LType -> Nat -> Text -> Plan
@@ -164,12 +165,18 @@ mu Param : Type 0 with
 
 -- A function keeps its parameters, its result type and the tokens of its
 -- checked body. Its body can only name earlier definitions and parameters.
--- An arrow binding is the name of a function type.
+-- An arrow binding is the name of a function type. A closure binding is a
+-- function parameter. It keeps the parameters, the result type and the body
+-- of its function argument, with the scope of that argument.
 mu Binding : Type 0 with
 | binding : Text -> LType -> Value -> Binding
 | typeBinding : Text -> LType -> LType -> Binding
 | arrowBinding : Text -> List Param -> LType -> Binding
 | funBinding : Text -> List Param -> LType -> List Token -> Binding
+| closureBinding : Text -> List Param -> LType -> List Token -> Scope -> Binding
+and Scope : Type 0 with
+| scopeEnd : Scope
+| scopeItem : Binding -> Scope -> Scope
 
 -- A synthesized term carries its type with its value.
 mu Typed : Type 0 with
@@ -181,6 +188,17 @@ def bindingName : Binding -> Text := fun (item : Binding) =>
   | typeBinding name universe defined => name
   | arrowBinding name params result => name
   | funBinding name params result body => name
+  | closureBinding name params result body scope => name
+
+def rec scopeOf : List Binding -> Scope := fun (environment : List Binding) =>
+  case environment as self in List return Scope with
+  | nil => scopeEnd
+  | cons head tail => scopeItem head (scopeOf tail)
+
+def rec scopeList : Scope -> List Binding := fun (scope : Scope) =>
+  case scope as self in Scope return List Binding with
+  | scopeEnd => nil
+  | scopeItem head tail => cons head (scopeList tail)
 
 def rec lookup : Text -> List Binding -> Option Binding :=
   fun (name : Text) (environment : List Binding) =>

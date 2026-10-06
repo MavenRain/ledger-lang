@@ -114,7 +114,7 @@ test('parentheses group WritePath in definitions and longer signatures', () => {
 test('grouping preserves function type restrictions and parameter shadowing', () => {
   reject(`${rule}def x : List ((Rule)) := nil`, dataError, 'Rule))');
   reject('def x : Option (WritePath) := none', dataError, 'WritePath');
-  reject(`${rule}def f : (r : (Rule)) -> Nat := fun (r : Nat) => 1`, dataError, 'Rule))');
+  reject(`${rule}def f : (r : (Rule)) -> Nat := fun (r : Nat) => 1`, funError, '(r : Nat)');
   reject(`${rule}def R : Type 1 := ((Rule))`, universeError, '((Rule))');
   reject(`${rule}def f : (Rule : Nat) -> (Rule) := fun (n : Nat) => n`,
     'expected a supported type', 'Rule)');
@@ -134,10 +134,10 @@ test('a function type is not a data type', () => {
     [`${rule}def x : List Rule := nil`, 'Rule :='],
     [`${rule}def x : Option Rule := none`, 'Rule :='],
     [`${rule}def P : Type 0 := Prod Rule Nat`, 'Rule Nat'],
-    [`${rule}def f : (r : Rule) -> Nat := fun (r : Nat) => 1`, 'Rule)'],
+    [`${rule}def f : (r : List Rule) -> Nat := fun (r : Nat) => 1`, 'Rule)'],
     [`${rule}def e : Eq Rule 1 1 := refl`, 'Rule 1'],
     ['def x : List WritePath := nil', 'WritePath'],
-    ['def f : (w : WritePath) -> Nat := fun (w : Nat) => 1', 'WritePath'],
+    ['def f : (w : List WritePath) -> Nat := fun (w : Nat) => 1', 'WritePath'],
   ];
   cases.forEach(([source, at]) => reject(source, dataError, at));
 });

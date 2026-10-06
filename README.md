@@ -115,8 +115,9 @@ In this slice, `Eq` cannot occur inside another type former or a type
 definition. The checking budget of the definition limits the JSON size of
 each side. See [examples/equality.ledger](examples/equality.ledger).
 
-A function definition has a type `(x : A) -> B`. The parameter types and the
-result type are data types, and `B` cannot refer to a parameter. The term is
+A function definition has a type `(x : A) -> B`. A value parameter has a
+data type or a named function type without type parameters. The result has
+a data type, and `B` cannot refer to a value parameter. The term is
 `fun (x : A) => t`. Write more parameters as `fun (a : A) (b : B) => t` or as
 `fun (a : A) => fun (b : B) => t`. Each binder type must be equal to the
 declared parameter type. The body can refer to the parameters and to earlier
@@ -136,10 +137,11 @@ with the argument values. An application synthesizes its result type. Thus,
 in parentheses, it can be the argument of `first` or `second`, or a side of
 `Eq`. Functions are not instances, so the output does not contain them.
 
-In this slice, a function type is only the type of a definition. A function
-body can apply an earlier function, and a function is an argument only of a
-structure form. A function
-body can use `map`, `bind`, `filter`, `either`, `fold` and `unfold`. A
+In this slice, a function body can apply an earlier function or a function
+parameter. A function argument names an earlier function or another
+function parameter, with optional grouping parentheses. Inline `fun` terms
+and partial applications are not function arguments. A function body can
+use `map`, `bind`, `filter`, `either`, `fold` and `unfold`. A
 function that a form applies evaluates in the scope of its definition, so a
 parameter of the caller cannot replace a name in that function. The body
 check at the definition does not know the argument values, so it checks an
@@ -163,18 +165,23 @@ no constructor makes a term of it. A binder can give a new name to a type
 parameter. A type definition of a function type with a type parameter is in
 `Type 1`. See [examples/poly.ledger](examples/poly.ledger).
 
-A type definition can name a function type of data types. The function type
-is in `Type 0`. The name then stands for the function type: as the type of a
-function definition, as the body of another type definition, and at the end
-of a longer function type. A function type is not a data type. Thus its name
-is not an argument of a type former or a parameter type, and the compiler
-stops with `expected a data type`.
+A type definition can name a function type without type parameters in
+`Type 0`. The name then stands for the function type: as the type of a
+function definition, as the body of another type definition, at the end of
+a longer function type, and as a parameter type. Parentheses can group a
+parameter type, as in `(f : (Rule))`. A function parameter keeps the scope
+of its argument and can be passed to `map`, `bind`, `filter`, `either`,
+`fold` and `unfold`. A function type is not a data type, so its name is not
+an argument of a type former or a type argument of a polymorphic function.
 
 ```
 def Rule : Type 0 := (count : Nat) -> Prod Nat Nat
 def Tagged : Type 0 := (label : Text) -> Rule
 def twin : Rule := fun (count : Nat) => pair count count
 def keep : Tagged := fun (label : Text) (count : Nat) => pair count 0
+def applyRule : (f : Rule) -> (count : Nat) -> Prod Nat Nat :=
+  fun (f : Rule) (count : Nat) => f count
+def paired : Prod Nat Nat := applyRule twin 3
 ```
 
 The structure forms `pure x`, `map f t`, `bind f t` and `filter f t` check

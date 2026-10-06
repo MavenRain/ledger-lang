@@ -19,7 +19,7 @@ not complete the M0 milestone in `SPEC.md`.
   of a data type A. The compiler compares them by their JSON encoding. An
   equality type is only the type of a definition, and proofs are not
   instances. `symm` and `trans` synthesize their types like `first`.
-- First-order functions: function types `(x : A) -> B` over data types,
+- Functions: function types `(x : A) -> B` over data types,
   `fun` with flat or curried binders, and saturated application. The
   definition checks the body once. Each application evaluates the body again
   with the argument values. A function body can apply an earlier function.
@@ -49,7 +49,7 @@ not complete the M0 milestone in `SPEC.md`.
   examples, and integration tests against the reactor and CLI.
 - Monad `pure`, `map` and `bind` over `Option`, `List` and `Sum E`,
   Filterable `filter` over `Option` and `List`, and `either`. The function
-  argument names a definition with one parameter.
+  argument names a function with one parameter, including a function parameter.
 - Algebra `fold` and `unfold` over `Nat`, `Text`, `List A`, `Values` and
   `Attrs`, and Filterable `filter` over `Text`, `Values` and `Attrs`. The
   source of `fold` synthesizes its type. `unfold` stops at `none` or at its
@@ -70,10 +70,15 @@ not complete the M0 milestone in `SPEC.md`.
   type. A Query value is not an instance. A Query type is not an argument of
   a type former, a parameter type or a result type.
 - Function types in type definitions. A type definition in `Type 0` names a
-  function type of data types. The name stands for the function type as the
-  type of a function definition, in another type definition, and at the end
-  of a longer function type. `WritePath` is the built-in function type
+  function type without type parameters. The name stands for the function
+  type as the type of a function definition, in another type definition,
+  and at the end of a longer function type. `WritePath` is the built-in function type
   `(log : Log) -> (write : Write) -> Step`.
+- Named function parameters, including grouped aliases and `WritePath`.
+  An argument names a function or another function parameter of the same
+  type. The parameter keeps the argument's definition scope and can be
+  applied, forwarded, or used by a structure or algebra form. Function
+  types with type parameters cannot be parameter types.
 
 - Type parameters. A function type can start with type parameters
   `(A : Type 0)`. The types of the later parameters and the result type can
@@ -109,9 +114,10 @@ not complete the M0 milestone in `SPEC.md`.
 - The source of `fold` must synthesize its type. A literal source such as
   `nil` or a string is refused. Name it in an earlier definition.
 
-- A function is not an argument, so the name of a function type is not a
-  parameter type. A function of type `WritePath` is a function of the
-  program. The compiler does not supply the write path of M1.
+- A function argument is a name, optionally grouped. Inline functions and
+  partial applications are not arguments. A function of type `WritePath`
+  is a function of the program. The compiler does not supply the write
+  path of M1.
 - Hash wraps a Text value. The compiler does not compute or validate digest
   strings, resolve references to log entries, or apply record projections.
   Schema comments about business rules, such as a person's Party kind or a
