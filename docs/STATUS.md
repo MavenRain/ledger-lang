@@ -76,7 +76,8 @@ not complete the M0 milestone in `SPEC.md`.
   `(log : Log) -> (write : Write) -> Step`.
 - Named function parameters, including grouped aliases and `WritePath`.
   An argument names a function or another function parameter of the same
-  type. The parameter keeps the argument's definition scope and can be
+  type, or partially applies a function by binding its leading parameters.
+  The parameter keeps the argument's definition scope and can be
   applied, forwarded, or used by a structure or algebra form. Function
   types with type parameters cannot be parameter types.
 
@@ -90,8 +91,9 @@ not complete the M0 milestone in `SPEC.md`.
 
 ## Remaining M0 work
 
-1. Add dependent function types and inline or partial functions as
-   arguments. These need an internal value domain with neutral terms. Then
+1. Add dependent function types and inline functions as arguments. Extend
+   partial application to type parameters and nested function expressions.
+   These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types.
 2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
@@ -114,8 +116,11 @@ not complete the M0 milestone in `SPEC.md`.
 - The source of `fold` must synthesize its type. A literal source such as
   `nil` or a string is refused. Name it in an earlier definition.
 
-- A function argument is a name, optionally grouped. Inline functions and
-  partial applications are not arguments. A function of type `WritePath`
+- A function argument is a name, optionally grouped, or a parenthesized
+  partial application binding leading parameters. The remaining signature
+  must match the expected type. Bound function arguments must be names,
+  optionally grouped. Inline functions and partial applications of functions
+  with type parameters are unsupported. A function of type `WritePath`
   is a function of the program. The compiler does not supply the write
   path of M1.
 - Hash wraps a Text value. The compiler does not compute or validate digest

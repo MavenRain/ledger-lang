@@ -80,17 +80,18 @@ test('function parameters coexist with renamed type parameters', () => {
     'def result : Prod Nat Text := use Text id "hello"'), { first: 4, second: 'hello' });
 });
 
-test('function arguments must match all parameter types, result types and arity', () => {
-  for (const definition of [
-    'def wrong : (s : Text) -> Nat := fun (s : Text) => 0 ',
-    'def wrong : (n : Nat) -> Text := fun (n : Nat) => "x" ',
-    'def wrong : (n : Nat) -> (m : Nat) -> Nat := fun (n : Nat) (m : Nat) => n ',
-    'def wrong : Nat := 0 ',
-    'def wrong : (A : Type 0) -> (a : A) -> A := fun (A : Type 0) (a : A) => a ',
+test('function arguments reject mismatched signatures and unbound prefixes', () => {
+  for (const [definition, message = 'term does not have the declared type'] of [
+    ['def wrong : (s : Text) -> Nat := fun (s : Text) => 0 '],
+    ['def wrong : (n : Nat) -> Text := fun (n : Nat) => "x" '],
+    ['def wrong : (n : Nat) -> (m : Nat) -> Nat := fun (n : Nat) (m : Nat) => n ',
+      'argument needs parentheses'],
+    ['def wrong : Nat := 0 '],
+    ['def wrong : (A : Type 0) -> (a : A) -> A := fun (A : Type 0) (a : A) => a '],
   ]) {
     const source = `${rule}${definition}${apply}def result : Nat := apply wrong 4`;
     assert.deepEqual(run(source), { error: {
-      byte: source.lastIndexOf('wrong'), message: 'term does not have the declared type',
+      byte: source.lastIndexOf('wrong'), message,
     } });
   }
 });

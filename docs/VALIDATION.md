@@ -4,9 +4,18 @@ Date: 2026-10-05. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check test` passes: the host checks the complete compiler, builds the
-Wasm reactor, and runs 381 integration tests with zero failures. The test
-runner reported 1.9 seconds. In the isolated checkout the host was selected with
+Wasm reactor, and runs 441 integration tests with zero failures. The test
+runner reported 1.5 seconds. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
+
+The partial application review adds eight cases in `test/partial.test.mjs`.
+They check leading data arguments, grouped and computed arguments, lexical
+scope under caller shadowing, bound function names, partial application of
+function parameters, forwarding, and use through `map`. Refusals cover
+missing, extra and mistyped arguments, incompatible remaining signatures,
+type parameters, and nested partial function arguments. The existing
+higher-order test keeps all five rejection cases and checks the parentheses
+diagnostic for a compatible function with an unbound prefix.
 
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for

@@ -70,13 +70,19 @@ each type argument. A type that depends on a value parameter is later work.
 A named function type without type parameters is also a parameter type:
 `(f : Rule) -> (count : Nat) -> Prod Nat Nat`. Parentheses can group the
 parameter type. An argument for the parameter names an earlier function or
-another function parameter of the same type. The parameter keeps the scope
+another function parameter of the same type, or is a parenthesized partial
+application `(g a1 ... ak)`. The bound arguments supply leading parameters;
+the remaining parameters and result must match the expected function type.
+Bound values are evaluated in the caller's scope. A bound function argument
+must be a name, optionally grouped, which can itself name a parameter
+holding a partial application. Partial application of a function with type
+parameters is unsupported. The parameter keeps the scope
 of its argument, so the body of the argument refers to the definitions
 before it and not to the parameters of the caller. The body of the function
 can apply the parameter, pass it to another function, or give it to `map`,
-`bind`, `filter`, `either`, `fold` and `unfold`. An inline `fun` term or a
-partial application is not an argument. A function type with a type
-parameter is not a parameter type.
+`bind`, `filter`, `either`, `fold` and `unfold`. An inline `fun` term is not an
+argument. Structure forms still require a name for their function argument.
+A function type with a type parameter is not a parameter type.
 
 ## 4. Structures
 

@@ -139,8 +139,23 @@ in parentheses, it can be the argument of `first` or `second`, or a side of
 
 In this slice, a function body can apply an earlier function or a function
 parameter. A function argument names an earlier function or another
-function parameter, with optional grouping parentheses. Inline `fun` terms
-and partial applications are not function arguments. A function body can
+function parameter, with optional grouping parentheses. It can also be a
+parenthesized partial application `(g a1 ... ak)`: the supplied arguments
+bind the leading parameters, and the remaining parameters and result must
+match the expected function type. Bound values are evaluated in the caller's
+scope. A bound function argument must be a name, optionally grouped; that
+name can be a parameter holding a partial application. A function with type
+parameters cannot be partially applied, and inline `fun` arguments are
+unsupported. For example:
+
+```text
+def Rule : Type 0 := (n : Nat) -> Nat
+def pick : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => a
+def apply : (f : Rule) -> (n : Nat) -> Nat := fun (f : Rule) (n : Nat) => f n
+def result : Nat := apply (pick 42) 7
+```
+
+Here `result` is `42`. A function body can
 use `map`, `bind`, `filter`, `either`, `fold` and `unfold`. A
 function that a form applies evaluates in the scope of its definition, so a
 parameter of the caller cannot replace a name in that function. The body
