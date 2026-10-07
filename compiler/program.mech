@@ -187,7 +187,107 @@ def reservedParam : Param -> Nat := fun (item : Param) =>
   case item as self in Param return Nat with
   | param name ty => reservedName name
 
--- `(x : A) -> ... -> B` with data types. B cannot refer to a value parameter.
+def rec paramCount : List Param -> Nat := fun (params : List Param) =>
+  case params as self in List return Nat with
+  | nil => 0
+  | cons head tail => natAdd (paramCount tail) 1
+
+-- Prefixing a named signature moves its neutral parameter positions. A
+-- closed side and the local scopes of function parameter types stay intact.
+def shiftEqSide : Nat -> Text -> Text := fun (offset : Nat) (side : Text) =>
+  case side as self in Text return Text with
+  | textEnd => side
+  | textByte byte rest => (
+      case (natEq byte 0) as neutral return Text with
+      | 0 (x : prod ()) => side
+      | 1 (x : prod ()) => (
+          case rest as position in Text return Text with
+          | textEnd => side
+          | textByte index tail => textByte 0 (textByte (natAdd offset index) tail)))
+
+def shiftEqResult : Nat -> LType -> LType := fun (offset : Nat) (result : LType) =>
+  case (sidesOf result) as sides in EqSides return LType with
+  | notEq => result
+  | eqSides a lhs rhs => tyEq a (shiftEqSide offset lhs) (shiftEqSide offset rhs)
+
+-- The position of the nearest parameter with this name, if it is a value
+-- parameter of type A. The list holds the latest parameter first.
+def rec paramIndex : LType -> Text -> List Param -> Option Nat :=
+  fun (a : LType) (name : Text) (done : List Param) =>
+  case done as self in List return Option Nat with
+  | nil => none
+  | cons head tail => (
+      case head as item in Param return Option Nat with
+      | param other ty => (
+          case (natEq (sameText name other) 1) as found return Option Nat with
+          | 1 (x : prod ()) => select (Option Nat) (sameType ty a) (some (paramCount tail)) none
+          | 0 (x : prod ()) => paramIndex a name tail))
+
+-- A value parameter is a neutral side: byte 0, then the position of the
+-- parameter. The JSON text of a closed side never starts with byte 0.
+def neutralSide : LType -> List Param -> List Token -> Option Text :=
+  fun (a : LType) (done : List Param) (tokens : List Token) =>
+  case tokens as self in List return Option Text with
+  | nil => none
+  | cons head tail => (
+      case head as token in Token return Option Text with
+      | numberToken position number => none
+      | stringToken position text => none
+      | punctuation position mark => none
+      | identifier position name => (
+          case (paramIndex a name done) as found in Option return Option Text with
+          | none => none
+          | some index => some (textByte 0 (textByte index textEnd))))
+
+-- A closed side cannot name a value parameter. Each value parameter hides
+-- an outer definition with the same name.
+def rec hideParams : List Param -> List Binding -> List Binding :=
+  fun (done : List Param) (environment : List Binding) =>
+  case done as self in List return List Binding with
+  | nil => environment
+  | cons head tail => (
+      case head as item in Param return List Binding with
+      | param name ty => (
+          case (natEq (isTypeParam head) 1) as typeParam return List Binding with
+          | 1 (x : prod ()) => hideParams tail environment
+          | 0 (x : prod ()) => cons (typeBinding name (tyUniverse 0) (tySchema name)) (hideParams tail environment)))
+
+-- A side of an equality in a function type is the name of a value parameter
+-- of type A, or an atom that names no value parameter and applies no
+-- function. A closed side keeps its canonical JSON text.
+def eqSide : Fuel -> LType -> List Binding -> List Param -> List Token -> Worked Text :=
+  fun (fuel : Fuel) (a : LType) (environment : List Binding) (done : List Param) (tokens : List Token) =>
+  case (neutralSide a done tokens) as neutral in Option return Worked Text with
+  | some side => worked side (dropToken tokens) 1
+  | none => (
+      case (parseTerm fuel 1 1 a (hideParams done environment) tokens) as side in Worked return Worked Text with
+      | workError at message => workError at message
+      | worked value rest left => (
+          case (printValue fuel textEnd 0 value) as text in Printed return Worked Text with
+          | printError at message => workError (firstPosition tokens) message
+          | printed after printedText => worked (reverseText printedText) rest left))
+
+-- `Eq A x y` as the result of a function type. A is a data type. The
+-- definition checks the body with neutral sides, so `refl` needs the same
+-- parameter or the same closed value on both sides.
+def eqResult : Fuel -> List Binding -> List Param -> List Token -> Parsed LType :=
+  fun (fuel : Fuel) (environment : List Binding) (done : List Param) (tokens : List Token) =>
+  case (parseType fuel 1 environment tokens) as carrier in Parsed return Parsed LType with
+  | parseError at message => parseError at message
+  | parsed a afterType => (
+    case (natEq (typeLevel a) 0) as data return Parsed LType with
+    | 0 (x : prod ()) => parseError (firstPosition tokens) eData
+    | 1 (x : prod ()) => (
+      case (eqSide fuel a environment done afterType) as left in Worked return Parsed LType with
+      | workError at message => parseError at message
+      | worked lhs afterLeft spent => (
+        case (eqSide fuel a environment done afterLeft) as right in Worked return Parsed LType with
+        | workError at message => parseError at message
+        | worked rhs afterRight used => parsed (tyEq a lhs rhs) afterRight)))
+
+-- `(x : A) -> ... -> B` with data types. A data type B cannot refer to a
+-- value parameter. An equality B = `Eq A x y` can name value parameters as
+-- its sides.
 -- A type parameter `(A : Type 0)` comes before each value parameter, and the
 -- later types and B can refer to it. Its name is not a reserved name.
 -- Parameters hide outer names in subsequent type annotations.
@@ -208,16 +308,22 @@ def rec parseSignature : Fuel -> List Binding -> List Param -> List Token -> Par
       | 0 (x : prod ()) => (
       case (namedSignature environment tokens) as known in Option return Parsed Signature with
       | none => (
+        case (natEq (isWord sEq tokens) 1) as equality return Parsed Signature with
+        | 1 (x : prod ()) => (
+          case (eqResult more environment done (dropToken tokens)) as declared in Parsed return Parsed Signature with
+          | parseError at message => parseError at message
+          | parsed result rest => parsed (signature (reverseListOnto Param nil done) result) rest)
+        | 0 (x : prod ()) => (
         case (parseType more 0 environment tokens) as declared in Parsed return Parsed Signature with
         | parseError at message => parseError at message
         | parsed result rest => select (Parsed Signature) (numberEq (typeLevel result) 0)
             (parsed (signature (reverseListOnto Param nil done) result) rest)
-            (parseError (firstPosition tokens) eData))
+            (parseError (firstPosition tokens) eData)))
       | some found => (
         case found as shape in Signature return Parsed Signature with
         | signature params result => select (Parsed Signature) (boolAnd (hasValueParam done) (hasTypeParam params))
             (parseError (firstPosition tokens) eTypeParam)
-            (parsed (signature (reverseListOnto Param params done) result) (dropToken tokens)))))
+            (parsed (signature (reverseListOnto Param params done) (shiftEqResult (paramCount done) result)) (dropToken tokens)))))
     | 1 (x : prod ()) => (
         case (parseParam more environment tokens) as first in Parsed return Parsed Signature with
         | parseError at message => parseError at message

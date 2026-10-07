@@ -4,8 +4,16 @@ Date: 2026-10-06. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check` and `make test` pass: the host checks the complete compiler, builds the
-Wasm reactor, and runs 497 integration tests with zero failures. The test
-runner reported 4.24 seconds. In the isolated checkout the host was selected with
+Wasm reactor, and runs 506 integration tests with zero failures. The test
+runner reported 3.04 seconds. Nine of the tests, in
+`test/dependent.test.mjs`, check step D1 of `docs/DEPENDENT-TYPES.md`: an
+equality result can name a value parameter on both sides, two different
+parameters or a parameter and a constant are not equal, a side that
+contains a parameter is refused, and an application of such a function is
+refused until step D2. The review regressions cover prefixed named signatures,
+neutral references from different function scopes, proof composition,
+`either`, partial applications, and preservation of whole-function references
+and closed equality applications. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
 The partial application review adds eight cases in `test/partial.test.mjs`.

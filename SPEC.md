@@ -65,7 +65,10 @@ a type parameter is in `Type 1`. An application `f T a` gives one data type
 `T` for each type parameter, then the value arguments. The checker replaces
 all type parameters with the type arguments in one step. The type of a type
 parameter is opaque in the body of the function, so the body is correct for
-each type argument. A type that depends on a value parameter is later work.
+each type argument. A data type that depends on a value parameter is later
+work. A side of an equality result `Eq A x y` can be the name of a value
+parameter of type `A`. The checker compares such a side only with itself
+(step D1 of `docs/DEPENDENT-TYPES.md`).
 
 A named function type without type parameters is also a parameter type:
 `(f : Rule) -> (count : Nat) -> Prod Nat Nat`. Parentheses can group the

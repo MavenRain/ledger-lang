@@ -19,6 +19,11 @@ not complete the M0 milestone in `SPEC.md`.
   of a data type A. The compiler compares them by their JSON encoding. An
   equality type is only the type of a definition, and proofs are not
   instances. `symm` and `trans` synthesize their types like `first`.
+- Dependent equality results, step D1 of `docs/DEPENDENT-TYPES.md`. A
+  function type can end in `Eq A x y`, and a side can be the name of a value
+  parameter of type A. Such a side is neutral. The definition checks the
+  body with the neutral sides, so `refl` needs the same parameter or the
+  same closed value on both sides.
 - Functions: function types `(x : A) -> B` over data types,
   `fun` with flat or curried binders, and saturated application. The
   definition checks the body once. Each application evaluates the body again
@@ -134,7 +139,8 @@ not complete the M0 milestone in `SPEC.md`.
    expressions.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
-   `Eq` inside Sigma and Pi types.
+   `Eq` inside Sigma and Pi types. `docs/DEPENDENT-TYPES.md` gives the plan
+   in steps D1 to D7. D1 is done.
 2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
    needs the dependent function types of item 1. Until then the type parser
    refuses this name with `this type belongs to a later milestone`.
@@ -197,7 +203,10 @@ original meaning.
   the position of an argument, so a type former such as `Prod Nat Nat` needs
   parentheses. The checker does not infer a type argument. The name of a
   function with a type parameter is not a function argument. A partial
-  application that gives its type arguments is. A type cannot depend on a value parameter. The name of a
+  application that gives its type arguments is. A data type cannot depend on a value parameter. Only a side of an
+  equality result can name one, as the whole side. Applications and partial
+  applications of a function with such a result are refused until argument
+  substitution is added in step D2. The name of a
   type parameter is not a reserved name.
 
 ## Internal boundaries

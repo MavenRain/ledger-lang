@@ -117,7 +117,14 @@ each side. See [examples/equality.ledger](examples/equality.ledger).
 
 A function definition has a type `(x : A) -> B`. A value parameter has a
 data type or a named function type without type parameters. The result has
-a data type, and `B` cannot refer to a value parameter. The term is
+a data type, and `B` cannot refer to a value parameter. The one exception
+is an equality result `Eq A x y`: a side can be the name of a value
+parameter of type `A`, as the whole side. Then `refl` proves the result only
+when both sides are the same parameter or the same closed value, as in
+`def same : (n : Nat) -> Eq Nat n n := fun (n : Nat) => refl`. An
+application or partial application of such a function, including in another
+function body, is later work (step D2 of
+[docs/DEPENDENT-TYPES.md](docs/DEPENDENT-TYPES.md)). The term is
 `fun (x : A) => t`. Write more parameters as `fun (a : A) (b : B) => t` or as
 `fun (a : A) => fun (b : B) => t`. Each binder type must be equal to the
 declared parameter type. The body can refer to the parameters and to earlier

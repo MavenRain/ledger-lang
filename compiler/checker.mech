@@ -90,6 +90,17 @@ def sidesOf : LType -> EqSides := fun (ty : LType) =>
   | tyQuery a => notEq
   | tyArrow a b => notEq
 
+-- A neutral equality side belongs to the parameters of one signature.
+def isNeutralSide : Text -> Nat := fun (side : Text) =>
+  case side as self in Text return Nat with
+  | textEnd => 0
+  | textByte byte rest => numberEq byte 0
+
+def dependentResult : LType -> Nat := fun (ty : LType) =>
+  case (sidesOf ty) as sides in EqSides return Nat with
+  | notEq => 0
+  | eqSides a lhs rhs => boolOr (isNeutralSide lhs) (isNeutralSide rhs)
+
 -- A proof has no runtime content. Its value is null.
 def reflCheck : Nat -> LType -> List Token -> Parsed Value :=
   fun (position : Nat) (expected : LType) (tokens : List Token) =>
@@ -1112,6 +1123,8 @@ def checkWorked : Nat -> LType -> Worked Typed -> Worked Value :=
 -- application evaluates the checked body of the function with the argument
 -- values and uses one unit of the work budget. In the check of a function
 -- body, an application checks its arguments and gives null.
+-- Dependent results need argument substitution in D2. Refuse them before
+-- synthesis can compare their local neutrals with another signature's.
 def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked Typed :=
   fun (fuel : Fuel) (budget : Nat) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Typed with
@@ -1138,6 +1151,9 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
               | typeBinding other universe defined => workError position eInfer
               | arrowBinding other params result => workError position eInfer
               | funBinding other params result body => (
+                  case (natEq (dependentResult result) 1) as dependent return Worked Typed with
+                  | 1 (x : prod ()) => workError position eTerm
+                  | 0 (x : prod ()) => (
                   case (natEq atom 1) as refused return Worked Typed with
                   | 1 (x : prod ()) => workError position eParen
                   | 0 (x : prod ()) => (
@@ -1152,8 +1168,11 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
                           | 0 (x : prod ()) => (
                               case (parseTerm more (natSub budget 1) 0 (substType chosen result) (bindArguments environment (valueParams chosen params) values (reverseListOnto Binding (definitionScope other environment) chosen)) body) as applied in Worked return Worked Typed with
                               | workError at message => workError at message
-                              | worked value after budget => worked (typed (substType chosen result) value) rest budget)))))
+                              | worked value after budget => worked (typed (substType chosen result) value) rest budget))))))
               | closureBinding other params result body scope => (
+                  case (natEq (dependentResult result) 1) as dependent return Worked Typed with
+                  | 1 (x : prod ()) => workError position eTerm
+                  | 0 (x : prod ()) => (
                   case (natEq atom 1) as refused return Worked Typed with
                   | 1 (x : prod ()) => workError position eParen
                   | 0 (x : prod ()) => (
@@ -1165,7 +1184,7 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
                           | 0 (x : prod ()) => (
                               case (parseTerm more (natSub budget 1) 0 result (bindArguments environment params values (scopeList scope)) body) as applied in Worked return Worked Typed with
                               | workError at message => workError at message
-                              | worked value after budget => worked (typed result value) rest budget)))))
+                              | worked value after budget => worked (typed result value) rest budget))))))
           | none => (
               case (natEq (synthForm name) 0) as plain return Worked Typed with
               | 1 (x : prod ()) => workError position eInfer
@@ -1279,6 +1298,9 @@ and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -
     case (natEq (sameType expected (arrowType params result)) 1) as exact return Worked Value with
     | 1 (x : prod ()) => worked (valueText name) tokens budget
     | 0 (x : prod ()) => (
+      case (natEq (dependentResult result) 1) as dependent return Worked Value with
+      | 1 (x : prod ()) => workError position eTerm
+      | 0 (x : prod ()) => (
       case (natEq (hasTypeParam params) 1) as polymorphic return Worked Value with
       | 0 (x : prod ()) => prefixArgument more budget atom position expected name params params result environment tokens tokens
       | 1 (x : prod ()) => (
@@ -1288,7 +1310,7 @@ and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -
           case (typeArguments more params environment nil tokens) as instantiated in Parsed return Worked Value with
           | parseError at message => workError at message
           | parsed chosen afterTypes => prefixArgument more budget atom position expected name params
-              (valueParams chosen params) (substType chosen result) environment tokens afterTypes))))
+              (valueParams chosen params) (substType chosen result) environment tokens afterTypes)))))
 -- The bound arguments bind the leading value parameters, after the type
 -- arguments. formal holds the value parameters with the type arguments.
 and prefixArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -> List Param -> LType -> List Binding -> List Token -> List Token -> Worked Value :=
@@ -1644,7 +1666,8 @@ and eitherTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked Type
       case (unaryArgument environment afterLeft) as right in Parsed return Worked Typed with
       | parseError at message => workError at message
       | parsed onRight afterRight => (
-        case (natEq (sameType (unaryResult onLeft) (unaryResult onRight)) 1) as agree return Worked Typed with
+        case (natEq (boolAnd (boolNot (dependentResult (unaryResult onLeft)))
+            (sameType (unaryResult onLeft) (unaryResult onRight))) 1) as agree return Worked Typed with
         | 0 (x : prod ()) => workError (firstPosition afterLeft) eTerm
         | 1 (x : prod ()) => (
           case (parseTerm more budget 1 (tySum (unaryParam onLeft) (unaryParam onRight)) environment afterRight) as scrutinee in Worked return Worked Typed with
