@@ -54,8 +54,8 @@ def rec typeName : LType -> Text := fun (ty : LType) =>
   | tySum a b => binaryTypeName sSum (typeName a) (typeName b)
   | tyUniverse level => select Text (numberEq level 0) sType0 sType1
   | tyEq a x y => appendText (unaryTypeName sEq (typeName a))
-      (textByte 32 (textByte 40 (appendText x (textByte 41 (textByte 32
-        (textByte 40 (appendText y (textByte 41 textEnd))))))))
+      (textByte 32 (textByte 40 (appendText (valText x) (textByte 41 (textByte 32
+        (textByte 40 (appendText (valText y) (textByte 41 textEnd))))))))
   | tyQuery a => unaryTypeName opsTextQuery (typeName a)
   | tyArrow a b => textByte 40 (appendText (typeName a) (textByte 41 (textByte 32
       (textByte 45 (textByte 62 (textByte 32 (typeName b)))))))

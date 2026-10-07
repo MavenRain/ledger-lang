@@ -66,7 +66,7 @@ def structureForm : Text -> Nat := fun (name : Text) =>
 
 -- An equality type keeps its sides as canonical JSON text.
 mu EqSides : Type 0 with
-| eqSides : LType -> Text -> Text -> EqSides
+| eqSides : LType -> Val -> Val -> EqSides
 | notEq : EqSides
 
 def sidesOf : LType -> EqSides := fun (ty : LType) =>
@@ -91,10 +91,10 @@ def sidesOf : LType -> EqSides := fun (ty : LType) =>
   | tyArrow a b => notEq
 
 -- A neutral equality side belongs to the parameters of one signature.
-def isNeutralSide : Text -> Nat := fun (side : Text) =>
-  case side as self in Text return Nat with
-  | textEnd => 0
-  | textByte byte rest => numberEq byte 0
+def isNeutralSide : Val -> Nat := fun (side : Val) =>
+  case side as self in Val return Nat with
+  | valClosed text => 0
+  | valVar index => 1
 
 def dependentResult : LType -> Nat := fun (ty : LType) =>
   case (sidesOf ty) as sides in EqSides return Nat with
@@ -115,7 +115,7 @@ def reflCheck : Nat -> LType -> List Token -> Parsed Value :=
   fun (position : Nat) (expected : LType) (tokens : List Token) =>
   case (sidesOf expected) as self in EqSides return Parsed Value with
   | notEq => parseError position eTerm
-  | eqSides a x y => select (Parsed Value) (sameText x y)
+  | eqSides a x y => select (Parsed Value) (sameVal x y)
       (parsed valueNull tokens) (parseError position eRefl)
 
 def symmProof : Nat -> Typed -> List Token -> Parsed Typed :=
@@ -137,7 +137,7 @@ def transProof : Nat -> Typed -> Typed -> List Token -> Parsed Typed :=
       | eqSides a x y => (
           case (sidesOf rightType) as second in EqSides return Parsed Typed with
           | notEq => parseError position eProof
-          | eqSides b u z => select (Parsed Typed) (boolAnd (sameType a b) (sameText y u))
+          | eqSides b u z => select (Parsed Typed) (boolAnd (sameType a b) (sameVal y u))
               (parsed (typed (tyEq a x z) valueNull) tokens) (parseError position eTrans))))
 
 -- The definition of a function checks its body once, with null for each
@@ -1192,63 +1192,57 @@ def proofInScope : Text -> LType -> List Binding -> Nat :=
           | none => 0
           | some index => 1))
 
-def printedSide : Fuel -> Value -> Option Text := fun (fuel : Fuel) (value : Value) =>
-  case (printValue fuel textEnd 0 value) as text in Printed return Option Text with
+def printedSide : Fuel -> Value -> Option Val := fun (fuel : Fuel) (value : Value) =>
+  case (printValue fuel textEnd 0 value) as text in Printed return Option Val with
   | printError at message => none
-  | printed after printedText => some (reverseText printedText)
+  | printed after printedText => some (valClosed (reverseText printedText))
 
 -- The side that one argument gives. Outside a body check, the argument is
 -- closed. In a body check, a parameter of the body gives its neutral side,
 -- and a literal or another name gives its JSON text. A parenthesized
 -- argument is refused.
-def argumentText : Fuel -> List Binding -> Value -> List Token -> Option Text :=
+def argumentText : Fuel -> List Binding -> Value -> List Token -> Option Val :=
   fun (fuel : Fuel) (environment : List Binding) (value : Value) (tokens : List Token) =>
-  case (natEq (checkingBody environment) 1) as marked return Option Text with
+  case (natEq (checkingBody environment) 1) as marked return Option Val with
   | 0 (x : prod ()) => printedSide fuel value
   | 1 (x : prod ()) => (
-      case tokens as self in List return Option Text with
+      case tokens as self in List return Option Val with
       | nil => none
       | cons head tail => (
-          case head as token in Token return Option Text with
+          case head as token in Token return Option Val with
           | numberToken position number => printedSide fuel value
           | stringToken position text => printedSide fuel value
           | punctuation position mark => none
           | identifier position name => (
-              case (bodyLevel name environment) as level in Option return Option Text with
+              case (bodyLevel name environment) as level in Option return Option Val with
               | none => none
               | some found => (
-                  case found as place in Option return Option Text with
+                  case found as place in Option return Option Val with
                   | none => printedSide fuel value
-                  | some index => some (textByte 0 (textByte index textEnd))))))
+                  | some index => some (valVar index)))))
 
 -- The side for the parameter at a position. Type parameters take no
 -- argument tokens.
-def rec argumentSide : Fuel -> Nat -> List Binding -> List Param -> List Value -> List Token -> Option Text :=
+def rec argumentSide : Fuel -> Nat -> List Binding -> List Param -> List Value -> List Token -> Option Val :=
   fun (fuel : Fuel) (index : Nat) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) =>
-  case params as self in List return Option Text with
+  case params as self in List return Option Val with
   | nil => none
   | cons head tail => (
-      case (natEq (isTypeParam head) 1) as typeParam return Option Text with
+      case (natEq (isTypeParam head) 1) as typeParam return Option Val with
       | 1 (x : prod ()) => (
-          case (natEq index 0) as here return Option Text with
+          case (natEq index 0) as here return Option Val with
           | 1 (x : prod ()) => none
           | 0 (x : prod ()) => argumentSide fuel (natSub index 1) environment tail values tokens)
       | 0 (x : prod ()) => (
-          case (natEq index 0) as here return Option Text with
+          case (natEq index 0) as here return Option Val with
           | 1 (x : prod ()) => argumentText fuel environment (argumentHead values) tokens
           | 0 (x : prod ()) => argumentSide fuel (natSub index 1) environment tail (argumentTail values) (skipAtom 0 tokens)))
 
-def instantiateSide : Fuel -> List Binding -> List Param -> List Value -> List Token -> Text -> Option Text :=
-  fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (side : Text) =>
-  case side as self in Text return Option Text with
-  | textEnd => some side
-  | textByte byte rest => (
-      case (natEq byte 0) as neutral return Option Text with
-      | 0 (x : prod ()) => some side
-      | 1 (x : prod ()) => (
-          case rest as position in Text return Option Text with
-          | textEnd => none
-          | textByte index tail => argumentSide fuel index environment params values tokens))
+def instantiateSide : Fuel -> List Binding -> List Param -> List Value -> List Token -> Val -> Option Val :=
+  fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (side : Val) =>
+  case side as self in Val return Option Val with
+  | valClosed text => some side
+  | valVar index => argumentSide fuel index environment params values tokens
 
 -- An application replaces each neutral side of a dependent result with the
 -- side of the argument at that position (step D2).

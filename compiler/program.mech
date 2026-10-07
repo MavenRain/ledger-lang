@@ -36,7 +36,7 @@ def eqType : Nat -> Fuel -> LType -> Value -> Value -> List Token -> Parsed LTyp
   | printed leftFuel leftText => (
       case (printValue fuel textEnd 0 rhs) as right in Printed return Parsed LType with
       | printError at message => parseError position message
-      | printed rightFuel rightText => parsed (tyEq a (reverseText leftText) (reverseText rightText)) tokens)
+      | printed rightFuel rightText => parsed (tyEq a (valClosed (reverseText leftText)) (valClosed (reverseText rightText))) tokens)
 
 -- `Eq A x y` is only the type of a definition. A is an atom that is a data
 -- type, and the sides x and y are atoms of type A.
@@ -182,16 +182,10 @@ def rec paramCount : List Param -> Nat := fun (params : List Param) =>
 
 -- Prefixing a named signature moves its neutral parameter positions. A
 -- closed side and the local scopes of function parameter types stay intact.
-def shiftEqSide : Nat -> Text -> Text := fun (offset : Nat) (side : Text) =>
-  case side as self in Text return Text with
-  | textEnd => side
-  | textByte byte rest => (
-      case (natEq byte 0) as neutral return Text with
-      | 0 (x : prod ()) => side
-      | 1 (x : prod ()) => (
-          case rest as position in Text return Text with
-          | textEnd => side
-          | textByte index tail => textByte 0 (textByte (natAdd offset index) tail)))
+def shiftEqSide : Nat -> Val -> Val := fun (offset : Nat) (side : Val) =>
+  case side as self in Val return Val with
+  | valClosed text => side
+  | valVar index => valVar (natAdd offset index)
 
 def shiftEqResult : Nat -> LType -> LType := fun (offset : Nat) (result : LType) =>
   case (sidesOf result) as sides in EqSides return LType with
@@ -219,21 +213,20 @@ def rec paramIndex : LType -> Text -> List Param -> Option Nat :=
           | 1 (x : prod ()) => select (Option Nat) (sameType ty a) (some (paramCount tail)) none
           | 0 (x : prod ()) => paramIndex a name tail))
 
--- A value parameter is a neutral side: byte 0, then the position of the
--- parameter. The JSON text of a closed side never starts with byte 0.
-def neutralSide : LType -> List Param -> List Token -> Option Text :=
+-- A value parameter is a neutral side: the position of the parameter.
+def neutralSide : LType -> List Param -> List Token -> Option Val :=
   fun (a : LType) (done : List Param) (tokens : List Token) =>
-  case tokens as self in List return Option Text with
+  case tokens as self in List return Option Val with
   | nil => none
   | cons head tail => (
-      case head as token in Token return Option Text with
+      case head as token in Token return Option Val with
       | numberToken position number => none
       | stringToken position text => none
       | punctuation position mark => none
       | identifier position name => (
-          case (paramIndex a name done) as found in Option return Option Text with
+          case (paramIndex a name done) as found in Option return Option Val with
           | none => none
-          | some index => some (textByte 0 (textByte index textEnd))))
+          | some index => some (valVar index)))
 
 -- A closed side cannot name a value parameter. Each value parameter hides
 -- an outer definition with the same name.
@@ -251,17 +244,17 @@ def rec hideParams : List Param -> List Binding -> List Binding :=
 -- A side of an equality in a function type is the name of a value parameter
 -- of type A, or an atom that names no value parameter and applies no
 -- function. A closed side keeps its canonical JSON text.
-def eqSide : Fuel -> LType -> List Binding -> List Param -> List Token -> Worked Text :=
+def eqSide : Fuel -> LType -> List Binding -> List Param -> List Token -> Worked Val :=
   fun (fuel : Fuel) (a : LType) (environment : List Binding) (done : List Param) (tokens : List Token) =>
-  case (neutralSide a done tokens) as neutral in Option return Worked Text with
+  case (neutralSide a done tokens) as neutral in Option return Worked Val with
   | some side => worked side (dropToken tokens) 1
   | none => (
-      case (parseTerm fuel 1 1 a (hideParams done environment) tokens) as side in Worked return Worked Text with
+      case (parseTerm fuel 1 1 a (hideParams done environment) tokens) as side in Worked return Worked Val with
       | workError at message => workError at message
       | worked value rest left => (
-          case (printValue fuel textEnd 0 value) as text in Printed return Worked Text with
+          case (printValue fuel textEnd 0 value) as text in Printed return Worked Val with
           | printError at message => workError (firstPosition tokens) message
-          | printed after printedText => worked (reverseText printedText) rest left))
+          | printed after printedText => worked (valClosed (reverseText printedText)) rest left))
 
 -- `Eq A x y` as the result of a function type. A is a data type. The
 -- definition checks the body with neutral sides, so `refl` needs the same

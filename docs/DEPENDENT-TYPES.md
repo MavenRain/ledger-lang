@@ -21,11 +21,11 @@ parameter. The checker can compare a neutral value only with itself.
 
 The plan adds neutral values in two stages:
 
-1. Neutral sides (D1, D2). A side of `tyEq` is either the JSON text of a
-   closed value or a neutral side. A neutral side is byte 0 followed by the
-   position of the parameter in the function type. The JSON text of a closed
-   value never starts with byte 0, so the two forms never compare equal.
-   This needs no change to `LType`.
+1. Neutral sides (D1, D2, D3a). A side of `tyEq` is a `Val`: `valClosed`
+   with the canonical JSON text of a closed value, or `valVar` with the
+   position of the parameter in the function type. A neutral side is equal
+   only to itself. D1 and D2 kept a neutral side as text (byte 0, then the
+   position). D3a gives the sides their own type.
 2. A value domain (D3 and later). A `Term` syntax tree replaces the body
    tokens. A `Val` family holds closed values and neutral terms: a variable
    with its position, or a neutral term applied to values. The checker
@@ -60,6 +60,9 @@ The plan adds neutral values in two stages:
   application, through a bound function parameter and as the function of a
   structure form or a fold step. An inline body cannot capture a proof with
   neutral sides from an outer parameter scope; closed proof captures work.
+- D3a (done). The sides of `tyEq` are `Val` values, not text. `refl` and
+  `trans` compare sides with `sameVal`. A type name prints a neutral side
+  as byte 0, then its position, as before. No program changes its result.
 - D3. Syntax tree and value domain, as above. The checker checks a body
   once into a `Term`. An application evaluates the `Term`, not the tokens.
   The work budget stays the same. The JSON output stays the same.

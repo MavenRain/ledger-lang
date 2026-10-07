@@ -108,6 +108,31 @@ def validUtf8 : Text -> Nat := fun (text : Text) =>
   | none => 1
   | some position => 0
 
+-- A side of an equality type (step D3a). A closed side keeps the canonical
+-- JSON text of its value. A neutral side is the value parameter at a
+-- position of the function type. A neutral side is equal only to itself.
+mu Val : Type 0 with
+| valClosed : Text -> Val
+| valVar : Nat -> Val
+
+def sameVal : Val -> Val -> Nat := fun (left : Val) (right : Val) =>
+  case left as self in Val return Nat with
+  | valClosed leftText => (
+      case right as other in Val return Nat with
+      | valClosed rightText => sameText leftText rightText
+      | valVar rightIndex => 0)
+  | valVar leftIndex => (
+      case right as other in Val return Nat with
+      | valClosed rightText => 0
+      | valVar rightIndex => numberEq leftIndex rightIndex)
+
+-- The text of a side in a type name. A neutral side prints as byte 0, then
+-- its position, so it never equals the JSON text of a closed side.
+def valText : Val -> Text := fun (side : Val) =>
+  case side as self in Val return Text with
+  | valClosed text => text
+  | valVar index => textByte 0 (textByte index textEnd)
+
 mu LType : Type 0 with
 | tyNat : LType
 | tyText : LType
@@ -124,7 +149,7 @@ mu LType : Type 0 with
 | tyProd : LType -> LType -> LType
 | tySum : LType -> LType -> LType
 | tyUniverse : Nat -> LType
-| tyEq : LType -> Text -> Text -> LType
+| tyEq : LType -> Val -> Val -> LType
 | tyQuery : LType -> LType
 | tyArrow : LType -> LType -> LType
 
