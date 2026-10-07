@@ -1,0 +1,159 @@
+/* Operations over the schema. Load after schema.def. */
+/* There is one write path and one read path. A write checks policy, appends */
+/* entries and updates the projection. A read is a query at a log position. */
+
+DEFINE(Log, : Type 0 := List Entry)
+
+/* A read position. Log order replaces time, so "as of time T" is "as of entry T". */
+FAMILY(Moment, : Type 0)
+  CONSTRUCTOR(momentNow, Moment)
+  CONSTRUCTOR(momentAsOf, Moment) FIELD(entry, Hash)
+
+/* What a transition guard still needs. */
+FAMILY(Missing, : Type 0)
+  CONSTRUCTOR(missingField, Missing) FIELD(field, Text)
+  CONSTRUCTOR(missingCommitment, Missing) FIELD(kind, CommitmentKind)
+  CONSTRUCTOR(missingApproval, Missing) FIELD(role, Text)
+
+/* The answer of can: allow or deny, plus the policy that decided. */
+FAMILY(Verdict, : Type 0)
+  CONSTRUCTOR(verdictAllow, Verdict) FIELD(policy, Ref kindPolicy)
+  CONSTRUCTOR(verdictDeny, Verdict) FIELD(policy, Option (Ref kindPolicy))  /* none = no rule matched */
+
+/* Every mutation. The write path turns one command into entries. */
+FAMILY(Command, : Type 0)
+/* Identity */
+  CONSTRUCTOR(commandResolveParty, Command)       /* find or create by merge key */
+    FIELD(kind, KindParty) FIELD(displayName, Text) FIELD(identifiers, List Identifier)
+  CONSTRUCTOR(commandMergeParties, Command)       /* repoints memberships, commercials, assignments, artifact subjects */
+    FIELD(keep, Ref kindParty) FIELD(drop, Ref kindParty)
+  CONSTRUCTOR(commandSplitParty, Command) FIELD(party, Ref kindParty) FIELD(moved, List Identifier)
+  CONSTRUCTOR(commandAddIdentifier, Command) FIELD(party, Ref kindParty) FIELD(identifier, Identifier)
+  CONSTRUCTOR(commandVerifyIdentifier, Command)
+    FIELD(party, Ref kindParty) FIELD(system, IdentifierSystem) FIELD(value, Text)
+  CONSTRUCTOR(commandEnrichParty, Command)
+    FIELD(party, Ref kindParty) FIELD(attrs, Attrs) FIELD(provenance, Provenance)
+  CONSTRUCTOR(commandDeleteParty, Command) FIELD(party, Ref kindParty)  /* soft delete */
+  CONSTRUCTOR(commandRestoreParty, Command) FIELD(party, Ref kindParty)
+  CONSTRUCTOR(commandEraseParty, Command) FIELD(party, Ref kindParty)  /* hard erase for a privacy request */
+/* Membership */
+  CONSTRUCTOR(commandStartMembership, Command) FIELD(membership, Membership)
+  CONSTRUCTOR(commandEndMembership, Command) FIELD(membership, Ref kindMembership)
+  CONSTRUCTOR(commandSetPrimary, Command) FIELD(membership, Ref kindMembership)  /* at most one current primary per person */
+/* Commercial */
+  CONSTRUCTOR(commandOpenCommercial, Command) FIELD(commercial, Commercial)
+  CONSTRUCTOR(commandTransition, Command) FIELD(commercial, Ref kindCommercial) FIELD(stage, Text)
+  CONSTRUCTOR(commandChangeAmount, Command) FIELD(commercial, Ref kindCommercial) FIELD(amountCents, Option Nat)
+  CONSTRUCTOR(commandSetStatus, Command)          /* win, lose, pause; resume = statusOpen */
+    FIELD(commercial, Ref kindCommercial) FIELD(status, CommercialStatus)
+/* Commitment */
+  CONSTRUCTOR(commandPropose, Command) FIELD(commitment, Commitment)  /* supersede = propose with supersedes set */
+  CONSTRUCTOR(commandAgree, Command) FIELD(commitment, Ref kindCommitment)
+/* Artifact */
+  CONSTRUCTOR(commandIngest, Command) FIELD(artifact, Artifact)  /* hash, dedupe on sha256, store, link subjects */
+  CONSTRUCTOR(commandExtract, Command)            /* an agent derives events, commitments, memberships */
+    FIELD(artifact, Ref kindArtifact) FIELD(facts, List Body)
+/* Event log */
+  CONSTRUCTOR(commandRecord, Command) FIELD(event, Event)      /* note, message, meeting, call */
+/* Assignment */
+  CONSTRUCTOR(commandAssign, Command) FIELD(assignment, Assignment)
+  CONSTRUCTOR(commandReassign, Command) FIELD(assignment, Ref kindAssignment) FIELD(assignee, Ref kindParty)
+  CONSTRUCTOR(commandEndAssignment, Command) FIELD(assignment, Ref kindAssignment)
+  CONSTRUCTOR(commandBulkReassign, Command)       /* when a rep leaves */
+    FIELD(source, Ref kindParty) FIELD(target, Ref kindParty)
+  CONSTRUCTOR(commandRouteTerritory, Command) FIELD(subject, Account) FIELD(territory, Text)
+/* Policy */
+  CONSTRUCTOR(commandRequestApproval, Command) FIELD(commercial, Ref kindCommercial) FIELD(stage, Text)
+  CONSTRUCTOR(commandGrantApproval, Command) FIELD(request, Ref kindEvent)
+
+/* One write. A set expect is the compare-and-swap: the last entry on the */
+/* subject must have this hash. */
+FAMILY(Write, : Type 0)
+  CONSTRUCTOR(makeWrite, Write) FIELD(actor, Actor) FIELD(expect, Option Hash) FIELD(command, Command)
+
+FAMILY(Outcome, : Type 0)
+  CONSTRUCTOR(outcomeAppended, Outcome) FIELD(entries, List Hash) FIELD(policy, Option (Ref kindPolicy))
+  CONSTRUCTOR(outcomeDenied, Outcome) FIELD(policy, Option (Ref kindPolicy)) FIELD(missing, List Missing)
+  CONSTRUCTOR(outcomeConflict, Outcome) FIELD(head, Hash)  /* another writer got there first */
+
+FAMILY(Step, : Type 0)
+  CONSTRUCTOR(makeStep, Step) FIELD(log, Log) FIELD(outcome, Outcome)
+
+/* The sole write path: check policy, append entries, update the projection. */
+DEFINE(WritePath, : Type 0 := (log : Log) -> (write : Write) -> Step)
+
+FAMILY(PipelineKey, : Type 0)
+  CONSTRUCTOR(pipelineByStage, PipelineKey)
+  CONSTRUCTOR(pipelineByOwner, PipelineKey)
+  CONSTRUCTOR(pipelineByTerritory, PipelineKey)
+  CONSTRUCTOR(pipelineByCloseDate, PipelineKey)
+
+FAMILY(Bucket, : Type 0)
+  CONSTRUCTOR(makeBucket, Bucket) FIELD(key, Text) FIELD(count, Nat) FIELD(amountCents, Nat)
+
+/* Velocity is in log entries, because the schema has no clock. */
+FAMILY(StageStat, : Type 0)
+  CONSTRUCTOR(makeStageStat, StageStat)
+    FIELD(stage, Text) FIELD(entered, Nat) FIELD(advanced, Nat) FIELD(entriesInStage, Nat)
+
+FAMILY(Renewal, : Type 0)
+  CONSTRUCTOR(makeRenewal, Renewal)
+    FIELD(commercial, Ref kindCommercial) FIELD(date, Text) FIELD(term, Option (Ref kindCommitment))
+
+FAMILY(Account360, : Type 0)
+  CONSTRUCTOR(makeAccount360, Account360)
+    FIELD(party, Party)
+    FIELD(memberships, List (Ref kindMembership))
+    FIELD(commercials, List (Ref kindCommercial))
+    FIELD(assignments, List (Ref kindAssignment))
+    FIELD(artifacts, List (Ref kindArtifact))
+    FIELD(timeline, List (Ref kindEvent))
+
+/* Every read. The index is the type of the answer. */
+FAMILY(Query, : (0 answer : Type 0) -> Type 1)
+/* Membership */
+  CONSTRUCTOR(queryMembersOf, Query (List (Ref kindMembership)))  /* who worked at org X at time T */
+    FIELD(org, Ref kindParty) FIELD(moment, Moment)
+  CONSTRUCTOR(queryEmployer, Query (Option (Ref kindParty))) FIELD(person, Ref kindParty) FIELD(moment, Moment)
+  CONSTRUCTOR(queryJobChanges, Query (List (Ref kindParty))) FIELD(since, Moment)
+/* Commercial */
+  CONSTRUCTOR(queryCommercial, Query (Option Commercial))  /* rebuild the projection from the log */
+    FIELD(commercial, Ref kindCommercial) FIELD(moment, Moment)
+  CONSTRUCTOR(queryProjectionSound, Query Flag)   /* the stored projection equals the replay */
+    FIELD(commercial, Ref kindCommercial) FIELD(stored, Commercial)
+/* Commitment */
+  CONSTRUCTOR(queryTermsInForce, Query (List (Ref kindCommitment)))
+    FIELD(commercial, Ref kindCommercial) FIELD(moment, Moment)
+  CONSTRUCTOR(queryTermHistory, Query (List (Ref kindCommitment))) FIELD(commitment, Ref kindCommitment)
+  CONSTRUCTOR(queryAmountReconciled, Query Flag) FIELD(commercial, Ref kindCommercial)  /* amountCents against the agreed price */
+  CONSTRUCTOR(queryDiscountPct, Query (Option Nat)) FIELD(commercial, Ref kindCommercial)  /* for the policy guard */
+/* Artifact */
+  CONSTRUCTOR(queryEvidence, Query (List (Ref kindArtifact))) FIELD(fact, Hash)  /* back-trace from any fact */
+  CONSTRUCTOR(queryArtifactIntact, Query Flag) FIELD(artifact, Ref kindArtifact) FIELD(digest, Text)  /* re-hash */
+/* Event log */
+  CONSTRUCTOR(queryTimeline, Query (List (Ref kindEvent))) FIELD(subject, Subject) FIELD(moment, Moment)
+  CONSTRUCTOR(queryThread, Query (List (Ref kindEvent))) FIELD(root, Ref kindEvent)
+  CONSTRUCTOR(queryReplay, Query Log) FIELD(moment, Moment)
+  CONSTRUCTOR(queryTail, Query Log) FIELD(after, Moment)  /* subscribe for agent triggers */
+  CONSTRUCTOR(queryAuditByActor, Query (List (Ref kindEvent))) FIELD(actor, Actor)
+  CONSTRUCTOR(queryAuditByPolicy, Query (List (Ref kindEvent))) FIELD(policy, Ref kindPolicy)
+/* Assignment */
+  CONSTRUCTOR(queryOwner, Query (Option (Ref kindParty))) FIELD(subject, Account) FIELD(moment, Moment)
+  CONSTRUCTOR(queryBook, Query (List Account)) FIELD(assignee, Ref kindParty) FIELD(moment, Moment)
+/* Policy */
+  CONSTRUCTOR(queryCan, Query Verdict)
+    FIELD(principal, Text) FIELD(action, Permission) FIELD(subject, Subject)
+    FIELD(fields, Option (List Text))
+  CONSTRUCTOR(queryDryRun, Query (List Missing)) FIELD(commercial, Ref kindCommercial) FIELD(stage, Text)
+  CONSTRUCTOR(queryRedacted, Query Attrs) FIELD(principal, Text) FIELD(subject, Subject)  /* only the fields the ACL allows */
+  CONSTRUCTOR(querySimulatePolicy, Query (List (Ref kindEvent))) FIELD(policy, Policy)  /* events whose verdict changes */
+/* Rollups */
+  CONSTRUCTOR(queryPipeline, Query (List Bucket)) FIELD(key, PipelineKey) FIELD(moment, Moment)
+  CONSTRUCTOR(queryStageStats, Query (List StageStat))  /* velocity and conversion from eventStageChanged */
+  CONSTRUCTOR(queryStaleDeals, Query (List (Ref kindCommercial))) FIELD(quietEntries, Nat)
+  CONSTRUCTOR(queryRenewals, Query (List Renewal))  /* from date and term commitments */
+  CONSTRUCTOR(queryAccount360, Query Account360) FIELD(party, Ref kindParty) FIELD(moment, Moment)
+  CONSTRUCTOR(queryReviewQueue, Query (List Hash)) FIELD(belowConfidence, Nat)  /* low-confidence inferred facts */
+
+/* The sole read path: one query against the log gives an answer of its index type. */
+DEFINE(ReadPath, : Type 1 := (0 answer : Type 0) -> (log : Log) -> (query : Query answer) -> answer)

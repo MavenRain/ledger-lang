@@ -1,0 +1,287 @@
+/* The core schema as X-macro rows. A row keeps its arguments in mech
+   surface syntax, so the C stringify operator gives the exact text.
+   CARRIER(Name, header)      a base family that the compiler builds in
+   FAMILY(Name, header)       a family of the language
+   AND(Name, header)          a family in the mu group of the row before
+   CONSTRUCTOR(name, Result)  a constructor of the family before
+   FIELD(name, Type)          a field of the constructor before
+   DEFINE(Name, rest)         a definition
+   An argument never contains a comma. */
+
+/* Each record enters the log as one Entry. The identity of a record is the hash */
+/* of the entry that created it, so no record stores its own id. Log order */
+/* replaces time: a start time is the creation entry itself, and a later time is */
+/* a Ref to the entry that caused it. */
+
+/* Base carriers. The language has no string type, so Text is a UTF-8 byte list. */
+CARRIER(Text, : Type 0)
+  CONSTRUCTOR(textEnd, Text)
+  CONSTRUCTOR(textByte, Text) FIELD(byte, Nat) FIELD(rest, Text)
+
+CARRIER(Flag, : Type 0)
+  CONSTRUCTOR(flagNo, Flag)
+  CONSTRUCTOR(flagYes, Flag)
+
+CARRIER(Option, (0 A : Type 0) : Type 0)
+  CONSTRUCTOR(none, Option A)
+  CONSTRUCTOR(some, Option A) FIELD(value, A)
+
+CARRIER(List, (0 A : Type 0) : Type 0)
+  CONSTRUCTOR(nil, List A)
+  CONSTRUCTOR(cons, List A) FIELD(head, A) FIELD(tail, List A)
+
+/* An untyped value. Attrs is a record from text keys to untyped values. */
+CARRIER(Value, : Type 0)
+  CONSTRUCTOR(valueNull, Value)
+  CONSTRUCTOR(valueFlag, Value) FIELD(flag, Flag)
+  CONSTRUCTOR(valueNat, Value) FIELD(number, Nat)
+  CONSTRUCTOR(valueText, Value) FIELD(text, Text)
+  CONSTRUCTOR(valueItems, Value) FIELD(items, Values)
+  CONSTRUCTOR(valueAttrs, Value) FIELD(attrs, Attrs)
+AND(Values, : Type 0)
+  CONSTRUCTOR(valuesEnd, Values)
+  CONSTRUCTOR(valuesItem, Values) FIELD(head, Value) FIELD(tail, Values)
+AND(Attrs, : Type 0)
+  CONSTRUCTOR(attrsEnd, Attrs)
+  CONSTRUCTOR(attrsField, Attrs) FIELD(key, Text) FIELD(value, Value) FIELD(rest, Attrs)
+
+/* One tag for each record that an entry can create. */
+CARRIER(Kind, : Type 0)
+  CONSTRUCTOR(kindParty, Kind)
+  CONSTRUCTOR(kindMembership, Kind)
+  CONSTRUCTOR(kindCommercial, Kind)
+  CONSTRUCTOR(kindCommitment, Kind)
+  CONSTRUCTOR(kindArtifact, Kind)
+  CONSTRUCTOR(kindEvent, Kind)
+  CONSTRUCTOR(kindAssignment, Kind)
+  CONSTRUCTOR(kindPolicy, Kind)
+
+/* sha256 of the canonical encoding of an Entry. */
+CARRIER(Hash, : Type 0)
+  CONSTRUCTOR(hashOf, Hash) FIELD(digest, Text)
+
+/* The hash of the entry that created a record of kind k. */
+CARRIER(Ref, (0 k : Kind) : Type 0)
+  CONSTRUCTOR(refTo, Ref k) FIELD(hash, Hash)
+
+/* A party or a commercial. The constructor replaces subject_type. */
+FAMILY(Account, : Type 0)
+  CONSTRUCTOR(accountParty, Account) FIELD(party, Ref kindParty)
+  CONSTRUCTOR(accountCommercial, Account) FIELD(commercial, Ref kindCommercial)
+
+/* The subject of an event. The constructor replaces subject_type. */
+FAMILY(Subject, : Type 0)
+  CONSTRUCTOR(subjectParty, Subject) FIELD(party, Ref kindParty)
+  CONSTRUCTOR(subjectMembership, Subject) FIELD(membership, Ref kindMembership)
+  CONSTRUCTOR(subjectCommercial, Subject) FIELD(commercial, Ref kindCommercial)
+  CONSTRUCTOR(subjectCommitment, Subject) FIELD(commitment, Ref kindCommitment)
+  CONSTRUCTOR(subjectAssignment, Subject) FIELD(assignment, Ref kindAssignment)
+
+FAMILY(KindParty, : Type 0)
+  CONSTRUCTOR(partyPerson, KindParty)
+  CONSTRUCTOR(partyOrg, KindParty)
+
+FAMILY(KindCommercial, : Type 0)
+  CONSTRUCTOR(commercialDeal, KindCommercial)
+  CONSTRUCTOR(commercialSubscription, KindCommercial)
+  CONSTRUCTOR(commercialTicket, KindCommercial)
+
+FAMILY(Actor, : Type 0)
+  CONSTRUCTOR(actorHuman, Actor) FIELD(party, Ref kindParty)  /* KindParty = partyPerson */
+  CONSTRUCTOR(actorAgent, Actor) FIELD(name, Text)  /* not created in the log: a label, not a hash */
+  CONSTRUCTOR(actorSystem, Actor) FIELD(name, Text)
+
+FAMILY(IdentifierSystem, : Type 0)
+  CONSTRUCTOR(systemEmail, IdentifierSystem)
+  CONSTRUCTOR(systemDomain, IdentifierSystem)
+  CONSTRUCTOR(systemLinkedin, IdentifierSystem)
+  CONSTRUCTOR(systemPhone, IdentifierSystem)
+  CONSTRUCTOR(systemSalesforce, IdentifierSystem)
+  CONSTRUCTOR(systemStripe, IdentifierSystem)
+  CONSTRUCTOR(systemOther, IdentifierSystem) FIELD(name, Text)
+
+FAMILY(Identifier, : Type 0)
+  CONSTRUCTOR(makeIdentifier, Identifier)
+    FIELD(system, IdentifierSystem)
+    FIELD(value, Text)
+    FIELD(verifiedBy, Option (Ref kindEvent))     /* projected; was verified_at */
+
+/* Actor and time are those of the entry that carries the provenance. */
+FAMILY(Provenance, : Type 0)
+  CONSTRUCTOR(makeProvenance, Provenance)
+    FIELD(artifact, Option (Ref kindArtifact))
+    FIELD(event, Option (Ref kindEvent))
+    FIELD(confidence, Option Nat)                 /* percent, 0 to 100, only for inferred values */
+
+FAMILY(Party, : Type 0)
+  CONSTRUCTOR(makeParty, Party)
+    FIELD(kind, KindParty)
+    FIELD(displayName, Text)
+    FIELD(legalName, Option Text)
+    FIELD(identifiers, List Identifier)           /* merge keys */
+    FIELD(attrs, Attrs)                           /* title, location, industry, headcount */
+    FIELD(lastEvent, Option (Ref kindEvent))      /* projected; was updated_at */
+    FIELD(deletedBy, Option (Ref kindEvent))      /* projected; was deleted_at */
+
+FAMILY(Membership, : Type 0)
+  CONSTRUCTOR(makeMembership, Membership)
+    FIELD(person, Ref kindParty)                  /* KindParty = partyPerson */
+    FIELD(org, Ref kindParty)                     /* KindParty = partyOrg */
+    FIELD(role, Option Text)
+    FIELD(isPrimary, Flag)
+    FIELD(endedBy, Option (Ref kindEvent))        /* projected; none = current */
+    FIELD(provenance, Provenance)
+    FIELD(attrs, Attrs)
+
+FAMILY(CommercialStatus, : Type 0)
+  CONSTRUCTOR(statusOpen, CommercialStatus)
+  CONSTRUCTOR(statusWon, CommercialStatus)
+  CONSTRUCTOR(statusLost, CommercialStatus)
+  CONSTRUCTOR(statusPaused, CommercialStatus)
+
+FAMILY(Commercial, : Type 0)
+  CONSTRUCTOR(makeCommercial, Commercial)
+    FIELD(kind, KindCommercial)
+    FIELD(name, Text)
+    FIELD(party, Ref kindParty)                   /* the customer org (or person, if B2C) */
+    FIELD(stage, Text)                            /* current projection */
+    FIELD(amountCents, Option Nat)                /* pipeline number; not the legal amount */
+    FIELD(currency, Text)
+    FIELD(expectedCloseOn, Option Text)           /* date */
+    FIELD(status, CommercialStatus)
+    FIELD(attrs, Attrs)
+    FIELD(lastEvent, Option (Ref kindEvent))      /* projected; pointer into the log */
+
+FAMILY(CommitmentKind, : Type 0)
+  CONSTRUCTOR(commitmentPrice, CommitmentKind)
+  CONSTRUCTOR(commitmentTerm, CommitmentKind)
+  CONSTRUCTOR(commitmentDate, CommitmentKind)
+  CONSTRUCTOR(commitmentScope, CommitmentKind)
+  CONSTRUCTOR(commitmentSla, CommitmentKind)
+
+FAMILY(CommitmentStatus, : Type 0)
+  CONSTRUCTOR(commitmentProposed, CommitmentStatus)
+  CONSTRUCTOR(commitmentAgreed, CommitmentStatus)
+  CONSTRUCTOR(commitmentSuperseded, CommitmentStatus)
+
+FAMILY(Commitment, : Type 0)
+  CONSTRUCTOR(makeCommitment, Commitment)
+    FIELD(commercial, Ref kindCommercial)
+    FIELD(kind, CommitmentKind)
+    FIELD(label, Text)
+    FIELD(value, Value)                           /* 18400000, "net_45", "2026-10-01" */
+    FIELD(unit, Option Text)
+    FIELD(status, CommitmentStatus)
+    FIELD(supersedes, Option (Ref kindCommitment))  /* valid from its own entry until the entry that supersedes it */
+    FIELD(provenance, Provenance)                 /* usually a signed quote / email artifact */
+
+FAMILY(ArtifactKind, : Type 0)
+  CONSTRUCTOR(artifactEmail, ArtifactKind)
+  CONSTRUCTOR(artifactTranscript, ArtifactKind)
+  CONSTRUCTOR(artifactPdf, ArtifactKind)
+  CONSTRUCTOR(artifactSlack, ArtifactKind)
+  CONSTRUCTOR(artifactNote, ArtifactKind)
+  CONSTRUCTOR(artifactAudio, ArtifactKind)
+
+/* The capture time and the capturer are the position and the actor of its entry. */
+FAMILY(Artifact, : Type 0)
+  CONSTRUCTOR(makeArtifact, Artifact)
+    FIELD(kind, ArtifactKind)
+    FIELD(sha256, Text)                           /* content-addressed; never update in place */
+    FIELD(uri, Text)                              /* s3://... or file://... */
+    FIELD(mime, Text)
+    FIELD(subjects, List Account)                 /* parties / commercials this is about */
+    FIELD(attrs, Attrs)                           /* from, to, duration_s, language */
+
+FAMILY(EventType, : Type 0)
+  CONSTRUCTOR(eventStageChanged, EventType)
+  CONSTRUCTOR(eventAmountChanged, EventType)
+  CONSTRUCTOR(eventAssignmentChanged, EventType)
+  CONSTRUCTOR(eventCommitmentSet, EventType)
+  CONSTRUCTOR(eventNoteAdded, EventType)
+  CONSTRUCTOR(eventMessage, EventType)
+  CONSTRUCTOR(eventMeeting, EventType)
+  CONSTRUCTOR(eventCall, EventType)
+  CONSTRUCTOR(eventApproval, EventType)
+  CONSTRUCTOR(eventPolicyDenied, EventType)
+  CONSTRUCTOR(eventFieldsChanged, EventType)      /* the four below replace in-place timestamp writes */
+  CONSTRUCTOR(eventIdentifierVerified, EventType)
+  CONSTRUCTOR(eventEnded, EventType)
+  CONSTRUCTOR(eventDeleted, EventType)
+
+FAMILY(Event, : Type 0)
+  CONSTRUCTOR(makeEvent, Event)
+    FIELD(type, EventType)
+    FIELD(subject, Subject)
+    FIELD(artifact, Option (Ref kindArtifact))
+    FIELD(parent, Option (Ref kindEvent))
+    FIELD(payload, Attrs)                         /* before/after, channel, snippet */
+    FIELD(policy, Option (Ref kindPolicy))        /* which rule allowed or denied this */
+
+FAMILY(AssignmentRole, : Type 0)
+  CONSTRUCTOR(roleOwner, AssignmentRole)
+  CONSTRUCTOR(roleSdr, AssignmentRole)
+  CONSTRUCTOR(roleSe, AssignmentRole)
+  CONSTRUCTOR(roleCs, AssignmentRole)
+  CONSTRUCTOR(roleOverlay, AssignmentRole)
+
+FAMILY(Assignment, : Type 0)
+  CONSTRUCTOR(makeAssignment, Assignment)
+    FIELD(subject, Account)
+    FIELD(assignee, Ref kindParty)                /* a human user, or the org Party that stands for a team */
+    FIELD(role, AssignmentRole)
+    FIELD(territory, Option Text)
+    FIELD(endedBy, Option (Ref kindEvent))        /* projected; none = current */
+    FIELD(provenance, Provenance)
+
+FAMILY(PolicyScope, : Type 0)
+  CONSTRUCTOR(scopeCommercial, PolicyScope) FIELD(kind, KindCommercial)
+  CONSTRUCTOR(scopeParty, PolicyScope)
+  CONSTRUCTOR(scopeAll, PolicyScope)
+
+FAMILY(Requirement, : Type 0)
+  CONSTRUCTOR(makeRequirement, Requirement)
+    FIELD(fields, Option (List Text))             /* e.g. economic_buyer */
+    FIELD(commitmentKinds, Option (List CommitmentKind))
+    FIELD(approvalFrom, Option (List Text))       /* roles */
+    FIELD(maxDiscountPct, Option Nat)
+
+FAMILY(Permission, : Type 0)
+  CONSTRUCTOR(permissionRead, Permission)
+  CONSTRUCTOR(permissionWrite, Permission)
+  CONSTRUCTOR(permissionTransition, Permission)
+  CONSTRUCTOR(permissionAssign, Permission)
+
+FAMILY(AclRule, : Type 0)
+  CONSTRUCTOR(makeAclRule, AclRule)
+    FIELD(principal, Text)                        /* role, person Ref, or agent name */
+    FIELD(can, List Permission)
+    FIELD(fields, Option (List Text))             /* none = all */
+
+FAMILY(Policy, : Type 0)
+  CONSTRUCTOR(makePolicy, Policy)
+    FIELD(name, Text)
+    FIELD(appliesTo, PolicyScope)
+    FIELD(fromStage, Option Text)                 /* transition guard */
+    FIELD(toStage, Option Text)
+    FIELD(require, Requirement)
+    FIELD(acl, List AclRule)
+    FIELD(active, Flag)
+
+/* What an entry creates. The constructor is the kind tag. */
+FAMILY(Body, : Type 0)
+  CONSTRUCTOR(createsParty, Body) FIELD(party, Party)
+  CONSTRUCTOR(createsMembership, Body) FIELD(membership, Membership)
+  CONSTRUCTOR(createsCommercial, Body) FIELD(commercial, Commercial)
+  CONSTRUCTOR(createsCommitment, Body) FIELD(commitment, Commitment)
+  CONSTRUCTOR(createsArtifact, Body) FIELD(artifact, Artifact)
+  CONSTRUCTOR(createsEvent, Body) FIELD(event, Event)
+  CONSTRUCTOR(createsAssignment, Body) FIELD(assignment, Assignment)
+  CONSTRUCTOR(createsPolicy, Body) FIELD(policy, Policy)
+
+FAMILY(Entry, : Type 0)
+  CONSTRUCTOR(makeEntry, Entry)
+    FIELD(prev, Option Hash)                      /* log head at append (none = first entry): gives the */
+                                                  /* order, and keeps two equal bodies from sharing a hash */
+    FIELD(actor, Actor)
+    FIELD(body, Body)                             /* projected fields are none here */

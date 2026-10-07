@@ -146,6 +146,35 @@ struct LType {
   Val rhs;
 };
 
+/* A list of types. NULL is the end. */
+typedef struct LTypes LTypes;
+struct LTypes {
+  const LType *head;
+  const LTypes *tail;
+};
+
+/* A list of texts. NULL is the end. */
+typedef struct Texts Texts;
+struct Texts {
+  Text head;
+  const Texts *tail;
+};
+
+/* How a constructor applies to its arguments. PLAN_TAG keeps arguments,
+   mode and label. PLAN_RECORD keeps arguments, fields and, when has_tag is
+   1, tag. */
+typedef enum { PLAN_TAG, PLAN_RECORD } PlanKind;
+
+typedef struct {
+  PlanKind kind;
+  const LTypes *arguments;
+  Nat mode;
+  Text label;
+  const Texts *fields;
+  Nat has_tag;
+  Text tag;
+} Plan;
+
 typedef enum { FLAG_NO, FLAG_YES } Flag;
 
 typedef enum {
@@ -200,6 +229,13 @@ int emit_text(Printer *printer, Text text, Failure *failure);
 int quote_bytes(Printer *printer, Text text, Failure *failure);
 int quoted(Printer *printer, Text text, Failure *failure);
 int print_value(Printer *printer, const Value *value, Failure *failure);
+
+/* schema.c: the families of core/schema.def. Only the added families
+   (Account on) have plans and schema types. schema_constructor_plan and
+   schema_type return 1 and write the answer, or return 0 for none. */
+int schema_constructor_plan(Text family, Text name, Plan *plan);
+int schema_type(Text name, const LType **type);
+Nat schema_reserved_name(Text name);
 
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
