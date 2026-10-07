@@ -119,11 +119,17 @@ not complete the M0 milestone in `SPEC.md`.
 - Nested bound partial applications. A bound function argument can itself
   be a partial application, including in structure forms and folds. Each
   nested closure keeps the scope of the outer partial application.
+- Partial applications of functions with type parameters. The written
+  arguments start with one data type for each type parameter. The closure
+  keeps the tokens of the type arguments and parses them again in the scope
+  of the application, so they can name the type parameters of the caller.
+  This applies to function arguments, nested bound arguments, structure
+  forms and folds.
 
 ## Remaining M0 work
 
-1. Add dependent function types. Extend
-   partial application to type parameters and support computed function expressions.
+1. Add dependent function types and support computed function
+   expressions.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types.
@@ -157,8 +163,8 @@ not complete the M0 milestone in `SPEC.md`.
   partial application binding leading parameters. The remaining signature
   must match the expected type. A bound function argument is a name,
   optionally grouped, a parenthesized inline function, or a nested partial
-  application. Partial applications of
-  functions with type parameters are unsupported.
+  application. A partial application of a function with type parameters
+  gives all type arguments first.
   A function of type `WritePath`
   is a function of the program. The compiler does not supply the write
   path of M1.
@@ -187,9 +193,9 @@ original meaning.
 
 - Type parameters come before the value parameters. A type argument is in
   the position of an argument, so a type former such as `Prod Nat Nat` needs
-  parentheses. The checker does not infer a type argument. A function with a
-  type parameter is not the function argument of a structure form or of an
-  algebra form. A type cannot depend on a value parameter. The name of a
+  parentheses. The checker does not infer a type argument. The name of a
+  function with a type parameter is not a function argument. A partial
+  application that gives its type arguments is. A type cannot depend on a value parameter. The name of a
   type parameter is not a reserved name.
 
 ## Internal boundaries

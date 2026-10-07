@@ -90,11 +90,10 @@ test('partial arguments retain signature and prefix type checks', () => {
   } });
 });
 
-test('partial arguments reject incompatible suffixes and type parameters', () => {
+test('partial arguments reject incompatible suffixes', () => {
   for (const definition of [
     'def wrong : (a : Nat) -> (s : Text) -> Nat := fun (a : Nat) (s : Text) => a ',
     'def wrong : (a : Nat) -> (n : Nat) -> Text := fun (a : Nat) (n : Nat) => "x" ',
-    'def wrong : (A : Type 0) -> (n : Nat) -> Nat := fun (A : Type 0) (n : Nat) => n ',
   ]) {
     const source = `${prefix}${definition}def result : Nat := apply (wrong 42) 7`;
     assert.deepEqual(run(source), { error: {

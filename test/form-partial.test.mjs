@@ -71,9 +71,7 @@ test('partial form functions reject bad bound arguments', () => {
   const polymorphic = prefix +
     'def generic : (A : Type 0) -> (a : A) -> (n : Nat) -> Nat := fun (A : Type 0) (a : A) (n : Nat) => n ' +
     'def result : List Nat := map (generic Nat 1) xs';
-  assert.deepEqual(run(polymorphic), { error: {
-    byte: polymorphic.lastIndexOf('generic'), message: 'expected a function with one parameter',
-  } });
+  assert.deepEqual(run(polymorphic).instances.at(-1).value, run(`${prefix}def result : List Nat := xs`).instances.at(-1).value);
   const data = `${prefix}def result : List Nat := map (xs 1) xs`;
   assert.deepEqual(run(data), { error: {
     byte: data.lastIndexOf('xs 1'), message: 'expected a function with one parameter',

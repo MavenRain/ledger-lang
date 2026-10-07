@@ -375,6 +375,25 @@ def inlineClosure : Text -> LType -> Value -> Values -> List Binding -> Binding 
   closureBinding name (inlineParams (inlineParts names) (arrowParams ty)) (arrowResult ty)
     (inlineTokens body) (scopeOf caller)
 
+-- A partial application of a function with type parameters keeps the
+-- tokens of its type arguments as its first bound value. The closure parses
+-- them again in the scope of the application.
+def rec typeFuel : List Token -> Fuel := fun (tokens : List Token) =>
+  case tokens as self in List return Fuel with
+  | nil => fuelMore fuelEnd
+  | cons head tail => fuelMore (typeFuel tail)
+
+def typeTokensOf : Value -> List Token := fun (types : Value) =>
+  case (asValues types) as listed in Option return List Token with
+  | none => nil
+  | some items => inlineTokens items
+
+def typedBound : List Param -> List Token -> List Token -> List Value -> List Value :=
+  fun (params : List Param) (tokens : List Token) (rest : List Token) (values : List Value) =>
+  select (List Value) (hasTypeParam params)
+    (cons (valueItems (inlineTokenValues (takeCount Token Token (dropCount Token Token rest tokens) tokens))) values)
+    values
+
 -- A partial application `(g a1 .. ak)` binds the first k parameters of g in
 -- the scope of the closure. The value of a function argument, and of a bound
 -- argument of a function type, is a name, the name of a function followed by
@@ -402,9 +421,12 @@ def rec boundBinding : Value -> Text -> LType -> List Binding -> Binding :=
             | binding other given held => opaqueClosure name ty
             | typeBinding other universe defined => opaqueClosure name ty
             | arrowBinding other params result => opaqueClosure name ty
-            | funBinding other params result body =>
-                closureBinding name (dropCount Value Param (listOfValues rest) params) result body
-                  (scopeOf (bindBound rest params caller (definitionScope other caller)))
+            | funBinding other params result body => (
+                case (natEq (hasTypeParam params) 1) as polymorphic return Binding with
+                | 1 (x : prod ()) => typedClosure rest name ty other params result body caller
+                | 0 (x : prod ()) =>
+                    closureBinding name (dropCount Value Param (listOfValues rest) params) result body
+                      (scopeOf (bindBound rest params caller (definitionScope other caller))))
             | closureBinding other params result body scope =>
                 closureBinding name (dropCount Value Param (listOfValues rest) params) result body
                   (scopeOf (bindBound rest params caller (scopeList scope)))))))
@@ -422,6 +444,20 @@ and bindBound : Values -> List Param -> List Binding -> List Binding -> List Bin
             | 0 (x : prod ()) => bindBound rest tail caller (cons (binding bound ty value) scope)
             | 1 (x : prod ()) => bindBound rest tail caller
                 (cons (boundBinding value bound ty caller) scope))))
+-- The closure of a function with type parameters binds the type arguments
+-- in front of the definition scope, as an application does. The types of
+-- the value parameters and of the result use the type arguments.
+and typedClosure : Values -> Text -> LType -> Text -> List Param -> LType -> List Token -> List Binding -> Binding :=
+  fun (rest : Values) (name : Text) (ty : LType) (other : Text) (params : List Param) (result : LType) (body : List Token) (caller : List Binding) =>
+  case rest as stored in Values return Binding with
+  | valuesEnd => opaqueClosure name ty
+  | valuesItem types values => (
+    case (typeArguments (typeFuel (typeTokensOf types)) params caller nil (typeTokensOf types)) as instantiated in Parsed return Binding with
+    | parseError at message => opaqueClosure name ty
+    | parsed chosen after =>
+        closureBinding name (dropCount Value Param (listOfValues values) (valueParams chosen params)) (substType chosen result) body
+          (scopeOf (bindBound values (valueParams chosen params) caller
+            (reverseListOnto Binding (definitionScope other caller) chosen))))
 
 def partialClosure : Text -> LType -> Text -> List Value -> List Binding -> Binding :=
   fun (name : Text) (ty : LType) (target : Text) (bound : List Value) (caller : List Binding) =>
@@ -1234,6 +1270,7 @@ and parseTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Wor
 -- The bound arguments are checked in the environment of the application. A
 -- bound argument of a function type is a name, a parenthesized inline
 -- function or a partial application. A bare partial application needs parentheses.
+-- A function with type parameters takes its type arguments first.
 and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -> LType -> List Binding -> List Token -> Worked Value :=
   fun (fuel : Fuel) (budget : Nat) (atom : Nat) (position : Nat) (expected : LType) (name : Text) (params : List Param) (result : LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Value with
@@ -1242,23 +1279,34 @@ and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -
     case (natEq (sameType expected (arrowType params result)) 1) as exact return Worked Value with
     | 1 (x : prod ()) => worked (valueText name) tokens budget
     | 0 (x : prod ()) => (
-      case (boundParams params (arrowParams expected)) as prefix in List return Worked Value with
-      | nil => workError position eTerm
-      | cons first others => (
-        case (natEq (hasTypeParam params) 1) as polymorphic return Worked Value with
+      case (natEq (hasTypeParam params) 1) as polymorphic return Worked Value with
+      | 0 (x : prod ()) => prefixArgument more budget atom position expected name params params result environment tokens tokens
+      | 1 (x : prod ()) => (
+        case (natEq atom 1) as bare return Worked Value with
         | 1 (x : prod ()) => workError position eTerm
         | 0 (x : prod ()) => (
-          case (natEq (sameType expected (arrowType (dropCount Param Param (cons first others) params) result)) 0) as mismatch return Worked Value with
-          | 1 (x : prod ()) => workError position eTerm
-          | 0 (x : prod ()) => (
-            case (natEq atom 1) as bare return Worked Value with
-            | 1 (x : prod ()) => workError position eParen
-            | 0 (x : prod ()) => (
-              case (parseArguments more budget 1 (paramTypes (cons first others)) environment tokens) as checked in Worked return Worked Value with
-              | workError at message => workError at message
-              | worked values rest budget => select (Worked Value) (boundFunctions (cons first others) values)
-                  (worked (valueItems (valuesOfList (cons (valueText name) values))) rest budget)
-                  (workError position eTerm)))))))
+          case (typeArguments more params environment nil tokens) as instantiated in Parsed return Worked Value with
+          | parseError at message => workError at message
+          | parsed chosen afterTypes => prefixArgument more budget atom position expected name params
+              (valueParams chosen params) (substType chosen result) environment tokens afterTypes))))
+-- The bound arguments bind the leading value parameters, after the type
+-- arguments. formal holds the value parameters with the type arguments.
+and prefixArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -> List Param -> LType -> List Binding -> List Token -> List Token -> Worked Value :=
+  fun (fuel : Fuel) (budget : Nat) (atom : Nat) (position : Nat) (expected : LType) (name : Text) (params : List Param) (formal : List Param) (result : LType) (environment : List Binding) (tokens : List Token) (afterTypes : List Token) =>
+  case fuel as guard in Fuel return Worked Value with
+  | fuelEnd => workError position eFuel
+  | fuelMore more => (
+    case (natEq (sameType expected (arrowType (dropCount Param Param (boundParams formal (arrowParams expected)) formal) result)) 0) as mismatch return Worked Value with
+    | 1 (x : prod ()) => workError position eTerm
+    | 0 (x : prod ()) => (
+      case (natEq atom 1) as bare return Worked Value with
+      | 1 (x : prod ()) => workError position eParen
+      | 0 (x : prod ()) => (
+        case (parseArguments more budget 1 (paramTypes (boundParams formal (arrowParams expected))) environment afterTypes) as checked in Worked return Worked Value with
+        | workError at message => workError at message
+        | worked values rest budget => select (Worked Value) (boundFunctions (boundParams formal (arrowParams expected)) values)
+            (worked (valueItems (valuesOfList (cons (valueText name) (typedBound params tokens afterTypes values)))) rest budget)
+            (workError position eTerm))))
 -- An inline function argument `(fun (x : A) .. => body)` has one or more
 -- binders of data types that match the parameters of the expected function
 -- type. Its body is checked against the expected result type with each
@@ -1394,16 +1442,16 @@ and boundUnary : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Bindi
   case fuel as guard in Fuel return Worked Unary with
   | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq (hasTypeParam params) 1) as polymorphic return Worked Unary with
-    | 1 (x : prod ()) => workError position eUnary
-    | 0 (x : prod ()) => (
-      case (parseArguments more budget 1 (paramTypes (frontParams params)) environment tokens) as checked in Worked return Worked Unary with
+    case (typeArguments more params environment nil tokens) as instantiated in Parsed return Worked Unary with
+    | parseError at message => workError at message
+    | parsed chosen afterTypes => (
+      case (parseArguments more budget 1 (paramTypes (frontParams (valueParams chosen params))) environment afterTypes) as checked in Worked return Worked Unary with
       | workError at message => workError at message
       | worked values rest budget => (
-        case (natEq (boundFunctions (frontParams params) values) 0) as nested return Worked Unary with
+        case (natEq (boundFunctions (frontParams (valueParams chosen params)) values) 0) as nested return Worked Unary with
         | 1 (x : prod ()) => workError position eTerm
         | 0 (x : prod ()) => (
-          case (unaryOf environment (partialClosure name (arrowType (dropCount Param Param (frontParams params) params) result) name values environment)) as shaped in Option return Worked Unary with
+          case (unaryOf environment (partialClosure name (arrowType (dropCount Param Param (frontParams (valueParams chosen params)) (valueParams chosen params)) (substType chosen result)) name (typedBound params tokens afterTypes values) environment)) as shaped in Option return Worked Unary with
           | none => workError position eUnary
           | some op => worked op rest budget))))
 -- The function of fold or unfold is a name, a parenthesized partial
@@ -1485,16 +1533,16 @@ and boundStepper : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Bin
   case fuel as guard in Fuel return Worked Stepper with
   | fuelEnd => workError position eFuel
   | fuelMore more => (
-    case (natEq (hasTypeParam params) 1) as polymorphic return Worked Stepper with
-    | 1 (x : prod ()) => workError position eStep
-    | 0 (x : prod ()) => (
-      case (boundArguments more budget params environment tokens) as checked in Worked return Worked Stepper with
+    case (typeArguments more params environment nil tokens) as instantiated in Parsed return Worked Stepper with
+    | parseError at message => workError at message
+    | parsed chosen afterTypes => (
+      case (boundArguments more budget (valueParams chosen params) environment afterTypes) as checked in Worked return Worked Stepper with
       | workError at message => workError at message
       | worked values rest budget => (
-        case (natEq (boundFunctions (takeCount Value Param values params) values) 0) as nested return Worked Stepper with
+        case (natEq (boundFunctions (takeCount Value Param values (valueParams chosen params)) values) 0) as nested return Worked Stepper with
         | 1 (x : prod ()) => workError position eTerm
         | 0 (x : prod ()) => (
-          case (partialClosure name (arrowType (dropCount Value Param values params) result) name values environment) as made in Binding return Worked Stepper with
+          case (partialClosure name (arrowType (dropCount Value Param values (valueParams chosen params)) (substType chosen result)) name (typedBound params tokens afterTypes values) environment) as made in Binding return Worked Stepper with
           | binding other ty value => workError position eStep
           | typeBinding other universe defined => workError position eStep
           | arrowBinding other given target => workError position eStep

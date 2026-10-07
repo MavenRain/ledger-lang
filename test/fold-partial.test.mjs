@@ -80,9 +80,7 @@ test('partial fold functions reject bad bound arguments', () => {
     'def generic : (A : Type 0) -> (a : A) -> (x : Nat) -> (acc : Nat) -> Nat := ' +
     'fun (A : Type 0) (a : A) (x : Nat) (acc : Nat) => acc ' +
     'def result : Nat := fold (generic Nat 1) 0 xs';
-  assert.deepEqual(run(polymorphic), { error: {
-    byte: polymorphic.lastIndexOf('generic'), message: 'expected the name of a function',
-  } });
+  assert.equal(run(polymorphic).instances.at(-1).value, 0);
   const data = `${prefix}def result : Nat := fold (xs) 0 xs`;
   assert.deepEqual(run(data), { error: {
     byte: data.lastIndexOf('(xs)') + 1, message: 'expected the name of a function',

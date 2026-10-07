@@ -79,7 +79,7 @@ test('a nested bound partial application must fit and is checked', () => {
   refused(`${prefix}def n : Nat := use (apply (late (pickK 1)))`, /./);
   refused(`${prefix}def n : Nat := use (apply (apply (fun (x : Text) => 0)))`, /./);
   const pick = 'def pick : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => x ';
-  refused(`${prefix}${pick}def n : Nat := use (apply (pick Nat))`, /./);
+  assert.equal(last(`${prefix}${pick}def n : Nat := use (apply (pick Nat))`), 1);
 });
 
 test('the bound partial application example compiles', async () => {

@@ -115,9 +115,7 @@ test('partial algebra functions reject bad bound arguments and bad fits', () => 
   const polymorphic = prefix +
     'def generic : (A : Type 0) -> (a : A) -> (t : Text) -> Nat := fun (A : Type 0) (a : A) (t : Text) => 1 ' +
     'def result : Nat := fold onNat onFlag (generic Nat 1) onItems onAttrs 0 vText';
-  assert.deepEqual(run(polymorphic), { error: {
-    byte: polymorphic.lastIndexOf('generic'), message: 'expected the name of a function',
-  } });
+  assert.equal(run(polymorphic).instances.at(-1).value, 1);
   assert.ok(run(`${prefix}def result : Nat := fold onNat (xs) onText onItems onAttrs 0 vNumber`).error);
   assert.ok(run(`${prefix}def result : Nat := fold onNat (textK 2) onText onItems onAttrs 0 vNumber`).error);
   assert.ok(run(`${prefix}def result : Nat := fold (pickTwo 1 2 3) ${rest} 0 vNumber`).error);
