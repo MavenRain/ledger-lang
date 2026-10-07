@@ -5,6 +5,7 @@ C_SOURCES := $(wildcard compiler/*.c)
 C_OBJECTS := $(patsubst compiler/%.c,build/c/%.o,$(C_SOURCES))
 C_HEADERS := $(wildcard compiler/*.h)
 C_SCHEMA := core/schema.def
+C_OPS := core/ops.def
 
 build:
 	node bin/build.mjs
@@ -25,6 +26,7 @@ c-check:
 c-build: $(C_OBJECTS)
 
 build/c/schema.o: $(C_SCHEMA)
+build/c/operations.o: $(C_OPS)
 
 build/c/%.o: compiler/%.c $(C_HEADERS)
 	@mkdir -p build/c
@@ -34,7 +36,7 @@ c-test: build/c-modules-test build/c-output-test
 	./build/c-modules-test
 	./build/c-output-test
 
-build/c-modules-test: test/c-modules.c $(filter-out compiler/main.c,$(C_SOURCES)) $(C_HEADERS) $(C_SCHEMA)
+build/c-modules-test: test/c-modules.c $(filter-out compiler/main.c,$(C_SOURCES)) $(C_HEADERS) $(C_SCHEMA) $(C_OPS)
 	@mkdir -p build
 	$(TCC) -Wall -Werror -o $@ test/c-modules.c $(filter-out compiler/main.c,$(C_SOURCES))
 

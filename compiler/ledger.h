@@ -237,6 +237,17 @@ int schema_constructor_plan(Text family, Text name, Plan *plan);
 int schema_type(Text name, const LType **type);
 Nat schema_reserved_name(Text name);
 
+/* operations.c: the families of core/ops.def. ops_constructor_plan and
+   ops_type cover the Type 0 families and the alias Log. ops_query_plan and
+   ops_query_answer cover the constructors of the indexed family Query. The
+   int functions return 1 and write the answer, or return 0 for none. */
+int ops_constructor_plan(Text family, Text name, Plan *plan);
+int ops_query_plan(Text name, Plan *plan);
+int ops_query_answer(Text name, const LType **type);
+int ops_type(Text name, const LType **type);
+Nat ops_later_type(Text name);
+Nat ops_reserved_name(Text name);
+
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
 int compile_program(Text source, Text *output, Failure *failure);
