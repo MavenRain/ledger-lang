@@ -124,7 +124,9 @@ not complete the M0 milestone in `SPEC.md`.
   keeps the tokens of the type arguments and parses them again in the scope
   of the application, so they can name the type parameters of the caller.
   This applies to function arguments, nested bound arguments, structure
-  forms and folds.
+  forms, `fold`, `unfold` and the five functions of a fold over `Value`. A
+  partial application with type parameters can bind another one, also in
+  the body of a function with type parameters.
 
 ## Remaining M0 work
 

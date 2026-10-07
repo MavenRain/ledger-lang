@@ -74,11 +74,13 @@ another function parameter of the same type, or is a parenthesized partial
 application `(g a1 ... ak)`. The bound arguments supply leading parameters;
 the remaining parameters and result must match the expected function type.
 Bound values are evaluated in the caller's scope. A bound function argument
-must be a name, optionally grouped, which can itself name a parameter
-holding a partial application. Partial application of a function with type
-parameters is unsupported. The function of `map`, `bind` and `filter` is a
+is a name, optionally grouped, or another parenthesized partial application.
+A partial application of a function with type parameters gives one data type
+for each type parameter first, then the bound values. The type arguments
+resolve in the scope of the application, so they can name the type
+parameters of the caller. The function of `map`, `bind` and `filter` is a
 name or a parenthesized partial application that binds all but the last
-parameter of a function without type parameters. The function of `fold` and
+parameter. The function of `fold` and
 `unfold` is a name or a parenthesized partial application whose written
 arguments bind the leading parameters; the parameters that are left must fit
 the form. Each of the five functions of a fold over `Value` is such a name or
@@ -99,7 +101,7 @@ A partial application can also bind a parameter of a function type with a
 parenthesized inline `fun`. Its body is checked at the partial application
 and keeps the scope of the partial application.
 The body of the function can apply the parameter, pass it to another function, or give
-it to `map`, `bind`, `filter`, `either`, `fold` and `unfold`. Structure forms still require a name for their function argument.
+it to `map`, `bind`, `filter`, `either`, `fold` and `unfold`.
 A function type with a type parameter is not a parameter type.
 
 ## 4. Structures

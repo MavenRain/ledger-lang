@@ -65,6 +65,61 @@ test('partial applications with type parameters refuse wrong arguments', () => {
   }
 });
 
+test('unfold takes a partial application with type parameters', () => {
+  const step = 'def stepK : (A : Type 0) -> (k : A) -> (n : Nat) -> Option (Prod A Nat) := ' +
+    'fun (A : Type 0) (k : A) (n : Nat) => some (pair k n) ';
+  const wrap = 'def wrap : (A : Type 0) -> (a : A) -> Option (Prod A A) := fun (A : Type 0) (a : A) => some (pair a a) ';
+  const count = 'def countA : (A : Type 0) -> (a : A) -> (n : Nat) -> Option Nat := ' +
+    'fun (A : Type 0) (a : A) (n : Nat) => some n ';
+  const steps = prefix + step + wrap + count;
+  assert.deepEqual(last(`${steps}def ys : List Nat := unfold (stepK Nat 3) 2 5`), [3, 3]);
+  assert.deepEqual(last(`${steps}def ys : List Text := unfold (stepK Text "a") 2 5`), ['a', 'a']);
+  assert.deepEqual(last(`${steps}def ys : List Nat := unfold (wrap Nat) 2 5`), [5, 5]);
+  assert.equal(last(`${steps}def c : Nat := unfold (countA Text "x") 3 0`), 3);
+  const generic = 'def g : (B : Type 0) -> (b : B) -> List B := fun (B : Type 0) (b : B) => unfold (stepK B b) 2 5 ';
+  assert.deepEqual(last(`${steps}${generic}def r : List Text := g Text "q"`), ['q', 'q']);
+  const wrong = run(`${steps}def ys : List Nat := unfold (stepK Text "a") 2 5`);
+  assert.equal(wrong.error?.message, 'term does not have the declared type', JSON.stringify(wrong));
+});
+
+test('a fold and an unfold over Value take partial applications with type parameters', () => {
+  const kon = 'def kon : (A : Type 0) -> (B : Type 0) -> (a : A) -> (b : B) -> A := ' +
+    'fun (A : Type 0) (B : Type 0) (a : A) (b : B) => a ';
+  const rest = '(kon Nat Flag 1) (kon Nat Text 2) (kon Nat (List Nat) 3) (kon Nat (List (Prod Text Nat)) 4)';
+  const folded = leaf => last(`${prefix}${kon}def v : Value := ${leaf} def n : Nat := fold (kon Nat Nat 7) ${rest} 0 v`);
+  assert.equal(folded('valueNat 9'), 7);
+  assert.equal(folded('valueText "a"'), 2);
+  assert.equal(folded('valueItems (valuesItem (valueNat 1) valuesEnd)'), 3);
+  assert.equal(folded('valueAttrs (attrsField "n" (valueNat 1) attrsEnd)'), 4);
+  assert.equal(folded('valueNull'), 0);
+  assert.ok(run(`${prefix}${kon}def v : Value := valueNat 9 def n : Nat := fold (kon Nat Text 7) ${rest} 0 v`).error);
+  const layer = A => `Option (Sum Nat (Sum Flag (Sum Text (Sum (List ${A}) (List (Prod Text ${A}))))))`;
+  const grow = `def growA : (A : Type 0) -> (s : A) -> ${layer('A')} := ` +
+    'fun (A : Type 0) (s : A) => some (inr (inr (inr (inr (cons (pair "left" s) nil))))) ';
+  const leafK = `def leafK : (A : Type 0) -> (a : A) -> (k : Nat) -> (s : Text) -> ${layer('Text')} := ` +
+    'fun (A : Type 0) (a : A) (k : Nat) (s : Text) => some (inl k) ';
+  assert.deepEqual(last(`${prefix}${grow}def v : Value := unfold (growA Text) 2 "s"`), { left: { left: null } });
+  assert.equal(last(`${prefix}${leafK}def v : Value := unfold (leafK Text "x" 4) 2 "s"`), 4);
+  assert.ok(run(`${prefix}${grow}def v : Value := unfold (growA Nat) 2 "s"`).error);
+});
+
+test('a partial application with type parameters binds another one', () => {
+  const applyA = 'def applyA : (A : Type 0) -> (f : Rule) -> (a : A) -> (n : Nat) -> Nat := ' +
+    'fun (A : Type 0) (f : Rule) (a : A) (n : Nat) => f n ';
+  const second = 'def snd : (A : Type 0) -> (p : Prod A Nat) -> (n : Nat) -> Nat := ' +
+    'fun (A : Type 0) (p : Prod A Nat) (n : Nat) => second p ';
+  const base = prefix + applyA + second;
+  assert.equal(last(`${base}def n : Nat := use (applyA Text (konst Nat 4) "x")`), 4);
+  const outer = body => 'def outer : (B : Type 0) -> (b : B) -> Nat := ' +
+    `fun (B : Type 0) (b : B) => ${body} def n : Nat := outer Text "x"`;
+  assert.equal(last(base + outer('use (applyA B (konst Nat 8) b)')), 8);
+  assert.equal(last(base + outer('use (applyA B (snd B (pair b 6)) b)')), 6);
+  for (const term of ['use (applyA Text (konst Text "y") "x")', 'use (applyA Text (konst Nat 4) 5)']) {
+    const result = run(`${base}def n : Nat := ${term}`);
+    assert.ok(result.error, `${term}: ${JSON.stringify(result)}`);
+  }
+});
+
 test('the example compiles', async () => {
   const source = await readFile(new URL('../examples/poly-partial.ledger', import.meta.url), 'utf8');
   const result = run(source);

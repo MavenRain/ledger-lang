@@ -4,16 +4,16 @@ Date: 2026-10-06. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check` and `make test` pass: the host checks the complete compiler, builds the
-Wasm reactor, and runs 474 integration tests with zero failures. The test
-runner reported 2.27 seconds. In the isolated checkout the host was selected with
+Wasm reactor, and runs 497 integration tests with zero failures. The test
+runner reported 4.24 seconds. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
 
 The partial application review adds eight cases in `test/partial.test.mjs`.
 They check leading data arguments, grouped and computed arguments, lexical
 scope under caller shadowing, bound function names, partial application of
 function parameters, forwarding, and use through `map`. Refusals cover
-missing, extra and mistyped arguments, incompatible remaining signatures,
-type parameters, and nested partial function arguments. The existing
+missing, extra and mistyped arguments, and incompatible remaining
+signatures. The existing
 higher-order test keeps all five rejection cases and checks the parentheses
 diagnostic for a compatible function with an unbound prefix.
 
@@ -21,17 +21,16 @@ The form partial application review adds five cases in
 `test/form-partial.test.mjs`. They check `map`, `bind` and `filter` over a
 partial application with literal, computed, caller-scope and function-name
 bound arguments, grouped and one-parameter functions, partial application of
-a function parameter, and the example file. Refusals cover mistyped, nested,
-missing and extra bound arguments, type parameters, data names and the
-unchanged bare form.
+a function parameter, and the example file. Refusals cover mistyped,
+missing and extra bound arguments, data names and the unchanged bare form.
 
 The fold partial application review adds five cases in
 `test/fold-partial.test.mjs`. They check `fold` over a partial application
 with literal, computed, list, caller-scope and function-name bound arguments,
 grouped and two-parameter functions, partial application of a function
 parameter, two bound arguments, a `Nat` source, and the example file.
-Refusals cover mistyped, nested, extra and fully bound arguments, type
-parameters, data names, a number in parentheses for `unfold`, the bare form,
+Refusals cover mistyped, extra and fully bound arguments, data names, a
+number in parentheses for `unfold`, the bare form,
 and unclosed or empty parentheses.
 
 The Value fold partial application review adds six cases in
@@ -43,8 +42,8 @@ function parameter, parenthesized initial values still selecting the fold
 over a sequence, and the example file. A work-budget regression verifies
 that a computed argument to the first function is evaluated once and that
 multiple computed arguments still share the same budget. Refusals cover a mistyped bound
-argument, partial applications that do not fit their position, type
-parameters, a data name, a fully bound function, and an unclosed parenthesis.
+argument, partial applications that do not fit their position, a data
+name, a fully bound function, and an unclosed parenthesis.
 
 The inline function review adds five cases in `test/inline-fun.test.mjs`.
 They check `map`, `bind` and `filter` over an inline `fun` with one binder,
@@ -93,6 +92,19 @@ body, a shadowed definition, and the example file. Refusals cover binders
 that do not match the parameter type, a bare `fun`, a mistyped body, an
 unknown name in the body, and a partial application bound by a partial
 application.
+
+The partial application with type parameters review adds nine cases in
+`test/poly-partial.test.mjs`. They check function arguments that give the
+type arguments with and without bound values, a closure body that uses the
+type arguments, type and bound arguments that name the parameters of the
+caller, nested partial applications, `map` and `fold`, `unfold` into a list,
+`Text` and `Nat`, `unfold` into `Value`, the five functions of a fold over
+`Value` with two type parameters each, a partial application with type
+parameters that binds another one, also in a function with type parameters,
+and the example file. Refusals cover a wrong or missing type argument, a
+mistyped bound value, a bare function with type parameters, and partial
+applications that do not fit `map`, `unfold`, a fold over `Value` or a bound
+parameter.
 
 The original 61 tests still cover scalar and container constructors, earlier
 definition references, declaration and attribute order, Option presence for

@@ -146,9 +146,13 @@ match the expected function type. Bound values are evaluated in the caller's
 scope. A bound function argument can be a name, optionally grouped, a
 parenthesized inline function, or another partial application, as in
 `use (apply (pickK 6))`. Nested partial applications keep the caller's scope.
-See [examples/bound-partial.ledger](examples/bound-partial.ledger). A function with type
-parameters cannot be partially applied. The function of `map`, `bind` and
-`filter` can also be a
+See [examples/bound-partial.ledger](examples/bound-partial.ledger). A partial
+application of a function with type parameters gives the type arguments
+first, as in `use (konst Nat 6)`. The type arguments can name the type
+parameters of the caller. This applies in each position that takes a
+partial application.
+See [examples/poly-partial.ledger](examples/poly-partial.ledger).
+The function of `map`, `bind` and `filter` can also be a
 parenthesized partial application that binds all but the last parameter, as
 in `map (pick 1) xs`. See [examples/form-partial.ledger](examples/form-partial.ledger).
 The function of `fold` and `unfold` can also be a parenthesized partial
