@@ -1,4 +1,9 @@
-.PHONY: build check test
+.PHONY: build check test c-build c-check c-test
+
+TCC ?= tcc
+C_SOURCES := $(wildcard compiler/*.c)
+C_OBJECTS := $(patsubst compiler/%.c,build/c/%.o,$(C_SOURCES))
+C_HEADERS := $(wildcard compiler/*.h)
 
 build:
 	node bin/build.mjs
@@ -8,3 +13,28 @@ check:
 
 test: build
 	node --stack-size=7000 --max-old-space-size=1024 --test test/*.test.mjs
+
+c-check:
+	@mkdir -p build
+	@for source in $(C_SOURCES); do $(TCC) -Wall -Werror -c $$source -o build/c-check.o || exit 1; done
+	@rm -f build/c-check.o
+	@echo 'c check passed'
+
+# The C port currently provides modules, not a complete compiler executable.
+c-build: $(C_OBJECTS)
+
+build/c/%.o: compiler/%.c $(C_HEADERS)
+	@mkdir -p build/c
+	$(TCC) -Wall -Werror -c $< -o $@
+
+c-test: build/c-modules-test build/c-output-test
+	./build/c-modules-test
+	./build/c-output-test
+
+build/c-modules-test: test/c-modules.c $(filter-out compiler/main.c,$(C_SOURCES)) $(C_HEADERS)
+	@mkdir -p build
+	$(TCC) -Wall -Werror -o $@ test/c-modules.c $(filter-out compiler/main.c,$(C_SOURCES))
+
+build/c-output-test: test/c-output.c compiler/main.c compiler/runtime.c $(C_HEADERS)
+	@mkdir -p build
+	$(TCC) -Wall -Werror -o $@ test/c-output.c compiler/runtime.c -lpthread

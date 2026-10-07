@@ -34,6 +34,13 @@ bin/ledgerc examples/algebra.ledger > algebra.json
 Rebuild with `make build` after editing compiler sources. Build artifacts
 are ignored by Git. No package installation is needed.
 
+The C port is in progress. With TinyCC installed, `make c-build` compiles
+the available modules to `build/c/*.o`, and `make c-check` checks each source.
+Run `make c-test` for the C module regression tests.
+The C parser, checker, and program driver are not implemented yet, so these
+targets do not produce a native `ledgerc` executable. Use `bin/ledgerc`
+for complete programs.
+
 ## Supported programs
 
 ```text
