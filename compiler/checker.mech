@@ -1118,13 +1118,136 @@ def checkWorked : Nat -> LType -> Worked Typed -> Worked Value :=
   | workError at message => workError at message
   | worked found rest budget => liftParsed Value budget (checkSynthesized position expected (parsed found rest))
 
+-- The marker of a definition body holds the number of its parameters. An
+-- argument that names one of them gives the neutral side of its position.
+def bodyMarker : Nat -> Binding := fun (count : Nat) => binding textEnd tyNat (valueNat count)
+
+-- The tokens after one argument atom: a token or a parenthesized group.
+def rec skipAtom : Nat -> List Token -> List Token :=
+  fun (depth : Nat) (tokens : List Token) =>
+  case tokens as self in List return List Token with
+  | nil => nil
+  | cons head tail => (
+      case head as token in Token return List Token with
+      | numberToken position number => select (List Token) (numberEq depth 0) tail (skipAtom depth tail)
+      | stringToken position text => select (List Token) (numberEq depth 0) tail (skipAtom depth tail)
+      | identifier position name => select (List Token) (numberEq depth 0) tail (skipAtom depth tail)
+      | punctuation position mark => (
+          case (natEq mark 40) as opening return List Token with
+          | 1 (x : prod ()) => skipAtom (natAdd depth 1) tail
+          | 0 (x : prod ()) => select (List Token) (boolAnd (numberEq mark 41) (numberEq depth 1)) tail
+              (skipAtom (select Nat (numberEq mark 41) (natSub depth 1) depth) tail)))
+
+-- The position of a parameter of the body. The list holds the latest
+-- parameter first. some none: the name is not a parameter of the body.
+def rec paramLevel : Text -> Nat -> List Binding -> Option (Option Nat) :=
+  fun (name : Text) (count : Nat) (environment : List Binding) =>
+  case environment as self in List return Option (Option Nat) with
+  | nil => some none
+  | cons head tail => (
+      case (natEq count 0) as outside return Option (Option Nat) with
+      | 1 (x : prod ()) => some none
+      | 0 (x : prod ()) => (
+          case (natEq (sameText name (bindingName head)) 1) as found return Option (Option Nat) with
+          | 1 (x : prod ()) => some (some (natSub count 1))
+          | 0 (x : prod ()) => paramLevel name (natSub count 1) tail))
+
+-- Only the body of a definition has a numbered marker. In an inline body
+-- or a fold step, a name gives none.
+def bodyLevel : Text -> List Binding -> Option (Option Nat) :=
+  fun (name : Text) (environment : List Binding) =>
+  case environment as self in List return Option (Option Nat) with
+  | nil => none
+  | cons head tail => (
+      case head as marker in Binding return Option (Option Nat) with
+      | binding other ty value => (
+          case (asNat value) as count in Option return Option (Option Nat) with
+          | none => none
+          | some total => select (Option (Option Nat)) (sameText other textEnd) (paramLevel name total tail) none)
+      | typeBinding other universe defined => none
+      | arrowBinding other params result => none
+      | funBinding other params result body => none
+      | closureBinding other params result body scope => none)
+
+def printedSide : Fuel -> Value -> Option Text := fun (fuel : Fuel) (value : Value) =>
+  case (printValue fuel textEnd 0 value) as text in Printed return Option Text with
+  | printError at message => none
+  | printed after printedText => some (reverseText printedText)
+
+-- The side that one argument gives. Outside a body check, the argument is
+-- closed. In a body check, a parameter of the body gives its neutral side,
+-- and a literal or another name gives its JSON text. A parenthesized
+-- argument is refused.
+def argumentText : Fuel -> List Binding -> Value -> List Token -> Option Text :=
+  fun (fuel : Fuel) (environment : List Binding) (value : Value) (tokens : List Token) =>
+  case (natEq (checkingBody environment) 1) as marked return Option Text with
+  | 0 (x : prod ()) => printedSide fuel value
+  | 1 (x : prod ()) => (
+      case tokens as self in List return Option Text with
+      | nil => none
+      | cons head tail => (
+          case head as token in Token return Option Text with
+          | numberToken position number => printedSide fuel value
+          | stringToken position text => printedSide fuel value
+          | punctuation position mark => none
+          | identifier position name => (
+              case (bodyLevel name environment) as level in Option return Option Text with
+              | none => none
+              | some found => (
+                  case found as place in Option return Option Text with
+                  | none => printedSide fuel value
+                  | some index => some (textByte 0 (textByte index textEnd))))))
+
+-- The side for the parameter at a position. Type parameters take no
+-- argument tokens.
+def rec argumentSide : Fuel -> Nat -> List Binding -> List Param -> List Value -> List Token -> Option Text :=
+  fun (fuel : Fuel) (index : Nat) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) =>
+  case params as self in List return Option Text with
+  | nil => none
+  | cons head tail => (
+      case (natEq (isTypeParam head) 1) as typeParam return Option Text with
+      | 1 (x : prod ()) => (
+          case (natEq index 0) as here return Option Text with
+          | 1 (x : prod ()) => none
+          | 0 (x : prod ()) => argumentSide fuel (natSub index 1) environment tail values tokens)
+      | 0 (x : prod ()) => (
+          case (natEq index 0) as here return Option Text with
+          | 1 (x : prod ()) => argumentText fuel environment (argumentHead values) tokens
+          | 0 (x : prod ()) => argumentSide fuel (natSub index 1) environment tail (argumentTail values) (skipAtom 0 tokens)))
+
+def instantiateSide : Fuel -> List Binding -> List Param -> List Value -> List Token -> Text -> Option Text :=
+  fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (side : Text) =>
+  case side as self in Text return Option Text with
+  | textEnd => some side
+  | textByte byte rest => (
+      case (natEq byte 0) as neutral return Option Text with
+      | 0 (x : prod ()) => some side
+      | 1 (x : prod ()) => (
+          case rest as position in Text return Option Text with
+          | textEnd => none
+          | textByte index tail => argumentSide fuel index environment params values tokens))
+
+-- An application replaces each neutral side of a dependent result with the
+-- side of the argument at that position (step D2).
+def instantiateResult : Fuel -> List Binding -> List Param -> List Value -> List Token -> LType -> Option LType :=
+  fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (result : LType) =>
+  case (sidesOf result) as sides in EqSides return Option LType with
+  | notEq => some result
+  | eqSides a lhs rhs => (
+      case (instantiateSide fuel environment params values tokens lhs) as left in Option return Option LType with
+      | none => none
+      | some x => (
+          case (instantiateSide fuel environment params values tokens rhs) as right in Option return Option LType with
+          | none => none
+          | some y => some (tyEq a x y)))
+
 -- A synthesized argument is an earlier definition, a projection, symm,
 -- trans, either, an application, or one of these in parentheses. An
 -- application evaluates the checked body of the function with the argument
 -- values and uses one unit of the work budget. In the check of a function
 -- body, an application checks its arguments and gives null.
--- Dependent results need argument substitution in D2. Refuse them before
--- synthesis can compare their local neutrals with another signature's.
+-- An application instantiates a dependent result. A closure with such a
+-- result is refused.
 def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked Typed :=
   fun (fuel : Fuel) (budget : Nat) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Typed with
@@ -1151,9 +1274,6 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
               | typeBinding other universe defined => workError position eInfer
               | arrowBinding other params result => workError position eInfer
               | funBinding other params result body => (
-                  case (natEq (dependentResult result) 1) as dependent return Worked Typed with
-                  | 1 (x : prod ()) => workError position eTerm
-                  | 0 (x : prod ()) => (
                   case (natEq atom 1) as refused return Worked Typed with
                   | 1 (x : prod ()) => workError position eParen
                   | 0 (x : prod ()) => (
@@ -1163,12 +1283,15 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
                       case (parseArguments more budget 1 (paramTypes (valueParams chosen params)) environment afterTypes) as checked in Worked return Worked Typed with
                       | workError at message => workError at message
                       | worked values rest budget => (
+                        case (instantiateResult more environment params values afterTypes (substType chosen result)) as resolved in Option return Worked Typed with
+                        | none => workError position eTerm
+                        | some applied => (
                           case (natEq (checkingBody environment) 1) as marked return Worked Typed with
-                          | 1 (x : prod ()) => worked (typed (substType chosen result) valueNull) rest budget
+                          | 1 (x : prod ()) => worked (typed applied valueNull) rest budget
                           | 0 (x : prod ()) => (
-                              case (parseTerm more (natSub budget 1) 0 (substType chosen result) (bindArguments environment (valueParams chosen params) values (reverseListOnto Binding (definitionScope other environment) chosen)) body) as applied in Worked return Worked Typed with
+                              case (parseTerm more (natSub budget 1) 0 applied (bindArguments environment (valueParams chosen params) values (reverseListOnto Binding (definitionScope other environment) chosen)) body) as run in Worked return Worked Typed with
                               | workError at message => workError at message
-                              | worked value after budget => worked (typed (substType chosen result) value) rest budget))))))
+                              | worked value after budget => worked (typed applied value) rest budget))))))
               | closureBinding other params result body scope => (
                   case (natEq (dependentResult result) 1) as dependent return Worked Typed with
                   | 1 (x : prod ()) => workError position eTerm

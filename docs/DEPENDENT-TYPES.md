@@ -40,15 +40,20 @@ The plan adds neutral values in two stages:
   sides. `refl` needs the same parameter or the same closed value on both
   sides. A side such as `(some n)` that contains a parameter is refused.
   Prefixing a named function type shifts its neutral parameter positions.
-  An application or partial application of a function with neutral sides
-  is refused, including in another function body and through `either`.
-  Until D2, its result type cannot be moved into the caller's scope.
+  D1 refused each application of a function with neutral sides. D2 lifts
+  this for saturated applications.
   A reference to the whole function can still be passed as an argument.
-- D2. Instantiation at an application. An application replaces each neutral
-  side with the JSON text of the argument at that position. Then
-  `def p : Eq Nat 3 3 := f 3` checks, and a function body can apply a proof
-  function to its own parameters. A proof parameter `(e : Eq A x y)` can
-  then name earlier parameters, so `symm e` and `trans e d` work in a body.
+- D2 (done). Instantiation at an application. An application replaces each
+  neutral side with the side of the argument at that position. Then
+  `def p : Eq Nat 3 3 := f 3` checks. In a definition body, an argument at
+  such a position is a parameter of the body, which gives the neutral side
+  of that parameter, or a literal or a name, which gives its JSON text. So
+  `fun (n : Nat) => f n` proves `Eq Nat n n`. A parenthesized argument at
+  such a position is refused until D4. An application in an inline function
+  or a fold step, through `either`, as a partial application or through a
+  bound function parameter is still refused.
+- D2b. A proof parameter `(e : Eq A x y)` can name earlier parameters, so
+  `symm e` and `trans e d` work in a body.
 - D3. Syntax tree and value domain, as above. The checker checks a body
   once into a `Term`. An application evaluates the `Term`, not the tokens.
   The work budget stays the same. The JSON output stays the same.

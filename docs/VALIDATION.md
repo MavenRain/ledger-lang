@@ -4,13 +4,15 @@ Date: 2026-10-06. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check` and `make test` pass: the host checks the complete compiler, builds the
-Wasm reactor, and runs 506 integration tests with zero failures. The test
-runner reported 3.04 seconds. Nine of the tests, in
-`test/dependent.test.mjs`, check step D1 of `docs/DEPENDENT-TYPES.md`: an
+Wasm reactor, and runs 507 integration tests with zero failures. The test
+runner reported 3.04 seconds. Ten of the tests, in
+`test/dependent.test.mjs`, check steps D1 and D2 of `docs/DEPENDENT-TYPES.md`: an
 equality result can name a value parameter on both sides, two different
 parameters or a parameter and a constant are not equal, a side that
-contains a parameter is refused, and an application of such a function is
-refused until step D2. The review regressions cover prefixed named signatures,
+contains a parameter is refused, and step D2 instantiates the
+sides at an application: `f 3` proves `Eq Nat 3 3`, a body can apply a proof
+function to its own parameters, and a different parameter, a different
+constant or a parenthesized argument is refused. The review regressions cover prefixed named signatures,
 neutral references from different function scopes, proof composition,
 `either`, partial applications, and preservation of whole-function references
 and closed equality applications. In the isolated checkout the host was selected with

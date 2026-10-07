@@ -23,7 +23,10 @@ not complete the M0 milestone in `SPEC.md`.
   function type can end in `Eq A x y`, and a side can be the name of a value
   parameter of type A. Such a side is neutral. The definition checks the
   body with the neutral sides, so `refl` needs the same parameter or the
-  same closed value on both sides.
+  same closed value on both sides. Step D2: an application replaces
+  each neutral side with the side of its argument. In a definition body, an
+  argument that names a parameter of the body gives the neutral side of
+  that parameter.
 - Functions: function types `(x : A) -> B` over data types,
   `fun` with flat or curried binders, and saturated application. The
   definition checks the body once. Each application evaluates the body again
@@ -204,9 +207,11 @@ original meaning.
   parentheses. The checker does not infer a type argument. The name of a
   function with a type parameter is not a function argument. A partial
   application that gives its type arguments is. A data type cannot depend on a value parameter. Only a side of an
-  equality result can name one, as the whole side. Applications and partial
-  applications of a function with such a result are refused until argument
-  substitution is added in step D2. The name of a
+  equality result can name one, as the whole side. An application of a
+  function with such a result replaces each neutral side with the side of
+  its argument (step D2). In a definition body such an argument is a
+  parameter of the body, a literal or a name. Partial applications of such
+  a function are refused. The name of a
   type parameter is not a reserved name.
 
 ## Internal boundaries

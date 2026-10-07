@@ -422,7 +422,7 @@ def parseFunction : Fuel -> Nat -> Text -> List Binding -> List Token -> Parsed 
           case (parseBinders fuel environment nil params nil (dropToken afterAssign)) as bound in Parsed return Parsed Binding with
           | parseError at message => parseError at message
           | parsed binders body => (
-            case (parseTerm fuel budget 0 (substType (paramRenames params binders nil) result) (cons checkMarker (bindParams binders nil environment)) body) as checked in Worked return Parsed Binding with
+            case (parseTerm fuel budget 0 (substType (paramRenames params binders nil) result) (cons (bodyMarker (paramCount binders)) (bindParams binders nil environment)) body) as checked in Worked return Parsed Binding with
             | workError at message => parseError at message
             | worked value after left => parsed (funBinding name binders (substType (paramRenames params binders nil) result) body) after)))))
 

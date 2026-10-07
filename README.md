@@ -122,9 +122,11 @@ is an equality result `Eq A x y`: a side can be the name of a value
 parameter of type `A`, as the whole side. Then `refl` proves the result only
 when both sides are the same parameter or the same closed value, as in
 `def same : (n : Nat) -> Eq Nat n n := fun (n : Nat) => refl`. An
-application or partial application of such a function, including in another
-function body, is later work (step D2 of
-[docs/DEPENDENT-TYPES.md](docs/DEPENDENT-TYPES.md)). The term is
+application replaces each such side with the side of its argument, so
+`def p : Eq Nat 3 3 := same 3` checks. In a function body the argument at
+such a position is a parameter of the body, a literal or a name, as in
+`fun (n : Nat) => same n`. A partial application of such a function is
+refused (step D2 of [docs/DEPENDENT-TYPES.md](docs/DEPENDENT-TYPES.md)). The term is
 `fun (x : A) => t`. Write more parameters as `fun (a : A) (b : B) => t` or as
 `fun (a : A) => fun (b : B) => t`. Each binder type must be equal to the
 declared parameter type. The body can refer to the parameters and to earlier
