@@ -101,6 +101,15 @@ def dependentResult : LType -> Nat := fun (ty : LType) =>
   | notEq => 0
   | eqSides a lhs rhs => boolOr (isNeutralSide lhs) (isNeutralSide rhs)
 
+-- A function type is dependent when its result or the type of a parameter
+-- has a neutral side.
+def rec dependentParams : List Param -> Nat := fun (params : List Param) =>
+  case params as self in List return Nat with
+  | nil => 0
+  | cons head tail => (
+      case head as item in Param return Nat with
+      | param name ty => boolOr (dependentResult ty) (dependentParams tail))
+
 -- A proof has no runtime content. Its value is null.
 def reflCheck : Nat -> LType -> List Token -> Parsed Value :=
   fun (position : Nat) (expected : LType) (tokens : List Token) =>
@@ -1169,6 +1178,20 @@ def bodyLevel : Text -> List Binding -> Option (Option Nat) :=
       | funBinding other params result body => none
       | closureBinding other params result body scope => none)
 
+-- Neutral proof sides belong to the numbered parameters of a definition.
+-- An inline body cannot reinterpret them as its own parameter positions.
+def proofInScope : Text -> LType -> List Binding -> Nat :=
+  fun (name : Text) (ty : LType) (environment : List Binding) =>
+  case (natEq (dependentResult ty) 1) as dependent return Nat with
+  | 0 (x : prod ()) => 1
+  | 1 (x : prod ()) => (
+      case (bodyLevel name environment) as level in Option return Nat with
+      | none => 0
+      | some found => (
+          case found as place in Option return Nat with
+          | none => 0
+          | some index => 1))
+
 def printedSide : Fuel -> Value -> Option Text := fun (fuel : Fuel) (value : Value) =>
   case (printValue fuel textEnd 0 value) as text in Printed return Option Text with
   | printError at message => none
@@ -1241,13 +1264,27 @@ def instantiateResult : Fuel -> List Binding -> List Param -> List Value -> List
           | none => none
           | some y => some (tyEq a x y)))
 
+-- A run binds each proof parameter with its instantiated type, so the body
+-- sees the sides of the arguments (step D2b).
+def rec instantiateParams : Fuel -> List Binding -> List Param -> List Value -> List Token -> List Param -> List Param :=
+  fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (remaining : List Param) =>
+  case remaining as self in List return List Param with
+  | nil => nil
+  | cons head tail => (
+      case head as item in Param return List Param with
+      | param name ty => (
+          case (instantiateResult fuel environment params values tokens ty) as resolved in Option return List Param with
+          | none => cons head (instantiateParams fuel environment params values tokens tail)
+          | some found => cons (param name found) (instantiateParams fuel environment params values tokens tail)))
+
 -- A synthesized argument is an earlier definition, a projection, symm,
 -- trans, either, an application, or one of these in parentheses. An
 -- application evaluates the checked body of the function with the argument
 -- values and uses one unit of the work budget. In the check of a function
 -- body, an application checks its arguments and gives null.
--- An application instantiates a dependent result. A closure with such a
--- result is refused.
+-- An application instantiates a dependent result. A proof argument checks
+-- against its parameter type with the sides of the earlier arguments. A
+-- closure with a dependent type is refused.
 def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked Typed :=
   fun (fuel : Fuel) (budget : Nat) (atom : Nat) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Typed with
@@ -1270,7 +1307,8 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
           case (lookup name environment) as known in Option return Worked Typed with
           | some item => (
               case item as bound in Binding return Worked Typed with
-              | binding other ty value => worked (typed ty value) tail budget
+              | binding other ty value => select (Worked Typed) (proofInScope other ty environment)
+                  (worked (typed ty value) tail budget) (workError position eTerm)
               | typeBinding other universe defined => workError position eInfer
               | arrowBinding other params result => workError position eInfer
               | funBinding other params result body => (
@@ -1280,7 +1318,7 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
                     case (typeArguments more params environment nil tail) as instantiated in Parsed return Worked Typed with
                     | parseError at message => workError at message
                     | parsed chosen afterTypes => (
-                      case (parseArguments more budget 1 (paramTypes (valueParams chosen params)) environment afterTypes) as checked in Worked return Worked Typed with
+                      case (dependentArguments more budget chosen environment params params nil afterTypes afterTypes) as checked in Worked return Worked Typed with
                       | workError at message => workError at message
                       | worked values rest budget => (
                         case (instantiateResult more environment params values afterTypes (substType chosen result)) as resolved in Option return Worked Typed with
@@ -1289,11 +1327,11 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
                           case (natEq (checkingBody environment) 1) as marked return Worked Typed with
                           | 1 (x : prod ()) => worked (typed applied valueNull) rest budget
                           | 0 (x : prod ()) => (
-                              case (parseTerm more (natSub budget 1) 0 applied (bindArguments environment (valueParams chosen params) values (reverseListOnto Binding (definitionScope other environment) chosen)) body) as run in Worked return Worked Typed with
+                              case (parseTerm more (natSub budget 1) 0 applied (bindArguments environment (valueParams chosen (instantiateParams more environment params values afterTypes params)) values (reverseListOnto Binding (definitionScope other environment) chosen)) body) as run in Worked return Worked Typed with
                               | workError at message => workError at message
                               | worked value after budget => worked (typed applied value) rest budget))))))
               | closureBinding other params result body scope => (
-                  case (natEq (dependentResult result) 1) as dependent return Worked Typed with
+                  case (natEq (boolOr (dependentResult result) (dependentParams params)) 1) as dependent return Worked Typed with
                   | 1 (x : prod ()) => workError position eTerm
                   | 0 (x : prod ()) => (
                   case (natEq atom 1) as refused return Worked Typed with
@@ -1367,7 +1405,7 @@ and parseTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Wor
           case (lookup name environment) as found in Option return Worked Value with
           | some item => (
               case item as known in Binding return Worked Value with
-              | binding other ty value => select (Worked Value) (sameType expected ty)
+              | binding other ty value => select (Worked Value) (boolAnd (proofInScope other ty environment) (sameType expected ty))
                   (worked value tail budget) (workError position eTerm)
               | typeBinding other universe defined => workError position eTerm
               | arrowBinding other params result => workError position eTerm
@@ -1421,7 +1459,7 @@ and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -
     case (natEq (sameType expected (arrowType params result)) 1) as exact return Worked Value with
     | 1 (x : prod ()) => worked (valueText name) tokens budget
     | 0 (x : prod ()) => (
-      case (natEq (dependentResult result) 1) as dependent return Worked Value with
+      case (natEq (boolOr (dependentResult result) (dependentParams params)) 1) as dependent return Worked Value with
       | 1 (x : prod ()) => workError position eTerm
       | 0 (x : prod ()) => (
       case (natEq (hasTypeParam params) 1) as polymorphic return Worked Value with
@@ -1485,6 +1523,28 @@ and parseArguments :Fuel -> Nat -> Nat -> List LType -> List Binding -> List Tok
             case (parseArguments more budget atom tail environment rest) as remaining in Worked return Worked (List Value) with
             | workError at message => workError at message
             | worked values after budget => worked (cons value values) after budget)))
+-- An application checks each argument against the type of its parameter. A
+-- proof parameter takes the sides of the earlier arguments (step D2b). The
+-- list seen holds the earlier argument values, the latest first.
+and dependentArguments : Fuel -> Nat -> List Binding -> List Binding -> List Param -> List Param -> List Value -> List Token -> List Token -> Worked (List Value) :=
+  fun (fuel : Fuel) (budget : Nat) (chosen : List Binding) (environment : List Binding) (params : List Param) (remaining : List Param) (seen : List Value) (start : List Token) (tokens : List Token) =>
+  case fuel as guard in Fuel return Worked (List Value) with
+  | fuelEnd => workError (firstPosition tokens) eFuel
+  | fuelMore more => (
+    case remaining as self in List return Worked (List Value) with
+    | nil => worked (reverseListOnto Value nil seen) tokens budget
+    | cons head tail => (
+        case head as item in Param return Worked (List Value) with
+        | param name ty => (
+            case (natEq (isTypeParam head) 1) as typeParam return Worked (List Value) with
+            | 1 (x : prod ()) => dependentArguments more budget chosen environment params tail seen start tokens
+            | 0 (x : prod ()) => (
+                case (instantiateResult more environment params (reverseListOnto Value nil seen) start (substType chosen ty)) as resolved in Option return Worked (List Value) with
+                | none => workError (firstPosition tokens) eTerm
+                | some expected => (
+                    case (parseTerm more budget 1 expected environment tokens) as first in Worked return Worked (List Value) with
+                    | workError at message => workError at message
+                    | worked value rest left => dependentArguments more left chosen environment params tail (cons value seen) start rest)))))
 -- The function of a structure form is a name, or a parenthesized partial
 -- application that binds all but the last parameter of a function.
 and unaryTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Worked Unary :=
@@ -1534,7 +1594,10 @@ and partialUnary : Fuel -> Nat -> LType -> List Binding -> List Token -> Worked 
           | binding other ty value => workError position eUnary
           | typeBinding other universe defined => workError position eUnary
           | arrowBinding other params result => workError position eUnary
-          | funBinding other params result body => boundUnary more budget position name params result environment tail
+          | funBinding other params result body => (
+              case (natEq (dependentParams params) 1) as dependent return Worked Unary with
+              | 1 (x : prod ()) => workError position eUnary
+              | 0 (x : prod ()) => boundUnary more budget position name params result environment tail)
           | closureBinding other params result body captured => boundUnary more budget position name params result environment tail)))))
 -- fun (x : A) => body inside the parentheses of a form: one binder with a
 -- data type, then the body. The body is checked once against the result
@@ -1651,7 +1714,10 @@ and partialStepper : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -
           | binding other ty value => workError position eStep
           | typeBinding other universe defined => workError position eStep
           | arrowBinding other params result => workError position eStep
-          | funBinding other params result body => boundStepper more budget position name params result environment tail
+          | funBinding other params result body => (
+              case (natEq (dependentParams params) 1) as dependent return Worked Stepper with
+              | 1 (x : prod ()) => workError position eStep
+              | 0 (x : prod ()) => boundStepper more budget position name params result environment tail)
           | closureBinding other params result body captured => boundStepper more budget position name params result environment tail)))))
 -- fun (x : A) .. => body inside the parentheses of fold or unfold. The body
 -- is checked once against the result type of the form, with each binder

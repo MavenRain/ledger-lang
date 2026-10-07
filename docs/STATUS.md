@@ -26,7 +26,9 @@ not complete the M0 milestone in `SPEC.md`.
   same closed value on both sides. Step D2: an application replaces
   each neutral side with the side of its argument. In a definition body, an
   argument that names a parameter of the body gives the neutral side of
-  that parameter.
+  that parameter. Step D2b: the type of a proof parameter `(e : Eq A x y)`
+  can name earlier value parameters, and an application checks a proof
+  argument with the sides of the earlier arguments.
 - Functions: function types `(x : A) -> B` over data types,
   `fun` with flat or curried binders, and saturated application. The
   definition checks the body once. Each application evaluates the body again
@@ -210,8 +212,9 @@ original meaning.
   equality result can name one, as the whole side. An application of a
   function with such a result replaces each neutral side with the side of
   its argument (step D2). In a definition body such an argument is a
-  parameter of the body, a literal or a name. Partial applications of such
-  a function are refused. The name of a
+  parameter of the body, a literal or a name. The type of a proof parameter
+  can name earlier value parameters the same way (step D2b). Partial
+  applications of such a function are refused. The name of a
   type parameter is not a reserved name.
 
 ## Internal boundaries

@@ -127,3 +127,91 @@ test('dependent function references and closed equality applications still work'
   assert.deepEqual(instances('def proof : (n : Nat) -> Eq Nat 3 3 := fun (n : Nat) => refl' +
     ' def p : Eq Nat 3 3 := proof 0' + k), kOut);
 });
+
+const flip = 'def flip : (n : Nat) -> (m : Nat) -> (e : Eq Nat n m) -> Eq Nat m n :=' +
+  ' fun (n : Nat) (m : Nat) (e : Eq Nat n m) => symm e';
+const pick = ' def pick : (n : Nat) -> (m : Nat) -> (e : Eq Nat n m) -> Nat :=' +
+  ' fun (n : Nat) (m : Nat) (e : Eq Nat n m) => m';
+const answer = [{ name: 'answer', type: 'Nat', value: 4 }];
+
+test('a proof parameter can name earlier parameters', () => {
+  const chain = ' def chain : (a : Nat) -> (b : Nat) -> (c : Nat) -> (e : Eq Nat a b) -> (d : Eq Nat b c) -> Eq Nat a c :=' +
+    ' fun (a : Nat) (b : Nat) (c : Nat) (e : Eq Nat a b) (d : Eq Nat b c) => trans e d';
+  assert.deepEqual(instances(flip + chain + pick + ' def p : Eq Nat 2 2 := flip 2 2 refl' +
+    ' def q : Eq Nat 3 3 := chain 3 3 3 refl (flip 3 3 refl)' +
+    ' def answer : Nat := pick 4 4 (flip 4 4 refl)'), answer);
+  assert.deepEqual(instances(flip + ' def back : (n : Nat) -> (m : Nat) -> (e : Eq Nat n m) -> Eq Nat n m :=' +
+    ' fun (n : Nat) (k : Nat) (h : Eq Nat n k) => flip k n (flip n k h)' + pick +
+    ' def answer : Nat := pick 4 4 (back 4 4 refl)'), answer);
+  assert.deepEqual(instances('def same : (A : Type 0) -> (x : A) -> (y : A) -> (e : Eq A x y) -> Eq A y x :=' +
+    ' fun (A : Type 0) (x : A) (y : A) (e : Eq A x y) => symm e' +
+    ' def p : Eq Text "t" "t" := same Text "t" "t" refl def answer : Nat := 4'), answer);
+});
+
+test('a proof parameter refuses a wrong proof', () => {
+  refuse(flip + ' def p : Eq Nat 1 2 := flip 2 1 refl');
+  refuse(flip + ' def p : Eq Nat 1 1 := flip 1 2 refl');
+  refuse(flip + pick + ' def answer : Nat := pick 4 5 refl');
+  refuse('def bad : (n : Nat) -> (m : Nat) -> (e : Eq Nat n m) -> Eq Nat n n :=' +
+    ' fun (n : Nat) (m : Nat) (e : Eq Nat n m) => e');
+  refuse('def bad : (n : Nat) -> (m : Nat) -> (e : Eq Nat n m) -> Eq Nat m n :=' +
+    ' fun (n : Nat) (m : Nat) (e : Eq Nat m n) => symm e');
+  refuse(flip + ' def bad : (a : Nat) -> (b : Nat) -> (e : Eq Nat a b) -> Eq Nat a b :=' +
+    ' fun (a : Nat) (b : Nat) (e : Eq Nat a b) => flip b a e');
+  refuse('def bad : (e : Eq Nat n n) -> Nat := fun (e : Eq Nat n n) => 0');
+  refuse('def use : (g : (n : Nat) -> (e : Eq Nat n n) -> Nat) -> Nat :=' +
+    ' fun (g : (n : Nat) -> (e : Eq Nat n n) -> Nat) => g 0 refl');
+});
+
+test('prefixed named signatures rebase dependent proof parameters', () => {
+  const signature = 'def S : Type 0 := (n : Nat) -> (e : Eq Nat n 0) -> Nat';
+  assert.deepEqual(instances(signature +
+    ' def f : (m : Nat) -> S := fun (m : Nat) (n : Nat) (e : Eq Nat n 0) => m' +
+    ' def answer : Nat := f 4 0 refl'), answer);
+  assert.deepEqual(instances(signature +
+    ' def T : Type 0 := (t : Text) -> S' +
+    ' def f : (m : Nat) -> T := fun (m : Nat) (t : Text) (n : Nat) (e : Eq Nat n 0) => m' +
+    ' def answer : Nat := f 4 "x" 0 refl'), answer);
+  assert.deepEqual(instances(signature +
+    ' def f : (A : Type 0) -> S := fun (B : Type 0) (n : Nat) (e : Eq Nat n 0) => 4' +
+    ' def answer : Nat := f Text 0 refl'), answer);
+  const local = 'def P : Type 0 := (x : Nat) -> Eq Nat x x' +
+    ' def S : Type 0 := (p : P) -> (n : Nat) -> (e : Eq Nat n 0) -> Nat';
+  assert.deepEqual(instances(local +
+    ' def f : (m : Nat) -> S := fun (m : Nat) (p : P) (n : Nat) (e : Eq Nat n 0) => m' +
+    ' def proof : P := fun (x : Nat) => refl' +
+    ' def answer : Nat := f 4 proof 0 refl'), answer);
+});
+
+test('prefixed proof parameters cannot capture a prefix argument', () => {
+  const signature = 'def S : Type 0 := (n : Nat) -> (e : Eq Nat n 0) -> Nat';
+  refuse(signature +
+    ' def f : (m : Nat) -> S := fun (m : Nat) (n : Nat) (e : Eq Nat m 0) => n' +
+    ' def answer : Nat := f 0 9 refl');
+  refuse(signature +
+    ' def f : (m : Nat) -> S := fun (m : Nat) (n : Nat) (e : Eq Nat n 0) => n' +
+    ' def answer : Nat := f 0 9 refl');
+});
+
+test('inline bodies cannot reinterpret a proof from an outer parameter scope', () => {
+  const prefix = 'def zero : Eq Nat 0 0 := refl' +
+    ' def P : Type 0 := (m : Nat) -> Eq Nat m 0' +
+    ' def ignore : (p : P) -> Nat := fun (p : P) => 4';
+  for (const body of ['e', '(e)', 'trans e zero']) {
+    refuse(prefix +
+      ' def f : (n : Nat) -> (e : Eq Nat n 0) -> Nat :=' +
+      ' fun (n : Nat) (e : Eq Nat n 0) => ignore (fun (m : Nat) => ' + body + ')' + k);
+  }
+  refuse('def P : Type 0 := (m : Nat) -> Eq Nat 0 m' +
+    ' def ignore : (p : P) -> Nat := fun (p : P) => 4' +
+    ' def f : (n : Nat) -> (e : Eq Nat n 0) -> Nat :=' +
+    ' fun (n : Nat) (e : Eq Nat n 0) => ignore (fun (m : Nat) => symm e)' + k);
+});
+
+test('inline bodies can still capture closed proof parameters', () => {
+  assert.deepEqual(instances('def P : Type 0 := (m : Nat) -> Eq Nat 0 0' +
+    ' def apply : (p : P) -> Eq Nat 0 0 := fun (p : P) => p 7' +
+    ' def f : (e : Eq Nat 0 0) -> Eq Nat 0 0 :=' +
+    ' fun (e : Eq Nat 0 0) => apply (fun (m : Nat) => symm e)' +
+    ' def proof : Eq Nat 0 0 := f refl' + k), kOut);
+});

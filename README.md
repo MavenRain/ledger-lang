@@ -125,8 +125,12 @@ when both sides are the same parameter or the same closed value, as in
 application replaces each such side with the side of its argument, so
 `def p : Eq Nat 3 3 := same 3` checks. In a function body the argument at
 such a position is a parameter of the body, a literal or a name, as in
-`fun (n : Nat) => same n`. A partial application of such a function is
-refused (step D2 of [docs/DEPENDENT-TYPES.md](docs/DEPENDENT-TYPES.md)). The term is
+`fun (n : Nat) => same n`. The type of a proof parameter can name earlier
+value parameters too, as in
+`fun (n : Nat) (m : Nat) (e : Eq Nat n m) => symm e`, and an application
+checks the proof argument with the sides of the earlier arguments. A
+partial application of such a function is refused (steps D2 and D2b of
+[docs/DEPENDENT-TYPES.md](docs/DEPENDENT-TYPES.md)). The term is
 `fun (x : A) => t`. Write more parameters as `fun (a : A) (b : B) => t` or as
 `fun (a : A) => fun (b : B) => t`. Each binder type must be equal to the
 declared parameter type. The body can refer to the parameters and to earlier

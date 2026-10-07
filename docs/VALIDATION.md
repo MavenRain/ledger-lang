@@ -4,16 +4,22 @@ Date: 2026-10-06. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check` and `make test` pass: the host checks the complete compiler, builds the
-Wasm reactor, and runs 507 integration tests with zero failures. The test
-runner reported 3.04 seconds. Ten of the tests, in
-`test/dependent.test.mjs`, check steps D1 and D2 of `docs/DEPENDENT-TYPES.md`: an
+Wasm reactor, and runs 513 integration tests with zero failures. The test
+runner reported 2.25 seconds. Sixteen of the tests, in
+`test/dependent.test.mjs`, check steps D1, D2 and D2b of `docs/DEPENDENT-TYPES.md`: an
 equality result can name a value parameter on both sides, two different
 parameters or a parameter and a constant are not equal, a side that
 contains a parameter is refused, and step D2 instantiates the
 sides at an application: `f 3` proves `Eq Nat 3 3`, a body can apply a proof
 function to its own parameters, and a different parameter, a different
-constant or a parenthesized argument is refused. The review regressions cover prefixed named signatures,
-neutral references from different function scopes, proof composition,
+constant or a parenthesized argument is refused. Step D2b: a proof
+parameter can name earlier parameters, `symm e` and `trans e d` check in a
+body, and an application refuses a proof with the wrong sides. The review
+regressions cover prefixed named signatures, including proof parameters
+through repeated prefixes and type parameters while preserving nested function
+scopes. Inline bodies refuse captures of proofs with neutral sides from an
+outer parameter scope, while closed proof captures still check and run.
+The regressions also cover neutral references from different function scopes, proof composition,
 `either`, partial applications, and preservation of whole-function references
 and closed equality applications. In the isolated checkout the host was selected with
 `MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.

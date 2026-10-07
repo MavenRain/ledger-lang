@@ -52,8 +52,14 @@ The plan adds neutral values in two stages:
   such a position is refused until D4. An application in an inline function
   or a fold step, through `either`, as a partial application or through a
   bound function parameter is still refused.
-- D2b. A proof parameter `(e : Eq A x y)` can name earlier parameters, so
-  `symm e` and `trans e d` work in a body.
+- D2b (done). A proof parameter `(e : Eq A x y)` can name earlier value
+  parameters of type A as its sides, so `symm e` and `trans e d` work in a
+  body. An application checks a proof argument against the parameter type
+  with the sides of the earlier arguments. The run binds the proof parameter
+  with that type. A function with such a parameter is refused as a partial
+  application, through a bound function parameter and as the function of a
+  structure form or a fold step. An inline body cannot capture a proof with
+  neutral sides from an outer parameter scope; closed proof captures work.
 - D3. Syntax tree and value domain, as above. The checker checks a body
   once into a `Term`. An application evaluates the `Term`, not the tokens.
   The work budget stays the same. The JSON output stays the same.

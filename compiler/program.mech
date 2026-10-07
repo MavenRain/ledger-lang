@@ -154,18 +154,6 @@ def rec parameterType : Fuel -> List Binding -> List Token -> Parsed LType :=
                   (parsed (arrowType params result) (dropToken tokens)))
           | none => parseType fuel 0 environment tokens))
 
-def parseParam : Fuel -> List Binding -> List Token -> Parsed Param :=
-  fun (fuel : Fuel) (environment : List Binding) (tokens : List Token) =>
-  case (nameOf (dropToken tokens)) as named in Option return Parsed Param with
-  | none => parseError (firstPosition tokens) eFun
-  | some name => (
-      case (parameterType fuel environment (dropToken (dropToken (dropToken tokens)))) as declared in Parsed return Parsed Param with
-      | parseError at message => parseError at message
-      | parsed ty rest => (
-          case (natEq (boolOr (isArrowType ty) (boolOr (numberEq (typeLevel ty) 0) (sameType ty (tyUniverse 0)))) 1) as allowed return Parsed Param with
-          | 0 (x : prod ()) => parseError (firstPosition (dropToken (dropToken (dropToken tokens)))) eData
-          | 1 (x : prod ()) => closeParsed Param (param name ty) rest))
-
 -- A function type starts with a parameter group or is the name of one.
 -- Grouping parentheses preserve this distinction from data types.
 def rec startsArrow : Fuel -> List Binding -> List Token -> Nat :=
@@ -209,6 +197,14 @@ def shiftEqResult : Nat -> LType -> LType := fun (offset : Nat) (result : LType)
   case (sidesOf result) as sides in EqSides return LType with
   | notEq => result
   | eqSides a lhs rhs => tyEq a (shiftEqSide offset lhs) (shiftEqSide offset rhs)
+
+def rec shiftEqParams : Nat -> List Param -> List Param :=
+  fun (offset : Nat) (params : List Param) =>
+  case params as self in List return List Param with
+  | nil => nil
+  | cons head tail => (
+      case head as item in Param return List Param with
+      | param name ty => cons (param name (shiftEqResult offset ty)) (shiftEqParams offset tail))
 
 -- The position of the nearest parameter with this name, if it is a value
 -- parameter of type A. The list holds the latest parameter first.
@@ -285,9 +281,29 @@ def eqResult : Fuel -> List Binding -> List Param -> List Token -> Parsed LType 
         | workError at message => parseError at message
         | worked rhs afterRight used => parsed (tyEq a lhs rhs) afterRight)))
 
+-- The type of a parameter. A proof parameter `(e : Eq A x y)` can name
+-- earlier value parameters of type A as its sides (step D2b).
+def paramDeclared : Fuel -> List Binding -> List Param -> List Token -> Parsed LType :=
+  fun (fuel : Fuel) (environment : List Binding) (done : List Param) (tokens : List Token) =>
+  case (natEq (isWord sEq tokens) 1) as equality return Parsed LType with
+  | 1 (x : prod ()) => eqResult fuel environment done (dropToken tokens)
+  | 0 (x : prod ()) => parameterType fuel environment tokens
+
+def parseParam : Fuel -> List Binding -> List Param -> List Token -> Parsed Param :=
+  fun (fuel : Fuel) (environment : List Binding) (done : List Param) (tokens : List Token) =>
+  case (nameOf (dropToken tokens)) as named in Option return Parsed Param with
+  | none => parseError (firstPosition tokens) eFun
+  | some name => (
+      case (paramDeclared fuel environment done (dropToken (dropToken (dropToken tokens)))) as declared in Parsed return Parsed Param with
+      | parseError at message => parseError at message
+      | parsed ty rest => (
+          case (natEq (boolOr (isArrowType ty) (boolOr (numberEq (typeLevel ty) 0) (sameType ty (tyUniverse 0)))) 1) as allowed return Parsed Param with
+          | 0 (x : prod ()) => parseError (firstPosition (dropToken (dropToken (dropToken tokens)))) eData
+          | 1 (x : prod ()) => closeParsed Param (param name ty) rest))
+
 -- `(x : A) -> ... -> B` with data types. A data type B cannot refer to a
 -- value parameter. An equality B = `Eq A x y` can name value parameters as
--- its sides.
+-- its sides, and so can the type of a proof parameter.
 -- A type parameter `(A : Type 0)` comes before each value parameter, and the
 -- later types and B can refer to it. Its name is not a reserved name.
 -- Parameters hide outer names in subsequent type annotations.
@@ -323,9 +339,9 @@ def rec parseSignature : Fuel -> List Binding -> List Param -> List Token -> Par
         case found as shape in Signature return Parsed Signature with
         | signature params result => select (Parsed Signature) (boolAnd (hasValueParam done) (hasTypeParam params))
             (parseError (firstPosition tokens) eTypeParam)
-            (parsed (signature (reverseListOnto Param params done) (shiftEqResult (paramCount done) result)) (dropToken tokens)))))
+            (parsed (signature (reverseListOnto Param (shiftEqParams (paramCount done) params) done) (shiftEqResult (paramCount done) result)) (dropToken tokens)))))
     | 1 (x : prod ()) => (
-        case (parseParam more environment tokens) as first in Parsed return Parsed Signature with
+        case (parseParam more environment done tokens) as first in Parsed return Parsed Signature with
         | parseError at message => parseError at message
         | parsed item rest => (
           case (natEq (boolAnd (isTypeParam item) (reservedParam item)) 1) as reserved return Parsed Signature with
@@ -391,7 +407,7 @@ def rec parseBinders : Fuel -> List Binding -> List Binding -> List Param -> Lis
           case (natEq (startsParam tokens) 1) as grouped return Parsed (List Param) with
           | 0 (x : prod ()) => parseError (firstPosition tokens) eFun
           | 1 (x : prod ()) => (
-            case (parseParam more environment tokens) as binder in Parsed return Parsed (List Param) with
+            case (parseParam more environment done tokens) as binder in Parsed return Parsed (List Param) with
             | parseError at message => parseError at message
             | parsed item rest => (
               case item as named in Param return Parsed (List Param) with
