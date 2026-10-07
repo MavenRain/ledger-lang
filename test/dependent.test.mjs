@@ -62,10 +62,30 @@ test('a computed side names value parameters inside an atom', () => {
     reflError, 'refl');
   reject(f + g + ' f 3', typeError, 'f 3');
   refuse('def f : (A : Type 0) -> (x : A) -> Eq (Option A) (some x) (some x) := fun (A : Type 0) (x : A) => refl');
-  refuse('def f : (n : Nat) -> (e : Eq (Option Nat) (some n) (some n)) -> Nat :=' +
-    ' fun (n : Nat) (e : Eq (Option Nat) (some n) (some n)) => n');
   refuse('def same : (x : Nat) -> Nat := fun (x : Nat) => x' +
     ' def f : (n : Nat) -> Eq Nat (same n) (same n) := fun (n : Nat) => refl');
+});
+
+test('a proof parameter can have a computed side', () => {
+  const lift = 'def lift : (n : Nat) -> (m : Nat) -> (e : Eq (Option Nat) (some n) (some m)) -> Eq (Option Nat) (some m) (some n) :=' +
+    ' fun (n : Nat) (m : Nat) (e : Eq (Option Nat) (some n) (some m)) => symm e';
+  const back = ' def back : (a : Nat) -> (b : Nat) -> (h : Eq (Option Nat) (some a) (some b)) -> Eq (Option Nat) (some a) (some b) :=' +
+    ' fun (a : Nat) (b : Nat) (h : Eq (Option Nat) (some a) (some b)) => lift b a (lift a b h)';
+  assert.deepEqual(instances('def f : (n : Nat) -> (e : Eq (Option Nat) (some n) (some n)) -> Nat :=' +
+    ' fun (n : Nat) (e : Eq (Option Nat) (some n) (some n)) => n' + k), kOut);
+  assert.deepEqual(instances(lift + ' def p : Eq (Option Nat) (some 3) (some 3) := lift 3 3 refl' + k), kOut);
+  assert.deepEqual(instances(lift + ' def again : (a : Nat) -> Eq (Option Nat) (some a) (some a) :=' +
+    ' fun (a : Nat) => lift a a refl def p : Eq (Option Nat) (some 5) (some 5) := again 5' + k), kOut);
+  assert.deepEqual(instances(lift + back + ' def q : Eq (Option Nat) (some 6) (some 6) := back 6 6 refl' + k), kOut);
+  refuse(lift + ' def p : Eq (Option Nat) (some 4) (some 3) := lift 3 4 refl');
+  refuse(lift + ' def p : Eq (Option Nat) (some 3) (some 3) := lift 3 3 (lift 3 4 refl)');
+  refuse('def bad : (n : Nat) -> (m : Nat) -> (e : Eq (Option Nat) (some n) (some m)) -> Eq (Option Nat) (some n) (some m) :=' +
+    ' fun (n : Nat) (m : Nat) (e : Eq (Option Nat) (some n) (some m)) => symm e');
+  refuse(lift + ' def bad : (a : Nat) -> Eq (Option Nat) (some a) (some a) := fun (a : Nat) => lift a 3 refl');
+  refuse(lift + ' def bad : (a : Nat) -> (b : Nat) -> Eq (Option Nat) (some b) (some a) :=' +
+    ' fun (a : Nat) (b : Nat) => lift a b refl');
+  refuse('def use : (g : (n : Nat) -> (e : Eq (Option Nat) (some n) (some n)) -> Nat) -> Nat :=' +
+    ' fun (g : (n : Nat) -> (e : Eq (Option Nat) (some n) (some n)) -> Nat) => g 0 refl');
 });
 
 test('an application instantiates a dependent result', () => {

@@ -74,7 +74,13 @@ The plan adds neutral values in two stages:
   In a definition body the argument at such a position must be a parameter
   of the body. A computed side is refused in a signature with a type
   parameter, with a function parameter, with the name of an earlier
-  definition, with `fun`, and in the type of a proof parameter.
+  definition and with `fun`.
+- D4b (done). The type of a proof parameter can have a computed side, as in
+  `(e : Eq (Option Nat) (some n) (some m))`. An application evaluates these
+  sides with the earlier arguments. Then it checks the proof argument. The
+  run binds the proof parameter with the evaluated type. In a definition
+  body, the argument at such a position must be a parameter of the body, as
+  in D4a.
 - D3. Syntax tree and value domain, as above. The checker checks a body
   once into a `Term`. An application evaluates the `Term`, not the tokens.
   The work budget stays the same. The JSON output stays the same.

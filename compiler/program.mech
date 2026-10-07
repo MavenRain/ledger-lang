@@ -348,18 +348,6 @@ def computedSide : Fuel -> LType -> List Binding -> List Param -> List Token -> 
           | workError at message => workError at message
           | worked value rest left => worked (valTerm term) (skipAtom 0 tokens) left))
 
-def isTermSide : Val -> Nat := fun (side : Val) =>
-  case side as self in Val return Nat with
-  | valClosed text => 0
-  | valVar index => 0
-  | valTerm term => 1
-
--- A proof parameter cannot have a computed side yet.
-def computedSides : LType -> Nat := fun (ty : LType) =>
-  case (sidesOf ty) as sides in EqSides return Nat with
-  | notEq => 0
-  | eqSides a lhs rhs => boolOr (isTermSide lhs) (isTermSide rhs)
-
 -- A side of an equality in a function type is the name of a value parameter
 -- of type A, an atom that names no value parameter and applies no function,
 -- or a computed side. A closed side keeps its canonical JSON text.
@@ -397,14 +385,12 @@ def eqResult : Fuel -> List Binding -> List Param -> List Token -> Parsed LType 
         | worked rhs afterRight used => parsed (tyEq a lhs rhs) afterRight)))
 
 -- The type of a parameter. A proof parameter `(e : Eq A x y)` can name
--- earlier value parameters of type A as its sides (step D2b).
+-- earlier value parameters of type A as its sides (step D2b), also inside a
+-- computed side (step D4b).
 def paramDeclared : Fuel -> List Binding -> List Param -> List Token -> Parsed LType :=
   fun (fuel : Fuel) (environment : List Binding) (done : List Param) (tokens : List Token) =>
   case (natEq (isWord sEq tokens) 1) as equality return Parsed LType with
-  | 1 (x : prod ()) => (
-      case (eqResult fuel environment done (dropToken tokens)) as declared in Parsed return Parsed LType with
-      | parseError at message => parseError at message
-      | parsed ty rest => select (Parsed LType) (computedSides ty) (parseError (firstPosition tokens) eTerm) (parsed ty rest))
+  | 1 (x : prod ()) => eqResult fuel environment done (dropToken tokens)
   | 0 (x : prod ()) => parameterType fuel environment tokens
 
 def parseParam : Fuel -> List Binding -> List Param -> List Token -> Parsed Param :=

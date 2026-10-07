@@ -130,7 +130,7 @@ the arguments, so `(some n)` becomes `(some 3)`. In a function body the
 argument at such a position is a parameter of the body, a literal or a
 name, as in `fun (n : Nat) => same n`. For a computed side it must be a
 parameter of the body (step D4a). The type of a proof parameter can name earlier
-value parameters too, as in
+value parameters too, also inside a computed side (step D4b), as in
 `fun (n : Nat) (m : Nat) (e : Eq Nat n m) => symm e`, and an application
 checks the proof argument with the sides of the earlier arguments. A
 partial application of such a function is refused (steps D2 and D2b of

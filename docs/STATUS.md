@@ -214,7 +214,8 @@ original meaning.
   function with such a result replaces each neutral side with the side of
   its argument (step D2). In a definition body such an argument is a
   parameter of the body, a literal or a name. The type of a proof parameter
-  can name earlier value parameters the same way (step D2b). Partial
+  can name earlier value parameters the same way, also inside a computed
+  side (steps D2b and D4b). Partial
   applications of such a function are refused. The name of a
   type parameter is not a reserved name.
 
