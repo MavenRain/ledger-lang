@@ -1,20 +1,25 @@
 # Validation
 
-Date: 2026-10-06. Node: v23.10.0. Build host: the installed mechanism-lang
+Date: 2026-10-07. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check` and `make test` pass: the host checks the complete compiler, builds the
-Wasm reactor, and runs 513 integration tests with zero failures. The test
-runner reported 2.25 seconds. Sixteen of the tests, in
-`test/dependent.test.mjs`, check steps D1, D2 and D2b of `docs/DEPENDENT-TYPES.md`: an
+Wasm reactor, and runs 514 integration tests with zero failures. The test
+runner reported 35.00 seconds. Seventeen of the tests, in
+`test/dependent.test.mjs`, check steps D1, D2, D2b and D4a of `docs/DEPENDENT-TYPES.md`: an
 equality result can name a value parameter on both sides, two different
-parameters or a parameter and a constant are not equal, a side that
-contains a parameter is refused, and step D2 instantiates the
+parameters or a parameter and a constant are not equal, a side names a
+parameter of the side type, and step D2 instantiates the
 sides at an application: `f 3` proves `Eq Nat 3 3`, a body can apply a proof
 function to its own parameters, and a different parameter, a different
 constant or a parenthesized argument is refused. Step D2b: a proof
 parameter can name earlier parameters, `symm e` and `trans e d` check in a
-body, and an application refuses a proof with the wrong sides. The review
+body, and an application refuses a proof with the wrong sides. Step D4a: a
+computed side such as `(some n)` checks with `refl`, `f 3` proves
+`Eq (Option Nat) (some 3) (some 3)` and a body can pass its own parameter.
+A different value, a different parameter, a literal in a body, a type
+parameter, a proof parameter with a computed side and the name of an
+earlier function are refused. The review
 regressions cover prefixed named signatures, including proof parameters
 through repeated prefixes and type parameters while preserving nested function
 scopes. Inline bodies refuse captures of proofs with neutral sides from an

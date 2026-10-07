@@ -182,10 +182,26 @@ def rec paramCount : List Param -> Nat := fun (params : List Param) =>
 
 -- Prefixing a named signature moves its neutral parameter positions. A
 -- closed side and the local scopes of function parameter types stay intact.
+def shiftMarker : Nat -> Token -> Token := fun (offset : Nat) (token : Token) =>
+  case token as self in Token return Token with
+  | numberToken position number => token
+  | stringToken position text => token
+  | punctuation position mark => token
+  | identifier position name => (
+      case (markerIndex name) as marker in Option return Token with
+      | none => token
+      | some index => identifier position (markerName (natAdd offset index)))
+
+def rec shiftMarkers : Nat -> List Token -> List Token := fun (offset : Nat) (tokens : List Token) =>
+  case tokens as self in List return List Token with
+  | nil => nil
+  | cons head tail => cons (shiftMarker offset head) (shiftMarkers offset tail)
+
 def shiftEqSide : Nat -> Val -> Val := fun (offset : Nat) (side : Val) =>
   case side as self in Val return Val with
   | valClosed text => side
   | valVar index => valVar (natAdd offset index)
+  | valTerm term => valTerm (shiftMarkers offset term)
 
 def shiftEqResult : Nat -> LType -> LType := fun (offset : Nat) (result : LType) =>
   case (sidesOf result) as sides in EqSides return LType with
@@ -241,20 +257,126 @@ def rec hideParams : List Param -> List Binding -> List Binding :=
           | 1 (x : prod ()) => hideParams tail environment
           | 0 (x : prod ()) => cons (typeBinding name (tyUniverse 0) (tySchema name)) (hideParams tail environment)))
 
+-- The position of the nearest parameter with this name. some none: a type
+-- parameter or a function parameter, which a computed side cannot name.
+def rec markerFor : Text -> List Param -> Option (Option Nat) :=
+  fun (name : Text) (done : List Param) =>
+  case done as self in List return Option (Option Nat) with
+  | nil => none
+  | cons head tail => (
+      case head as item in Param return Option (Option Nat) with
+      | param other ty => (
+          case (natEq (sameText name other) 1) as found return Option (Option Nat) with
+          | 0 (x : prod ()) => markerFor name tail
+          | 1 (x : prod ()) => some (select (Option Nat) (boolOr (isTypeParam head) (isArrowType ty)) none (some (paramCount tail)))))
+
+def rec namesParam : List Param -> List Token -> Nat := fun (done : List Param) (tokens : List Token) =>
+  case tokens as self in List return Nat with
+  | nil => 0
+  | cons head tail => (
+      case head as token in Token return Nat with
+      | numberToken position number => namesParam done tail
+      | stringToken position text => namesParam done tail
+      | punctuation position mark => namesParam done tail
+      | identifier position name => (
+          case (markerFor name done) as found in Option return Nat with
+          | none => namesParam done tail
+          | some place => 1))
+
+-- The tokens of one atom: a token or a parenthesized group.
+def rec atomOf : Nat -> List Token -> List Token :=
+  fun (depth : Nat) (tokens : List Token) =>
+  case tokens as self in List return List Token with
+  | nil => nil
+  | cons head tail => (
+      case head as token in Token return List Token with
+      | numberToken position number => cons head (select (List Token) (numberEq depth 0) nil (atomOf depth tail))
+      | stringToken position text => cons head (select (List Token) (numberEq depth 0) nil (atomOf depth tail))
+      | identifier position name => cons head (select (List Token) (numberEq depth 0) nil (atomOf depth tail))
+      | punctuation position mark => (
+          case (natEq mark 40) as opening return List Token with
+          | 1 (x : prod ()) => cons head (atomOf (natAdd depth 1) tail)
+          | 0 (x : prod ()) => cons head (select (List Token) (boolAnd (numberEq mark 41) (numberEq depth 1)) nil
+              (atomOf (select Nat (numberEq mark 41) (natSub depth 1) depth) tail))))
+
+-- A computed side renames each value parameter to its marker. It cannot
+-- name an earlier definition or hold an inline function.
+def rec markSide : List Binding -> List Param -> List Token -> Option (List Token) :=
+  fun (environment : List Binding) (done : List Param) (tokens : List Token) =>
+  case tokens as self in List return Option (List Token) with
+  | nil => some nil
+  | cons head tail => (
+      case (markSide environment done tail) as marked in Option return Option (List Token) with
+      | none => none
+      | some rest => (
+          case head as token in Token return Option (List Token) with
+          | numberToken position number => some (cons head rest)
+          | stringToken position text => some (cons head rest)
+          | punctuation position mark => some (cons head rest)
+          | identifier position name => (
+              case (markerFor name done) as found in Option return Option (List Token) with
+              | some place => (
+                  case place as index in Option return Option (List Token) with
+                  | none => none
+                  | some level => some (cons (identifier position (markerName level)) rest))
+              | none => (
+                  case (lookup name environment) as bound in Option return Option (List Token) with
+                  | some item => none
+                  | none => select (Option (List Token)) (sameText name sfun) none (some (cons head rest))))))
+
+-- The definition check binds each marker to null with the type of its
+-- parameter.
+def rec markerBindings : List Param -> List Binding -> List Binding :=
+  fun (done : List Param) (environment : List Binding) =>
+  case done as self in List return List Binding with
+  | nil => environment
+  | cons head tail => (
+      case head as item in Param return List Binding with
+      | param name ty => cons (binding (markerName (paramCount tail)) ty valueNull) (markerBindings tail environment))
+
+-- A computed side (step D4a) is an atom that names value parameters, such
+-- as `(some n)`. A function type with type parameters cannot have one.
+def computedSide : Fuel -> LType -> List Binding -> List Param -> List Token -> Worked Val :=
+  fun (fuel : Fuel) (a : LType) (environment : List Binding) (done : List Param) (tokens : List Token) =>
+  case (markSide environment done (atomOf 0 tokens)) as marked in Option return Worked Val with
+  | none => workError (firstPosition tokens) eTerm
+  | some term => (
+      case (natEq (hasTypeParam done) 1) as generic return Worked Val with
+      | 1 (x : prod ()) => workError (firstPosition tokens) eTerm
+      | 0 (x : prod ()) => (
+          case (parseTerm fuel 1 1 a (cons checkMarker (markerBindings done environment)) term) as side in Worked return Worked Val with
+          | workError at message => workError at message
+          | worked value rest left => worked (valTerm term) (skipAtom 0 tokens) left))
+
+def isTermSide : Val -> Nat := fun (side : Val) =>
+  case side as self in Val return Nat with
+  | valClosed text => 0
+  | valVar index => 0
+  | valTerm term => 1
+
+-- A proof parameter cannot have a computed side yet.
+def computedSides : LType -> Nat := fun (ty : LType) =>
+  case (sidesOf ty) as sides in EqSides return Nat with
+  | notEq => 0
+  | eqSides a lhs rhs => boolOr (isTermSide lhs) (isTermSide rhs)
+
 -- A side of an equality in a function type is the name of a value parameter
--- of type A, or an atom that names no value parameter and applies no
--- function. A closed side keeps its canonical JSON text.
+-- of type A, an atom that names no value parameter and applies no function,
+-- or a computed side. A closed side keeps its canonical JSON text.
 def eqSide : Fuel -> LType -> List Binding -> List Param -> List Token -> Worked Val :=
   fun (fuel : Fuel) (a : LType) (environment : List Binding) (done : List Param) (tokens : List Token) =>
   case (neutralSide a done tokens) as neutral in Option return Worked Val with
   | some side => worked side (dropToken tokens) 1
   | none => (
+    case (natEq (namesParam done (atomOf 0 tokens)) 1) as computed return Worked Val with
+    | 1 (x : prod ()) => computedSide fuel a environment done tokens
+    | 0 (x : prod ()) => (
       case (parseTerm fuel 1 1 a (hideParams done environment) tokens) as side in Worked return Worked Val with
       | workError at message => workError at message
       | worked value rest left => (
           case (printValue fuel textEnd 0 value) as text in Printed return Worked Val with
           | printError at message => workError (firstPosition tokens) message
-          | printed after printedText => worked (valClosed (reverseText printedText)) rest left))
+          | printed after printedText => worked (valClosed (reverseText printedText)) rest left)))
 
 -- `Eq A x y` as the result of a function type. A is a data type. The
 -- definition checks the body with neutral sides, so `refl` needs the same
@@ -279,7 +401,10 @@ def eqResult : Fuel -> List Binding -> List Param -> List Token -> Parsed LType 
 def paramDeclared : Fuel -> List Binding -> List Param -> List Token -> Parsed LType :=
   fun (fuel : Fuel) (environment : List Binding) (done : List Param) (tokens : List Token) =>
   case (natEq (isWord sEq tokens) 1) as equality return Parsed LType with
-  | 1 (x : prod ()) => eqResult fuel environment done (dropToken tokens)
+  | 1 (x : prod ()) => (
+      case (eqResult fuel environment done (dropToken tokens)) as declared in Parsed return Parsed LType with
+      | parseError at message => parseError at message
+      | parsed ty rest => select (Parsed LType) (computedSides ty) (parseError (firstPosition tokens) eTerm) (parsed ty rest))
   | 0 (x : prod ()) => parameterType fuel environment tokens
 
 def parseParam : Fuel -> List Binding -> List Param -> List Token -> Parsed Param :=

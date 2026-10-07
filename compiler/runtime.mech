@@ -108,30 +108,83 @@ def validUtf8 : Text -> Nat := fun (text : Text) =>
   | none => 1
   | some position => 0
 
+mu Token : Type 0 with
+| identifier : Nat -> Text -> Token
+| numberToken : Nat -> Nat -> Token
+| stringToken : Nat -> Text -> Token
+| punctuation : Nat -> Nat -> Token
+
 -- A side of an equality type (step D3a). A closed side keeps the canonical
 -- JSON text of its value. A neutral side is the value parameter at a
 -- position of the function type. A neutral side is equal only to itself.
+-- A computed side (step D4a) keeps the tokens of an atom, with a marker for
+-- each value parameter.
 mu Val : Type 0 with
 | valClosed : Text -> Val
 | valVar : Nat -> Val
+| valTerm : List Token -> Val
+
+-- A marker is an identifier that no source can spell: byte 0, then the
+-- position of a value parameter.
+def markerName : Nat -> Text := fun (index : Nat) => textByte 0 (textByte index textEnd)
+
+def markerIndex : Text -> Option Nat := fun (name : Text) =>
+  case name as self in Text return Option Nat with
+  | textEnd => none
+  | textByte byte rest => (
+      case (natEq byte 0) as marked return Option Nat with
+      | 0 (x : prod ()) => none
+      | 1 (x : prod ()) => (
+          case rest as after in Text return Option Nat with
+          | textEnd => none
+          | textByte index tail => some index))
+
+def rec textSize : Text -> Nat := fun (text : Text) =>
+  case text as self in Text return Nat with
+  | textEnd => 0
+  | textByte byte rest => natAdd (textSize rest) 1
+
+-- The text of a token without its source position. Each token starts with
+-- its kind and the size of its text, so the text of a token list is
+-- injective.
+def tokenText : Token -> Text := fun (token : Token) =>
+  case token as self in Token return Text with
+  | identifier position name => textByte 2 (textByte (textSize name) name)
+  | numberToken position number => textByte 3 (textByte number textEnd)
+  | stringToken position text => textByte 4 (textByte (textSize text) text)
+  | punctuation position mark => textByte 5 (textByte mark textEnd)
+
+def rec tokensText : List Token -> Text := fun (tokens : List Token) =>
+  case tokens as self in List return Text with
+  | nil => textEnd
+  | cons head tail => appendText (tokenText head) (tokensText tail)
 
 def sameVal : Val -> Val -> Nat := fun (left : Val) (right : Val) =>
   case left as self in Val return Nat with
   | valClosed leftText => (
       case right as other in Val return Nat with
       | valClosed rightText => sameText leftText rightText
-      | valVar rightIndex => 0)
+      | valVar rightIndex => 0
+      | valTerm rightTerm => 0)
   | valVar leftIndex => (
       case right as other in Val return Nat with
       | valClosed rightText => 0
-      | valVar rightIndex => numberEq leftIndex rightIndex)
+      | valVar rightIndex => numberEq leftIndex rightIndex
+      | valTerm rightTerm => 0)
+  | valTerm leftTerm => (
+      case right as other in Val return Nat with
+      | valClosed rightText => 0
+      | valVar rightIndex => 0
+      | valTerm rightTerm => sameText (tokensText leftTerm) (tokensText rightTerm))
 
 -- The text of a side in a type name. A neutral side prints as byte 0, then
--- its position, so it never equals the JSON text of a closed side.
+-- its position. A computed side prints as byte 1, then its tokens. Thus
+-- neither equals the JSON text of a closed side.
 def valText : Val -> Text := fun (side : Val) =>
   case side as self in Val return Text with
   | valClosed text => text
   | valVar index => textByte 0 (textByte index textEnd)
+  | valTerm term => textByte 1 (tokensText term)
 
 mu LType : Type 0 with
 | tyNat : LType
@@ -162,12 +215,6 @@ def rec fuelAppend : Fuel -> Fuel -> Fuel := fun (done : Fuel) (fuel : Fuel) =>
   | fuelEnd => done
   | fuelMore rest => fuelMore (fuelAppend done rest)
 
-
-mu Token : Type 0 with
-| identifier : Nat -> Text -> Token
-| numberToken : Nat -> Nat -> Token
-| stringToken : Nat -> Text -> Token
-| punctuation : Nat -> Nat -> Token
 
 def tokenPosition : Token -> Nat := fun (token : Token) =>
   case token as self in Token return Nat with

@@ -119,13 +119,17 @@ A function definition has a type `(x : A) -> B`. A value parameter has a
 data type or a named function type without type parameters. The result has
 a data type, and `B` cannot refer to a value parameter. The one exception
 is an equality result `Eq A x y`: a side can be the name of a value
-parameter of type `A`, as the whole side. Then `refl` proves the result only
-when both sides are the same parameter or the same closed value, as in
+parameter of type `A`, or an atom that applies constructor forms to value
+parameters and literals, such as `(some n)`. Then `refl` proves the result
+only when both sides are the same parameter, the same computed side or the
+same closed value, as in
 `def same : (n : Nat) -> Eq Nat n n := fun (n : Nat) => refl`. An
 application replaces each such side with the side of its argument, so
-`def p : Eq Nat 3 3 := same 3` checks. In a function body the argument at
-such a position is a parameter of the body, a literal or a name, as in
-`fun (n : Nat) => same n`. The type of a proof parameter can name earlier
+`def p : Eq Nat 3 3 := same 3` checks. A computed side gets the values of
+the arguments, so `(some n)` becomes `(some 3)`. In a function body the
+argument at such a position is a parameter of the body, a literal or a
+name, as in `fun (n : Nat) => same n`. For a computed side it must be a
+parameter of the body (step D4a). The type of a proof parameter can name earlier
 value parameters too, as in
 `fun (n : Nat) (m : Nat) (e : Eq Nat n m) => symm e`, and an application
 checks the proof argument with the sides of the earlier arguments. A

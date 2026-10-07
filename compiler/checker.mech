@@ -95,6 +95,7 @@ def isNeutralSide : Val -> Nat := fun (side : Val) =>
   case side as self in Val return Nat with
   | valClosed text => 0
   | valVar index => 1
+  | valTerm term => 1
 
 def dependentResult : LType -> Nat := fun (ty : LType) =>
   case (sidesOf ty) as sides in EqSides return Nat with
@@ -1238,11 +1239,46 @@ def rec argumentSide : Fuel -> Nat -> List Binding -> List Param -> List Value -
           | 1 (x : prod ()) => argumentText fuel environment (argumentHead values) tokens
           | 0 (x : prod ()) => argumentSide fuel (natSub index 1) environment tail (argumentTail values) (skipAtom 0 tokens)))
 
+-- In a body check, each marker of a computed side must take a parameter of
+-- the body, and then names the position of that parameter (step D4a).
+def rec renameMarkers : Fuel -> List Binding -> List Param -> List Value -> List Token -> List Token -> Option (List Token) :=
+  fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (term : List Token) =>
+  case term as self in List return Option (List Token) with
+  | nil => some nil
+  | cons head tail => (
+      case (renameMarkers fuel environment params values tokens tail) as renamed in Option return Option (List Token) with
+      | none => none
+      | some rest => (
+          case head as token in Token return Option (List Token) with
+          | numberToken position number => some (cons head rest)
+          | stringToken position text => some (cons head rest)
+          | punctuation position mark => some (cons head rest)
+          | identifier position name => (
+              case (markerIndex name) as marker in Option return Option (List Token) with
+              | none => some (cons head rest)
+              | some index => (
+                  case (argumentSide fuel index environment params values tokens) as side in Option return Option (List Token) with
+                  | none => none
+                  | some found => (
+                      case found as place in Val return Option (List Token) with
+                      | valClosed text => none
+                      | valTerm inner => none
+                      | valVar level => some (cons (identifier position (markerName level)) rest))))))
+
+-- Outside a body check, a computed side keeps its markers, and the
+-- application evaluates it (closeResult).
 def instantiateSide : Fuel -> List Binding -> List Param -> List Value -> List Token -> Val -> Option Val :=
   fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (side : Val) =>
   case side as self in Val return Option Val with
   | valClosed text => some side
   | valVar index => argumentSide fuel index environment params values tokens
+  | valTerm term => (
+      case (natEq (checkingBody environment) 1) as marked return Option Val with
+      | 0 (x : prod ()) => some side
+      | 1 (x : prod ()) => (
+          case (renameMarkers fuel environment params values tokens term) as renamed in Option return Option Val with
+          | none => none
+          | some found => some (valTerm found)))
 
 -- An application replaces each neutral side of a dependent result with the
 -- side of the argument at that position (step D2).
@@ -1270,6 +1306,20 @@ def rec instantiateParams : Fuel -> List Binding -> List Param -> List Value -> 
           case (instantiateResult fuel environment params values tokens ty) as resolved in Option return List Param with
           | none => cons head (instantiateParams fuel environment params values tokens tail)
           | some found => cons (param name found) (instantiateParams fuel environment params values tokens tail)))
+
+-- Outside a body check, the marker of each value parameter names the
+-- argument value at its position (step D4a).
+def rec argumentBindings : Nat -> List Param -> List Value -> List Binding -> List Binding :=
+  fun (index : Nat) (params : List Param) (values : List Value) (environment : List Binding) =>
+  case params as self in List return List Binding with
+  | nil => environment
+  | cons head tail => (
+      case head as item in Param return List Binding with
+      | param name ty => (
+          case (natEq (isTypeParam head) 1) as typeParam return List Binding with
+          | 1 (x : prod ()) => argumentBindings (natAdd index 1) tail values environment
+          | 0 (x : prod ()) => cons (binding (markerName index) ty (argumentHead values))
+              (argumentBindings (natAdd index 1) tail (argumentTail values) environment)))
 
 -- A synthesized argument is an earlier definition, a projection, symm,
 -- trans, either, an application, or one of these in parentheses. An
@@ -1315,7 +1365,7 @@ def rec synthTerm : Fuel -> Nat -> Nat -> List Binding -> List Token -> Worked T
                       case (dependentArguments more budget chosen environment params params nil afterTypes afterTypes) as checked in Worked return Worked Typed with
                       | workError at message => workError at message
                       | worked values rest budget => (
-                        case (instantiateResult more environment params values afterTypes (substType chosen result)) as resolved in Option return Worked Typed with
+                        case (closeResult more environment params values (instantiateResult more environment params values afterTypes (substType chosen result))) as resolved in Option return Worked Typed with
                         | none => workError position eTerm
                         | some applied => (
                           case (natEq (checkingBody environment) 1) as marked return Worked Typed with
@@ -1539,6 +1589,40 @@ and dependentArguments : Fuel -> Nat -> List Binding -> List Binding -> List Par
                     case (parseTerm more budget 1 expected environment tokens) as first in Worked return Worked (List Value) with
                     | workError at message => workError at message
                     | worked value rest left => dependentArguments more left chosen environment params tail (cons value seen) start rest)))))
+-- Outside a body check, an application evaluates each computed side of its
+-- result, with each marker bound to the argument at its position (step D4a).
+and closeSide : Fuel -> List Binding -> LType -> Val -> Option Val :=
+  fun (fuel : Fuel) (bound : List Binding) (a : LType) (side : Val) =>
+  case fuel as guard in Fuel return Option Val with
+  | fuelEnd => none
+  | fuelMore more => (
+    case side as self in Val return Option Val with
+    | valClosed text => some side
+    | valVar index => some side
+    | valTerm term => (
+        case (parseTerm more 1 1 a bound term) as computed in Worked return Option Val with
+        | workError at message => none
+        | worked value rest left => printedSide more value))
+and closeResult : Fuel -> List Binding -> List Param -> List Value -> Option LType -> Option LType :=
+  fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (resolved : Option LType) =>
+  case fuel as guard in Fuel return Option LType with
+  | fuelEnd => none
+  | fuelMore more => (
+    case resolved as found in Option return Option LType with
+    | none => none
+    | some result => (
+      case (sidesOf result) as sides in EqSides return Option LType with
+      | notEq => some result
+      | eqSides a lhs rhs => (
+          case (natEq (checkingBody environment) 1) as marked return Option LType with
+          | 1 (x : prod ()) => some result
+          | 0 (x : prod ()) => (
+              case (closeSide more (argumentBindings 0 params values environment) a lhs) as left in Option return Option LType with
+              | none => none
+              | some closedLeft => (
+                  case (closeSide more (argumentBindings 0 params values environment) a rhs) as right in Option return Option LType with
+                  | none => none
+                  | some closedRight => some (tyEq a closedLeft closedRight))))))
 -- The function of a structure form is a name, or a parenthesized partial
 -- application that binds all but the last parameter of a function.
 and unaryTerm : Fuel -> Nat -> LType -> List Binding -> List Token -> Worked Unary :=

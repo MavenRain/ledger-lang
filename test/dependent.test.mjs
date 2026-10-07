@@ -11,6 +11,7 @@ const instances = source => {
   return result.instances;
 };
 const reflError = 'refl needs two equal sides';
+const typeError = 'term does not have the declared type';
 // Each case names the last occurrence of `at` in the source as the error byte.
 const reject = (source, message, at) => {
   const result = run(source);
@@ -45,10 +46,26 @@ test('a parameter is equal only to itself', () => {
   reject('def n : Nat := 3 def f : (n : Nat) -> Eq Nat n 3 := fun (n : Nat) => refl', reflError, 'refl');
 });
 
-test('a side names a parameter of the side type, and only as a whole side', () => {
+test('a side names a parameter of the side type', () => {
   refuse('def f : (t : Text) -> Eq Nat t t := fun (t : Text) => refl');
-  refuse('def f : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl');
-  refuse('def f : (n : Nat) -> Eq (Prod Nat Nat) (pair n 1) (pair n 1) := fun (n : Nat) => refl');
+  assert.deepEqual(instances('def f : (n : Nat) -> Eq (Prod Nat Nat) (pair n 1) (pair n 1) := fun (n : Nat) => refl' + k), kOut);
+});
+
+test('a computed side names value parameters inside an atom', () => {
+  const f = 'def f : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl';
+  const g = ' def g : (m : Nat) -> Eq (Option Nat) (some m) (some m) := fun (m : Nat) =>';
+  assert.deepEqual(instances(f + k), kOut);
+  assert.deepEqual(instances(f + ' def p : Eq (Option Nat) (some 3) (some 3) := f 3' + k), kOut);
+  assert.deepEqual(instances(f + g + ' f m def p : Eq (Option Nat) (some 4) (some 4) := g 4' + k), kOut);
+  reject(f + ' def p : Eq (Option Nat) (some 4) (some 4) := f 3', typeError, 'f 3');
+  reject('def f : (n : Nat) -> (m : Nat) -> Eq (Option Nat) (some n) (some m) := fun (n : Nat) (m : Nat) => refl',
+    reflError, 'refl');
+  reject(f + g + ' f 3', typeError, 'f 3');
+  refuse('def f : (A : Type 0) -> (x : A) -> Eq (Option A) (some x) (some x) := fun (A : Type 0) (x : A) => refl');
+  refuse('def f : (n : Nat) -> (e : Eq (Option Nat) (some n) (some n)) -> Nat :=' +
+    ' fun (n : Nat) (e : Eq (Option Nat) (some n) (some n)) => n');
+  refuse('def same : (x : Nat) -> Nat := fun (x : Nat) => x' +
+    ' def f : (n : Nat) -> Eq Nat (same n) (same n) := fun (n : Nat) => refl');
 });
 
 test('an application instantiates a dependent result', () => {

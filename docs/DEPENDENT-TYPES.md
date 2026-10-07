@@ -38,7 +38,8 @@ The plan adds neutral values in two stages:
   value parameter of type A, or an atom that names no value parameter and
   applies no function. The definition checks the body against the neutral
   sides. `refl` needs the same parameter or the same closed value on both
-  sides. A side such as `(some n)` that contains a parameter is refused.
+  sides. A side such as `(some n)` that contains a parameter was refused
+  until D4a.
   Prefixing a named function type shifts its neutral parameter positions.
   D1 refused each application of a function with neutral sides. D2 lifts
   this for saturated applications.
@@ -63,6 +64,17 @@ The plan adds neutral values in two stages:
 - D3a (done). The sides of `tyEq` are `Val` values, not text. `refl` and
   `trans` compare sides with `sameVal`. A type name prints a neutral side
   as byte 0, then its position, as before. No program changes its result.
+- D4a (done). Computed sides in one atom. A side can be an atom that
+  applies constructor forms to value parameters and literals, such as
+  `(some n)` or `(pair n 1)`. The checker keeps such a side as a `valTerm`:
+  its tokens, with a marker for each parameter. `refl` needs the same
+  tokens on both sides, so `(some n)` and `(some m)` are not equal. An
+  application binds the markers to the argument values and evaluates the
+  side to a closed value, so `f 3` proves `Eq (Option Nat) (some 3) (some 3)`.
+  In a definition body the argument at such a position must be a parameter
+  of the body. A computed side is refused in a signature with a type
+  parameter, with a function parameter, with the name of an earlier
+  definition, with `fun`, and in the type of a proof parameter.
 - D3. Syntax tree and value domain, as above. The checker checks a body
   once into a `Term`. An application evaluates the `Term`, not the tokens.
   The work budget stays the same. The JSON output stays the same.

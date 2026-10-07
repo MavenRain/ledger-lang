@@ -209,7 +209,8 @@ original meaning.
   parentheses. The checker does not infer a type argument. The name of a
   function with a type parameter is not a function argument. A partial
   application that gives its type arguments is. A data type cannot depend on a value parameter. Only a side of an
-  equality result can name one, as the whole side. An application of a
+  equality result can name one, as the whole side or inside an atom of
+  constructor forms and literals such as `(some n)` (step D4a). An application of a
   function with such a result replaces each neutral side with the side of
   its argument (step D2). In a definition body such an argument is a
   parameter of the body, a literal or a name. The type of a proof parameter
