@@ -213,7 +213,8 @@ original meaning.
   constructor forms and literals such as `(some n)` (step D4a). An application of a
   function with such a result replaces each neutral side with the side of
   its argument (step D2). In a definition body such an argument is a
-  parameter of the body, a literal or a name. The type of a proof parameter
+  parameter of the body, a literal or a name, also for a computed side (step
+  D4c). The type of a proof parameter
   can name earlier value parameters the same way, also inside a computed
   side (steps D2b and D4b). Partial
   applications of such a function are refused. The name of a

@@ -159,6 +159,20 @@ def rec tokensText : List Token -> Text := fun (tokens : List Token) =>
   | nil => textEnd
   | cons head tail => appendText (tokenText head) (tokensText tail)
 
+-- 1 when a token list holds a marker.
+def rec hasMarker : List Token -> Nat := fun (tokens : List Token) =>
+  case tokens as self in List return Nat with
+  | nil => 0
+  | cons head tail => (
+      case head as token in Token return Nat with
+      | numberToken position number => hasMarker tail
+      | stringToken position text => hasMarker tail
+      | punctuation position mark => hasMarker tail
+      | identifier position name => (
+          case (markerIndex name) as marker in Option return Nat with
+          | none => hasMarker tail
+          | some index => 1))
+
 def sameVal : Val -> Val -> Nat := fun (left : Val) (right : Val) =>
   case left as self in Val return Nat with
   | valClosed leftText => (

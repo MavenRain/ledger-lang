@@ -88,6 +88,30 @@ test('a proof parameter can have a computed side', () => {
     ' fun (g : (n : Nat) -> (e : Eq (Option Nat) (some n) (some n)) -> Nat) => g 0 refl');
 });
 
+test('a closed argument in a body gives a computed side its token', () => {
+  const f = 'def f : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl';
+  const pf = 'def pf : (n : Nat) -> (j : Nat) -> Eq (Prod Nat Nat) (pair n j) (pair n j) := fun (n : Nat) (j : Nat) => refl';
+  const tf = 'def tf : (t : Text) -> Eq (Option Text) (some t) (some t) := fun (t : Text) => refl';
+  const lift = 'def lift : (n : Nat) -> (m : Nat) -> (e : Eq (Option Nat) (some n) (some m)) -> Eq (Option Nat) (some m) (some n) :=' +
+    ' fun (n : Nat) (m : Nat) (e : Eq (Option Nat) (some n) (some m)) => symm e';
+  const three = ' def g : (m : Nat) -> Eq (Option Nat) (some 3) (some 3) := fun (m : Nat) =>';
+  const mixed = ' def g : (m : Nat) -> Eq (Prod Nat Nat) (pair m 1) (pair m 1) := fun (m : Nat) =>';
+  assert.deepEqual(instances(f + three + ' f 3' + k), kOut);
+  assert.deepEqual(instances('def three : Nat := 3 ' + f + three + ' f three'),
+    [{ name: 'three', type: 'Nat', value: 3 }]);
+  assert.deepEqual(instances(tf + ' def g : (m : Nat) -> Eq (Option Text) (some "a") (some "a") := fun (m : Nat) => tf "a"' + k), kOut);
+  assert.deepEqual(instances(pf + mixed + ' pf m 1' + k), kOut);
+  assert.deepEqual(instances(pf + ' def g : (m : Nat) -> Eq (Prod Nat Nat) (pair 2 1) (pair 2 1) := fun (m : Nat) => pf 2 1' + k), kOut);
+  assert.deepEqual(instances(lift + three.replace('g', 'h') + ' lift 3 3 refl' + k), kOut);
+  assert.deepEqual(instances(lift + ' def h : (a : Nat) -> (e : Eq (Option Nat) (some a) (some 3)) -> Eq (Option Nat) (some 3) (some a) :=' +
+    ' fun (a : Nat) (e : Eq (Option Nat) (some a) (some 3)) => lift a 3 e def p : Eq (Option Nat) (some 3) (some 3) := h 3 refl' + k), kOut);
+  reject(f + ' def g : (m : Nat) -> Eq (Option Nat) (some 4) (some 4) := fun (m : Nat) => f 3', typeError, 'f 3');
+  reject(pf + ' def g : (m : Nat) -> Eq (Prod Nat Nat) (pair m 2) (pair m 2) := fun (m : Nat) => pf m 1', typeError, 'pf m 1');
+  reject('def one : Nat := 1 ' + pf + mixed + ' pf m one', typeError, 'pf m one');
+  reject(lift + three.replace('g', 'h') + ' lift 3 4 refl', reflError, 'refl');
+  refuse(f + three + ' f (natAdd 1 2)');
+});
+
 test('an application instantiates a dependent result', () => {
   const f = 'def f : (n : Nat) -> Eq Nat n n := fun (n : Nat) => refl';
   assert.deepEqual(instances(f + ' def p : Eq Nat 3 3 := f 3' + k), kOut);

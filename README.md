@@ -128,8 +128,10 @@ application replaces each such side with the side of its argument, so
 `def p : Eq Nat 3 3 := same 3` checks. A computed side gets the values of
 the arguments, so `(some n)` becomes `(some 3)`. In a function body the
 argument at such a position is a parameter of the body, a literal or a
-name, as in `fun (n : Nat) => same n`. For a computed side it must be a
-parameter of the body (step D4a). The type of a proof parameter can name earlier
+name, as in `fun (n : Nat) => same n`. In a computed side a parameter of
+the body gives its marker (step D4a), and a literal or a name gives its own
+token. A computed side with no parameter left is evaluated, so
+`fun (m : Nat) => f 3` proves `(some 3)` (step D4c). The type of a proof parameter can name earlier
 value parameters too, also inside a computed side (step D4b), as in
 `fun (n : Nat) (m : Nat) (e : Eq Nat n m) => symm e`, and an application
 checks the proof argument with the sides of the earlier arguments. A

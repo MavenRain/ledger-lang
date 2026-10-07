@@ -72,15 +72,23 @@ The plan adds neutral values in two stages:
   application binds the markers to the argument values and evaluates the
   side to a closed value, so `f 3` proves `Eq (Option Nat) (some 3) (some 3)`.
   In a definition body the argument at such a position must be a parameter
-  of the body. A computed side is refused in a signature with a type
+  of the body until D4c. A computed side is refused in a signature with a type
   parameter, with a function parameter, with the name of an earlier
   definition and with `fun`.
 - D4b (done). The type of a proof parameter can have a computed side, as in
   `(e : Eq (Option Nat) (some n) (some m))`. An application evaluates these
   sides with the earlier arguments. Then it checks the proof argument. The
   run binds the proof parameter with the evaluated type. In a definition
-  body, the argument at such a position must be a parameter of the body, as
-  in D4a.
+  body, the argument at such a position follows the rules of D4a and D4c.
+- D4c (done). Closed arguments in a body. In a definition body, a literal
+  or the name of an earlier definition at the position of a marker gives
+  its own token to the computed side. A side with no marker left is
+  evaluated to a closed value, so `fun (m : Nat) => f 3` proves
+  `Eq (Option Nat) (some 3) (some 3)`. A side that keeps a marker keeps the
+  token, so `pf m 1` proves `Eq (Prod Nat Nat) (pair m 1) (pair m 1)`. Such
+  a side does not evaluate the name of an earlier definition, so with
+  `def one : Nat := 1`, `pf m one` does not prove `(pair m 1)`. A
+  parenthesized argument is still refused.
 - D3. Syntax tree and value domain, as above. The checker checks a body
   once into a `Term`. An application evaluates the `Term`, not the tokens.
   The work budget stays the same. The JSON output stays the same.

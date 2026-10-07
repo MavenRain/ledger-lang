@@ -1239,8 +1239,29 @@ def rec argumentSide : Fuel -> Nat -> List Binding -> List Param -> List Value -
           | 1 (x : prod ()) => argumentText fuel environment (argumentHead values) tokens
           | 0 (x : prod ()) => argumentSide fuel (natSub index 1) environment tail (argumentTail values) (skipAtom 0 tokens)))
 
--- In a body check, each marker of a computed side must take a parameter of
--- the body, and then names the position of that parameter (step D4a).
+-- The first token of the argument at a position. Type parameters take no
+-- argument tokens.
+def rec argumentToken : Nat -> List Param -> List Token -> Option Token :=
+  fun (index : Nat) (params : List Param) (tokens : List Token) =>
+  case params as self in List return Option Token with
+  | nil => none
+  | cons head tail => (
+      case (natEq (isTypeParam head) 1) as typeParam return Option Token with
+      | 1 (x : prod ()) => (
+          case (natEq index 0) as here return Option Token with
+          | 1 (x : prod ()) => none
+          | 0 (x : prod ()) => argumentToken (natSub index 1) tail tokens)
+      | 0 (x : prod ()) => (
+          case (natEq index 0) as here return Option Token with
+          | 0 (x : prod ()) => argumentToken (natSub index 1) tail (skipAtom 0 tokens)
+          | 1 (x : prod ()) => (
+              case tokens as items in List return Option Token with
+              | nil => none
+              | cons first rest => some first)))
+
+-- In a body check, a parameter of the body at the position of a marker
+-- gives the marker of that parameter (step D4a). A literal or a closed name
+-- gives its own token (step D4c).
 def rec renameMarkers : Fuel -> List Binding -> List Param -> List Value -> List Token -> List Token -> Option (List Token) :=
   fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (tokens : List Token) (term : List Token) =>
   case term as self in List return Option (List Token) with
@@ -1261,9 +1282,20 @@ def rec renameMarkers : Fuel -> List Binding -> List Param -> List Value -> List
                   | none => none
                   | some found => (
                       case found as place in Val return Option (List Token) with
-                      | valClosed text => none
+                      | valClosed text => (
+                          case (argumentToken index params tokens) as closed in Option return Option (List Token) with
+                          | none => none
+                          | some literal => some (cons literal rest))
                       | valTerm inner => none
                       | valVar level => some (cons (identifier position (markerName level)) rest))))))
+
+-- 1 when a body check keeps the side as it is: a closed side, a neutral
+-- side or a computed side that holds a marker.
+def keptSide : Val -> Nat := fun (side : Val) =>
+  case side as self in Val return Nat with
+  | valClosed text => 1
+  | valVar index => 1
+  | valTerm term => hasMarker term
 
 -- Outside a body check, a computed side keeps its markers, and the
 -- application evaluates it (closeResult).
@@ -1606,6 +1638,16 @@ and closeSide : Fuel -> List Binding -> LType -> Val -> Option Val :=
         case (parseTerm more 1 1 a bound term) as computed in Worked return Option Val with
         | workError at message => none
         | worked value rest left => printedSide more value))
+-- In a body check, a computed side with no marker left is evaluated in the
+-- scope of the body (step D4c).
+and closeBodySide : Fuel -> List Binding -> LType -> Val -> Option Val :=
+  fun (fuel : Fuel) (environment : List Binding) (a : LType) (side : Val) =>
+  case fuel as guard in Fuel return Option Val with
+  | fuelEnd => none
+  | fuelMore more => (
+    case (natEq (keptSide side) 1) as kept return Option Val with
+    | 1 (x : prod ()) => some side
+    | 0 (x : prod ()) => closeSide more environment a side)
 and closeResult : Fuel -> List Binding -> List Param -> List Value -> Option LType -> Option LType :=
   fun (fuel : Fuel) (environment : List Binding) (params : List Param) (values : List Value) (resolved : Option LType) =>
   case fuel as guard in Fuel return Option LType with
@@ -1618,7 +1660,13 @@ and closeResult : Fuel -> List Binding -> List Param -> List Value -> Option LTy
       | notEq => some result
       | eqSides a lhs rhs => (
           case (natEq (checkingBody environment) 1) as marked return Option LType with
-          | 1 (x : prod ()) => some result
+          | 1 (x : prod ()) => (
+              case (closeBodySide more environment a lhs) as left in Option return Option LType with
+              | none => none
+              | some closedLeft => (
+                  case (closeBodySide more environment a rhs) as right in Option return Option LType with
+                  | none => none
+                  | some closedRight => some (tyEq a closedLeft closedRight)))
           | 0 (x : prod ()) => (
               case (closeSide more (argumentBindings 0 params values environment) a lhs) as left in Option return Option LType with
               | none => none

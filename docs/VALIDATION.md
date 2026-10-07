@@ -4,9 +4,9 @@ Date: 2026-10-07. Node: v23.10.0. Build host: the installed mechanism-lang
 OCaml executable at `_build/default/bin/mech.exe`.
 
 `make check` and `make test` pass: the host checks the complete compiler, builds the
-Wasm reactor, and runs 515 integration tests with zero failures. The test
-runner reported 7.08 seconds. Eighteen of the tests, in
-`test/dependent.test.mjs`, check steps D1, D2, D2b, D4a and D4b of `docs/DEPENDENT-TYPES.md`: an
+Wasm reactor, and runs 516 integration tests with zero failures. The test
+runner reported 5.60 seconds. Nineteen of the tests, in
+`test/dependent.test.mjs`, check steps D1, D2, D2b, D4a, D4b and D4c of `docs/DEPENDENT-TYPES.md`: an
 equality result can name a value parameter on both sides, two different
 parameters or a parameter and a constant are not equal, a side names a
 parameter of the side type, and step D2 instantiates the
@@ -21,7 +21,11 @@ A different value, a different parameter, a literal in a body, a type
 parameter and the name of an earlier function are refused. Step D4b: a
 proof parameter with a computed side checks `symm e` in a body,
 `lift 3 3 refl` proves `Eq (Option Nat) (some 3) (some 3)`, and a wrong
-proof, a literal in a body and a bound function parameter are refused. The review
+proof, a literal in a body and a bound function parameter are refused. Step
+D4c: in a body, `f 3` and `f three` prove `Eq (Option Nat) (some 3) (some 3)`,
+`pf m 1` proves `Eq (Prod Nat Nat) (pair m 1) (pair m 1)`, and a wrong
+literal, a name in a side that keeps a marker and a parenthesized argument
+are refused. The review
 regressions cover prefixed named signatures, including proof parameters
 through repeated prefixes and type parameters while preserving nested function
 scopes. Inline bodies refuse captures of proofs with neutral sides from an
