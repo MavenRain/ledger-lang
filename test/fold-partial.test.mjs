@@ -63,14 +63,18 @@ test('partial fold functions bind function names and apply function parameters',
   assert.equal(last(`${prefix}${useThree}def result : Nat := useThree takeX`), 4);
 });
 
+test('partial fold functions bind nested partial applications', () => {
+  assert.equal(last(`${prefix}def result : Nat := fold (viaThree (pick4 1)) 0 xs`), 1);
+});
+
 test('partial fold functions reject bad bound arguments', () => {
   const mistyped = `${prefix}def result : Nat := fold (pick3 "x") 0 xs`;
   assert.deepEqual(run(mistyped), { error: {
     byte: mistyped.lastIndexOf('"x"'), message: 'term does not have the declared type',
   } });
-  const nested = `${prefix}def result : Nat := fold (viaThree (pick4 1)) 0 xs`;
+  const nested = `${prefix}def result : Nat := fold (viaThree (pick4 "x")) 0 xs`;
   assert.deepEqual(run(nested), { error: {
-    byte: nested.lastIndexOf('viaThree'), message: 'term does not have the declared type',
+    byte: nested.lastIndexOf('"x"'), message: 'term does not have the declared type',
   } });
   const polymorphic = prefix +
     'def generic : (A : Type 0) -> (a : A) -> (x : Nat) -> (acc : Nat) -> Nat := ' +

@@ -375,89 +375,62 @@ def inlineClosure : Text -> LType -> Value -> Values -> List Binding -> Binding 
   closureBinding name (inlineParams (inlineParts names) (arrowParams ty)) (arrowResult ty)
     (inlineTokens body) (scopeOf caller)
 
--- isInline is 1 when a value is an inline function argument: a list whose
--- head is not a text.
-def isInline : Value -> Nat := fun (value : Value) =>
-  case (asValues value) as parts in Option return Nat with
-  | none => 0
-  | some items => (
-      case items as self in Values return Nat with
-      | valuesEnd => 0
-      | valuesItem head rest => (
-          case (asText head) as applied in Option return Nat with
-          | none => 1
-          | some target => 0))
-
--- A bound argument of a partial application that is not a name is an inline
--- function. It keeps the scope where the checker checked the application.
-def inlineBound : Text -> LType -> Value -> List Binding -> Binding :=
-  fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
-  case (asValues value) as parts in Option return Binding with
-  | none => opaqueClosure name ty
-  | some items => (
+-- A partial application `(g a1 .. ak)` binds the first k parameters of g in
+-- the scope of the closure. The value of a function argument, and of a bound
+-- argument of a function type, is a name, the name of a function followed by
+-- its bound arguments, or an inline function. Recursion follows the checked
+-- Value and Values trees, so every bound argument keeps its binding.
+def rec boundBinding : Value -> Text -> LType -> List Binding -> Binding :=
+  fun (value : Value) (name : Text) (ty : LType) (caller : List Binding) =>
+  case value as stored in Value return Binding with
+    | valueNull => opaqueClosure name ty
+    | valueFlag flag => opaqueClosure name ty
+    | valueNat number => opaqueClosure name ty
+    | valueText target => closureOfName name ty target caller
+    | valueAttrs attrs => opaqueClosure name ty
+    | valueItems items => (
       case items as self in Values return Binding with
       | valuesEnd => opaqueClosure name ty
-      | valuesItem head rest => select Binding (isInline value)
-          (inlineClosure name ty head rest caller) (opaqueClosure name ty))
-
--- A partial application `(g a1 .. ak)` binds the first k parameters of g in
--- the scope of the closure. A bound argument of a function type is a name
--- or an inline function.
-def boundBinding : Text -> LType -> Value -> List Binding -> Binding :=
-  fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
-  case (natEq (isArrowType ty) 1) as higher return Binding with
-  | 0 (x : prod ()) => binding name ty value
-  | 1 (x : prod ()) => (
-      case (asText value) as named in Option return Binding with
-      | none => inlineBound name ty value caller
-      | some target => closureOfName name ty target caller)
-
-def rec bindBound : List Param -> List Value -> List Binding -> List Binding -> List Binding :=
-  fun (params : List Param) (values : List Value) (caller : List Binding) (scope : List Binding) =>
-  case params as self in List return List Binding with
-  | nil => scope
-  | cons head tail => (
-      case head as item in Param return List Binding with
-      | param bound ty => bindBound tail (argumentTail values) caller
-          (cons (boundBinding bound ty (argumentHead values) caller) scope))
+      | valuesItem head rest => (
+        case (asText head) as applied in Option return Binding with
+        | none => inlineClosure name ty head rest caller
+        | some target => (
+          case (lookup target caller) as found in Option return Binding with
+          | none => opaqueClosure name ty
+          | some item => (
+            case item as known in Binding return Binding with
+            | binding other given held => opaqueClosure name ty
+            | typeBinding other universe defined => opaqueClosure name ty
+            | arrowBinding other params result => opaqueClosure name ty
+            | funBinding other params result body =>
+                closureBinding name (dropCount Value Param (listOfValues rest) params) result body
+                  (scopeOf (bindBound rest params caller (definitionScope other caller)))
+            | closureBinding other params result body scope =>
+                closureBinding name (dropCount Value Param (listOfValues rest) params) result body
+                  (scopeOf (bindBound rest params caller (scopeList scope)))))))
+and bindBound : Values -> List Param -> List Binding -> List Binding -> List Binding :=
+  fun (values : Values) (params : List Param) (caller : List Binding) (scope : List Binding) =>
+  case values as stored in Values return List Binding with
+  | valuesEnd => scope
+  | valuesItem value rest => (
+    case params as self in List return List Binding with
+    | nil => scope
+    | cons head tail => (
+        case head as item in Param return List Binding with
+        | param bound ty => (
+            case (natEq (isArrowType ty) 1) as higher return List Binding with
+            | 0 (x : prod ()) => bindBound rest tail caller (cons (binding bound ty value) scope)
+            | 1 (x : prod ()) => bindBound rest tail caller
+                (cons (boundBinding value bound ty caller) scope))))
 
 def partialClosure : Text -> LType -> Text -> List Value -> List Binding -> Binding :=
   fun (name : Text) (ty : LType) (target : Text) (bound : List Value) (caller : List Binding) =>
-  case (lookup target caller) as found in Option return Binding with
-  | none => opaqueClosure name ty
-  | some item => (
-      case item as known in Binding return Binding with
-      | binding other given held => opaqueClosure name ty
-      | typeBinding other universe defined => opaqueClosure name ty
-      | arrowBinding other params result => opaqueClosure name ty
-      | funBinding other params result body =>
-          closureBinding name (dropCount Value Param bound params) result body
-            (scopeOf (bindBound (takeCount Value Param bound params) bound caller (definitionScope other caller)))
-      | closureBinding other params result body scope =>
-          closureBinding name (dropCount Value Param bound params) result body
-            (scopeOf (bindBound (takeCount Value Param bound params) bound caller (scopeList scope))))
-
--- The value of a function argument is a name, the name of a function
--- followed by its bound arguments, or an inline function.
-def closureOf : Text -> LType -> Value -> List Binding -> Binding :=
-  fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
-  case (asText value) as named in Option return Binding with
-  | some target => closureOfName name ty target caller
-  | none => (
-      case (asValues value) as parts in Option return Binding with
-      | none => opaqueClosure name ty
-      | some items => (
-          case items as self in Values return Binding with
-          | valuesEnd => opaqueClosure name ty
-          | valuesItem head rest => (
-              case (asText head) as applied in Option return Binding with
-              | none => inlineClosure name ty head rest caller
-              | some target => partialClosure name ty target (listOfValues rest) caller)))
+  boundBinding (valueItems (valuesItem (valueText target) (valuesOfList bound))) name ty caller
 
 def bindParam : Text -> LType -> Value -> List Binding -> Binding :=
   fun (name : Text) (ty : LType) (value : Value) (caller : List Binding) =>
   case (natEq (isArrowType ty) 1) as higher return Binding with
-  | 1 (x : prod ()) => closureOf name ty value caller
+  | 1 (x : prod ()) => boundBinding value name ty caller
   | 0 (x : prod ()) => select Binding (sameType ty (tyUniverse 0)) (typeBinding name ty (tySchema name))
       (binding name ty value)
 
@@ -476,9 +449,9 @@ def bindParams : List Param -> List Value -> List Binding -> List Binding :=
   fun (params : List Param) (values : List Value) (environment : List Binding) =>
   bindArguments nil params values environment
 
--- plainBound is 1 when every bound argument of a function type is a name or
--- an inline function. A bound partial application is not supported.
-def rec plainBound : List Param -> List Value -> Nat :=
+-- boundFunctions is 1 when each bound argument of a function type is a name
+-- or a list: an inline function or a partial application.
+def rec boundFunctions : List Param -> List Value -> Nat :=
   fun (params : List Param) (values : List Value) =>
   case params as self in List return Nat with
   | nil => 1
@@ -486,11 +459,14 @@ def rec plainBound : List Param -> List Value -> Nat :=
       case head as item in Param return Nat with
       | param bound ty => (
           case (natEq (isArrowType ty) 1) as higher return Nat with
-          | 0 (x : prod ()) => plainBound tail (argumentTail values)
+          | 0 (x : prod ()) => boundFunctions tail (argumentTail values)
           | 1 (x : prod ()) => (
               case (asText (argumentHead values)) as named in Option return Nat with
-              | none => select Nat (isInline (argumentHead values)) (plainBound tail (argumentTail values)) 0
-              | some target => plainBound tail (argumentTail values))))
+              | none => (
+                  case (asValues (argumentHead values)) as listed in Option return Nat with
+                  | none => 0
+                  | some items => boundFunctions tail (argumentTail values))
+              | some target => boundFunctions tail (argumentTail values))))
 
 -- boundParams gives the parameters of a function that a partial application
 -- binds: all but the last ones, as many as the expected function type has.
@@ -1256,8 +1232,8 @@ and parseTerm : Fuel -> Nat -> Nat -> LType -> List Binding -> List Token -> Wor
 -- function type, or a parenthesized partial application `(g a1 .. ak)` of a
 -- function whose last parameters and result form the expected function type.
 -- The bound arguments are checked in the environment of the application. A
--- bound argument of a function type is a name or a parenthesized inline
--- function. A bare partial application needs parentheses.
+-- bound argument of a function type is a name, a parenthesized inline
+-- function or a partial application. A bare partial application needs parentheses.
 and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -> LType -> List Binding -> List Token -> Worked Value :=
   fun (fuel : Fuel) (budget : Nat) (atom : Nat) (position : Nat) (expected : LType) (name : Text) (params : List Param) (result : LType) (environment : List Binding) (tokens : List Token) =>
   case fuel as guard in Fuel return Worked Value with
@@ -1280,7 +1256,7 @@ and partialArgument : Fuel -> Nat -> Nat -> Nat -> LType -> Text -> List Param -
             | 0 (x : prod ()) => (
               case (parseArguments more budget 1 (paramTypes (cons first others)) environment tokens) as checked in Worked return Worked Value with
               | workError at message => workError at message
-              | worked values rest budget => select (Worked Value) (plainBound (cons first others) values)
+              | worked values rest budget => select (Worked Value) (boundFunctions (cons first others) values)
                   (worked (valueItems (valuesOfList (cons (valueText name) values))) rest budget)
                   (workError position eTerm)))))))
 -- An inline function argument `(fun (x : A) .. => body)` has one or more
@@ -1424,7 +1400,7 @@ and boundUnary : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Bindi
       case (parseArguments more budget 1 (paramTypes (frontParams params)) environment tokens) as checked in Worked return Worked Unary with
       | workError at message => workError at message
       | worked values rest budget => (
-        case (natEq (plainBound (frontParams params) values) 0) as nested return Worked Unary with
+        case (natEq (boundFunctions (frontParams params) values) 0) as nested return Worked Unary with
         | 1 (x : prod ()) => workError position eTerm
         | 0 (x : prod ()) => (
           case (unaryOf environment (partialClosure name (arrowType (dropCount Param Param (frontParams params) params) result) name values environment)) as shaped in Option return Worked Unary with
@@ -1515,7 +1491,7 @@ and boundStepper : Fuel -> Nat -> Nat -> Text -> List Param -> LType -> List Bin
       case (boundArguments more budget params environment tokens) as checked in Worked return Worked Stepper with
       | workError at message => workError at message
       | worked values rest budget => (
-        case (natEq (plainBound (takeCount Value Param values params) values) 0) as nested return Worked Stepper with
+        case (natEq (boundFunctions (takeCount Value Param values params) values) 0) as nested return Worked Stepper with
         | 1 (x : prod ()) => workError position eTerm
         | 0 (x : prod ()) => (
           case (partialClosure name (arrowType (dropCount Value Param values params) result) name values environment) as made in Binding return Worked Stepper with

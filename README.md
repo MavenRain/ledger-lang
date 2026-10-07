@@ -143,8 +143,10 @@ function parameter, with optional grouping parentheses. It can also be a
 parenthesized partial application `(g a1 ... ak)`: the supplied arguments
 bind the leading parameters, and the remaining parameters and result must
 match the expected function type. Bound values are evaluated in the caller's
-scope. A bound function argument must be a name, optionally grouped; that
-name can be a parameter holding a partial application. A function with type
+scope. A bound function argument can be a name, optionally grouped, a
+parenthesized inline function, or another partial application, as in
+`use (apply (pickK 6))`. Nested partial applications keep the caller's scope.
+See [examples/bound-partial.ledger](examples/bound-partial.ledger). A function with type
 parameters cannot be partially applied. The function of `map`, `bind` and
 `filter` can also be a
 parenthesized partial application that binds all but the last parameter, as

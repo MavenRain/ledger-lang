@@ -57,7 +57,7 @@ test('an inline bound argument must fit and is checked', () => {
   refused(`${prefix}def n : Nat := use (apply fun (x : Nat) => x)`, /argument needs parentheses/);
   refused(`${prefix}def n : Nat := use (apply (fun (x : Nat) => "a"))`, /./);
   refused(`${prefix}def n : Nat := use (apply (fun (x : Nat) => y))`, /./);
-  refused(`${prefix}def n : Nat := use (apply (apply (fun (x : Nat) => x)))`, typeError);
+  refused(`${prefix}def n : Nat := use (apply (apply (fun (x : Text) => 0)))`, typeError);
 });
 
 test('the inline bound argument example compiles', async () => {

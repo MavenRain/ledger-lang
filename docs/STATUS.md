@@ -116,10 +116,14 @@ not complete the M0 milestone in `SPEC.md`.
   partial application against the parameter type. The closure keeps the
   scope of the partial application.
 
+- Nested bound partial applications. A bound function argument can itself
+  be a partial application, including in structure forms and folds. Each
+  nested closure keeps the scope of the outer partial application.
+
 ## Remaining M0 work
 
 1. Add dependent function types. Extend
-   partial application to type parameters and nested function expressions.
+   partial application to type parameters and support computed function expressions.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types.
@@ -152,8 +156,8 @@ not complete the M0 milestone in `SPEC.md`.
 - A function argument is a name, optionally grouped, or a parenthesized
   partial application binding leading parameters. The remaining signature
   must match the expected type. A bound function argument is a name,
-  optionally grouped, or a parenthesized inline function. It cannot be a
-  partial application. Partial applications of
+  optionally grouped, a parenthesized inline function, or a nested partial
+  application. Partial applications of
   functions with type parameters are unsupported.
   A function of type `WritePath`
   is a function of the program. The compiler does not supply the write

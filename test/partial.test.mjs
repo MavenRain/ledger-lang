@@ -66,6 +66,7 @@ test('partial applications of function parameters preserve their captured scope'
 });
 
 test('a bound function parameter may itself hold a partial application', () => {
+  assert.equal(last(`${prefix}def result : Nat := apply (apply (pick 42)) 7`), 42);
   assert.equal(last(prefix +
     'def forward : (g : Rule) -> Nat := fun (g : Rule) => apply (apply g) 7 ' +
     'def result : Nat := forward (pick 42)'), 42);
@@ -79,7 +80,7 @@ test('structure forms apply partial functions through named parameters', () => {
 
 test('partial arguments retain signature and prefix type checks', () => {
   for (const argument of ['(pick "bad")', '(pick)', '(pick 1 2)', '(id 1)', '(pick 1',
-    '(apply (pick 42))']) {
+    '(apply (pick "bad"))']) {
     const source = `${prefix}def result : Nat := apply ${argument} 7`;
     assert.ok(run(source).error, argument);
   }
