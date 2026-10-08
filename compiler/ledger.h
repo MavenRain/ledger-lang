@@ -261,6 +261,9 @@ Text eQueryIndex(void);
 Text kRefKind(void);
 Text kRefHash(void);
 Text kSchemaTag(void);
+Text eIndex(void);
+Text eLaterType(void);
+Text opsTextWritePath(void);
 
 /* A parameter of a function type. A list of parameters; NULL is the end. */
 typedef struct {
@@ -273,6 +276,36 @@ struct Params {
   Param head;
   const Params *tail;
 };
+
+/* A name of the environment. BIND_VALUE keeps type and value. BIND_TYPE
+   keeps the universe in type and the type it stands for in defined.
+   BIND_ARROW keeps params and the result in type. BIND_FUN keeps params,
+   the result in type and the checked body. BIND_CLOSURE also keeps the
+   scope of its function argument. A list of bindings (also a Scope); NULL
+   is the end, and the head is the latest binding. */
+typedef enum { BIND_VALUE, BIND_TYPE, BIND_ARROW, BIND_FUN, BIND_CLOSURE } BindingKind;
+
+typedef struct Bindings Bindings;
+
+typedef struct {
+  BindingKind kind;
+  Text name;
+  const LType *type;
+  const Value *value;
+  const LType *defined;
+  const Params *params;
+  Tokens body;
+  const Bindings *scope;
+} Binding;
+
+struct Bindings {
+  Binding head;
+  const Bindings *tail;
+};
+
+/* runtime.c: lookup returns 1 and writes the first binding of the name, or
+   returns 0 for none. */
+int lookup(Text name, const Bindings *environment, const Binding **found);
 
 /* types.c: constructor_plan returns 1 and writes the plan, or returns 0
    for none. */
@@ -314,6 +347,25 @@ int build_field(const Values *args, const Value **value, Failure *failure);
 int apply_plan(Nat mode, Text label, const Values *args, const Value **value, Failure *failure);
 int record_fields(const Texts *fields, const Values *values, const Attrs **attrs, Failure *failure);
 int evaluate_plan(const Plan *selected, const Values *values, const Value **value, Failure *failure);
+
+/* parser.c: a Parsed answer is int 1 with the value and the rest tokens
+   written, or 0 with the failure written. expect_mark and close_parsed keep
+   no value (the caller keeps its own). kind_binding returns 1 and writes the
+   kind, or returns 0 for none. */
+int expect_mark(Nat mark, Tokens tokens, Tokens *rest, Failure *failure);
+int close_parsed(Tokens tokens, Tokens *rest, Failure *failure);
+Nat type_former(Text name);
+int kind_binding(const Binding *item, Text *kind);
+int parse_kind_index(Fuel fuel, const Bindings *environment, Tokens tokens, Text *kind, Tokens *rest,
+                     Failure *failure);
+int named_type(Nat position, Text name, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
+               Failure *failure);
+int data_type(Nat position, const LType *argument, const LType *result, Tokens tokens, const LType **type,
+              Tokens *rest, Failure *failure);
+int data_types(Nat at, const LType *a, Nat bt, const LType *b, const LType *result, Tokens tokens, const LType **type,
+               Tokens *rest, Failure *failure);
+int parse_type(Fuel fuel, Nat atom, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
+               Failure *failure);
 
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */

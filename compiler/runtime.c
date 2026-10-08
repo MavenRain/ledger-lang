@@ -277,3 +277,16 @@ Text eQueryIndex(void) { return text_of_cstring("this constructor gives a Query 
 Text kRefKind(void) { return text_of_cstring("kind"); }
 Text kRefHash(void) { return text_of_cstring("hash"); }
 Text kSchemaTag(void) { return text_of_cstring("tag"); }
+Text eIndex(void) { return text_of_cstring("expected Kind index"); }
+Text eLaterType(void) { return text_of_cstring("this type belongs to a later milestone"); }
+Text opsTextWritePath(void) { return text_of_cstring("WritePath"); }
+
+int lookup(Text name, const Bindings *environment, const Binding **found) {
+  for (; environment != NULL; environment = environment->tail) {
+    if (same_text(name, environment->head.name) == 1) {
+      *found = &environment->head;
+      return 1;
+    }
+  }
+  return 0;
+}
