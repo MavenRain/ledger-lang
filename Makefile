@@ -22,8 +22,12 @@ c-check:
 	@rm -f build/c-check.o
 	@echo 'c check passed'
 
-# The C port currently provides modules, not a complete compiler executable.
-c-build: $(C_OBJECTS)
+# c-build compiles each module and links the compiler executable build/ledgerc.
+c-build: $(C_OBJECTS) build/ledgerc
+
+build/ledgerc: $(C_SOURCES) $(C_HEADERS) $(C_SCHEMA) $(C_OPS)
+	@mkdir -p build
+	$(TCC) -Wall -Werror -o $@ $(C_SOURCES) -lpthread
 
 build/c/schema.o: $(C_SCHEMA)
 build/c/operations.o: $(C_OPS)
