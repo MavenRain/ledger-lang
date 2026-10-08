@@ -530,6 +530,56 @@ const Value *algebra_input(const Value *value, const Values *results);
 const LType *value_layer(const LType *seed);
 Nat unfold_value_fits(Stepper op);
 
+/* checker.c (S5a2: checker.mech lines 1013..1363). A Grown keeps the values
+   that an unfold into Value built and the number of applications that
+   remain. A Worked answer is int 1 with the value, the rest tokens and the
+   remaining budget written, or 0 with the failure written; check_worked
+   takes the worked term (the caller passes an error on). inline_binder and
+   inline_binders follow parser.c. param_level and body_level give Option
+   (Option Nat): the int is the outer some, found the inner some, and index
+   the level. The other int functions return 1 and write the answer, or 0
+   for none. */
+typedef struct {
+  const Values *items;
+  Nat limit;
+} Grown;
+
+const LType *inline_result(Nat mode, const LType *expected, const Params *params);
+int inline_binder(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, Param *binder,
+                  Tokens *rest, Failure *failure);
+int inline_binders(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, const Params **binders,
+                   Tokens *body, Failure *failure);
+Nat layer_index(const Value *layer);
+const Value *layer_payload(const Value *layer);
+const Values *grown_items(Grown built);
+Nat grown_limit(Grown built);
+const Value *grown_head(Grown built);
+Grown grown_leaf(const Value *value, Nat limit);
+int lift_parsed(Nat budget, int parsed, Nat *left);
+int check_worked(Nat position, const LType *expected, Typed found, Tokens tokens, Nat budget, const Value **value,
+                 Tokens *rest, Nat *left, Failure *failure);
+Binding body_marker(Nat count);
+Tokens skip_atom(Nat depth, Tokens tokens);
+int param_level(Text name, Nat count, const Bindings *environment, Nat *found, Nat *index);
+int body_level(Text name, const Bindings *environment, Nat *found, Nat *index);
+Nat proof_in_scope(Text name, const LType *ty, const Bindings *environment);
+int printed_side(Fuel fuel, const Value *value, Val *side);
+int argument_text(Fuel fuel, const Bindings *environment, const Value *value, Tokens tokens, Val *side);
+int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Params *params, const Values *values,
+                  Tokens tokens, Val *side);
+int argument_token(Nat index, const Params *params, Tokens tokens, Token *token);
+int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
+                   Tokens term, Tokens *renamed);
+Nat kept_side(Val side);
+int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
+                     Val side, Val *result);
+int instantiate_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                       Tokens tokens, const LType *result, const LType **instantiated);
+const Params *instantiate_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                                 Tokens tokens, const Params *remaining);
+const Bindings *argument_bindings(Nat index, const Params *params, const Values *values,
+                                  const Bindings *environment);
+
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
 int compile_program(Text source, Text *output, Failure *failure);

@@ -981,3 +981,303 @@ Nat unfold_value_fits(Stepper op) {
              ? same_type(stepper_result(op), value_layer(unfold_seed(op)))
              : 0;
 }
+
+/* S5a2 ports checker.mech lines 1013..1363: the binders of an inline
+   function, the layers of an unfold into Value, Grown, Worked, the
+   parameter levels of a body check and the instantiation of a dependent
+   result. Only inline_binders checks fuel; the other fuel arguments go to
+   parse_type or print_value unchanged. */
+
+const LType *inline_result(Nat mode, const LType *expected, const Params *params) {
+  if (mode == 0) return expected;
+  if (mode == 1)
+    return type_one(TY_OPTION, same_type(expected, &nat_type)
+                                   ? param_seed(params)
+                                   : type_two(TY_PROD, shape_element(expected), param_seed(params)));
+  return value_layer(param_seed(params));
+}
+
+int inline_binder(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, Param *binder,
+                  Tokens *rest, Failure *failure) {
+  Tokens after_open;
+  if (!expect_mark(40, tokens, &after_open, failure)) return fail_at(failure, failure->position, eFun);
+  if (after_open.size == 0) return fail_at(failure, first_position(tokens), eFun);
+  Token head = after_open.items[0];
+  Tokens after_name = {after_open.items + 1, after_open.size - 1};
+  if (head.kind != TOKEN_IDENTIFIER) return fail_at(failure, head.position, eFun);
+  if (reserved_name(head.text) == 1) return fail_at(failure, head.position, eReserved);
+  const Binding *previous;
+  if (lookup(head.text, seen, &previous)) return fail_at(failure, head.position, eDuplicate);
+  Tokens after_colon;
+  if (!expect_mark(58, after_name, &after_colon, failure)) return fail_at(failure, failure->position, eFun);
+  const LType *ty;
+  Tokens after_type;
+  if (!parse_type(fuel, 0, environment, after_colon, &ty, &after_type, failure)) return 0;
+  if (type_level(ty) != 0) return fail_at(failure, first_position(after_colon), eData);
+  if (!expect_mark(41, after_type, rest, failure)) return fail_at(failure, failure->position, eFun);
+  *binder = (Param){head.text, ty};
+  return 1;
+}
+
+/* Each binder takes one unit of fuel (fuelMore), and the binder itself
+   parses its type with the fuel that remains. */
+int inline_binders(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, const Params **binders,
+                   Tokens *body, Failure *failure) {
+  const Params *done = NULL;
+  for (;;) {
+    if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+    Fuel more = fuel - 1;
+    Param binder;
+    Tokens after_binder;
+    if (!inline_binder(more, environment, seen, tokens, &binder, &after_binder, failure)) return 0;
+    done = params_item(binder, done);
+    Failure ignored;
+    if (expect_mark(63, after_binder, body, &ignored)) {
+      *binders = reverse_params_onto(NULL, done);
+      return 1;
+    }
+    environment = bind_params(params_item(binder, NULL), NULL, environment);
+    seen = bindings_item(value_binding(binder.name, binder.type, &null_value), seen);
+    tokens = after_binder;
+    fuel = more;
+  }
+}
+
+Nat layer_index(const Value *layer) {
+  if (is_null(layer)) return 0;
+  if (sum_left(layer)) return 1;
+  const Value *second = project_value(1, layer);
+  if (sum_left(second)) return 2;
+  const Value *third = project_value(1, second);
+  if (sum_left(third)) return 3;
+  return sum_left(project_value(1, third)) ? 4 : 5;
+}
+
+const Value *layer_payload(const Value *layer) {
+  Nat index = layer_index(layer);
+  const Value *second = project_value(1, layer);
+  if (index == 1) return second;
+  const Value *third = project_value(1, second);
+  if (index == 2) return third;
+  const Value *fourth = project_value(1, third);
+  if (index == 3) return fourth;
+  return project_value(1, fourth);
+}
+
+const Values *grown_items(Grown built) { return built.items; }
+
+Nat grown_limit(Grown built) { return built.limit; }
+
+const Value *grown_head(Grown built) { return built.items == NULL ? &null_value : built.items->head; }
+
+Grown grown_leaf(const Value *value, Nat limit) { return (Grown){values_item(value, NULL), limit}; }
+
+int lift_parsed(Nat budget, int parsed, Nat *left) {
+  if (parsed) *left = budget;
+  return parsed;
+}
+
+int check_worked(Nat position, const LType *expected, Typed found, Tokens tokens, Nat budget, const Value **value,
+                 Tokens *rest, Nat *left, Failure *failure) {
+  return lift_parsed(budget, check_synthesized(position, expected, found, tokens, value, rest, failure), left);
+}
+
+Binding body_marker(Nat count) { return value_binding(text_end(), &nat_type, nat_value(count)); }
+
+/* A punctuation other than ( or ) does not end an atom at depth 0. */
+Tokens skip_atom(Nat depth, Tokens tokens) {
+  for (; tokens.size > 0; tokens = (Tokens){tokens.items + 1, tokens.size - 1}) {
+    Token head = tokens.items[0];
+    Tokens tail = {tokens.items + 1, tokens.size - 1};
+    if (head.kind != TOKEN_PUNCTUATION) {
+      if (depth == 0) return tail;
+      continue;
+    }
+    if (head.number == 40) {
+      depth = depth + 1;
+      continue;
+    }
+    if (head.number == 41 && depth == 1) return tail;
+    if (head.number == 41) depth = depth == 0 ? 0 : depth - 1;
+  }
+  return tokens;
+}
+
+/* Option (Option Nat): the int is the outer some, found the inner some. */
+int param_level(Text name, Nat count, const Bindings *environment, Nat *found, Nat *index) {
+  for (; environment != NULL && count != 0; environment = environment->tail, count = count - 1) {
+    if (same_text(name, environment->head.name) == 1) {
+      *found = 1;
+      *index = count - 1;
+      return 1;
+    }
+  }
+  *found = 0;
+  return 1;
+}
+
+int body_level(Text name, const Bindings *environment, Nat *found, Nat *index) {
+  if (environment == NULL || environment->head.kind != BIND_VALUE) return 0;
+  Nat total;
+  if (!as_nat(environment->head.value, &total)) return 0;
+  if (same_text(environment->head.name, text_end()) != 1) return 0;
+  return param_level(name, total, environment->tail, found, index);
+}
+
+Nat proof_in_scope(Text name, const LType *ty, const Bindings *environment) {
+  if (dependent_result(ty) != 1) return 1;
+  Nat found = 0;
+  Nat index = 0;
+  return body_level(name, environment, &found, &index) && found == 1 ? 1 : 0;
+}
+
+int printed_side(Fuel fuel, const Value *value, Val *side) {
+  Printer printer = {fuel, {0}};
+  Failure ignored;
+  if (!print_value(&printer, value, &ignored)) return 0;
+  *side = (Val){.kind = VAL_CLOSED, .text = builder_text(&printer.output)};
+  return 1;
+}
+
+int argument_text(Fuel fuel, const Bindings *environment, const Value *value, Tokens tokens, Val *side) {
+  if (checking_body(environment) != 1) return printed_side(fuel, value, side);
+  if (tokens.size == 0) return 0;
+  Token head = tokens.items[0];
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+  case TOKEN_STRING: return printed_side(fuel, value, side);
+  case TOKEN_PUNCTUATION: return 0;
+  case TOKEN_IDENTIFIER: {
+    Nat found = 0;
+    Nat index = 0;
+    if (!body_level(head.text, environment, &found, &index)) return 0;
+    if (found == 0) return printed_side(fuel, value, side);
+    *side = (Val){.kind = VAL_VAR, .index = index};
+    return 1;
+  }
+  }
+  return 0;
+}
+
+int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Params *params, const Values *values,
+                  Tokens tokens, Val *side) {
+  for (; params != NULL; params = params->tail, index = index - 1) {
+    if (is_type_param(params->head) == 1) {
+      if (index == 0) return 0;
+      continue;
+    }
+    if (index == 0) return argument_text(fuel, environment, argument_head(values), tokens, side);
+    values = argument_tail(values);
+    tokens = skip_atom(0, tokens);
+  }
+  return 0;
+}
+
+int argument_token(Nat index, const Params *params, Tokens tokens, Token *token) {
+  for (; params != NULL; params = params->tail, index = index - 1) {
+    if (is_type_param(params->head) == 1) {
+      if (index == 0) return 0;
+      continue;
+    }
+    if (index == 0) {
+      if (tokens.size == 0) return 0;
+      *token = tokens.items[0];
+      return 1;
+    }
+    tokens = skip_atom(0, tokens);
+  }
+  return 0;
+}
+
+/* The mech recursion renames the tail first, but a none anywhere gives
+   none and nothing else depends on the order, so the loop goes forward. */
+int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
+                   Tokens term, Tokens *renamed) {
+  Token *items = arena_alloc(sizeof(Token) * (term.size + 1));
+  for (Nat at = 0; at < term.size; at++) {
+    Token head = term.items[at];
+    Nat index = 0;
+    items[at] = head;
+    if (head.kind != TOKEN_IDENTIFIER || !marker_index(head.text, &index)) continue;
+    Val side;
+    if (!argument_side(fuel, index, environment, params, values, tokens, &side)) return 0;
+    if (side.kind == VAL_TERM) return 0;
+    if (side.kind == VAL_VAR) {
+      items[at] = (Token){TOKEN_IDENTIFIER, head.position, 0, marker_name(side.index)};
+      continue;
+    }
+    if (!argument_token(index, params, tokens, &items[at])) return 0;
+  }
+  *renamed = (Tokens){items, term.size};
+  return 1;
+}
+
+Nat kept_side(Val side) {
+  switch (side.kind) {
+  case VAL_CLOSED:
+  case VAL_VAR: return 1;
+  case VAL_TERM: return has_marker(side.term);
+  }
+  return 0;
+}
+
+int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
+                     Val side, Val *result) {
+  switch (side.kind) {
+  case VAL_CLOSED: *result = side; return 1;
+  case VAL_VAR: return argument_side(fuel, side.index, environment, params, values, tokens, result);
+  case VAL_TERM: {
+    if (checking_body(environment) != 1) {
+      *result = side;
+      return 1;
+    }
+    Tokens renamed;
+    if (!rename_markers(fuel, environment, params, values, tokens, side.term, &renamed)) return 0;
+    *result = (Val){.kind = VAL_TERM, .term = renamed};
+    return 1;
+  }
+  }
+  return 0;
+}
+
+int instantiate_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                       Tokens tokens, const LType *result, const LType **instantiated) {
+  const LType *a;
+  Val lhs;
+  Val rhs;
+  if (!sides_of(result, &a, &lhs, &rhs)) {
+    *instantiated = result;
+    return 1;
+  }
+  Val x;
+  Val y;
+  if (!instantiate_side(fuel, environment, params, values, tokens, lhs, &x)) return 0;
+  if (!instantiate_side(fuel, environment, params, values, tokens, rhs, &y)) return 0;
+  *instantiated = eq_type(a, x, y);
+  return 1;
+}
+
+const Params *instantiate_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                                 Tokens tokens, const Params *remaining) {
+  const Params *done = NULL;
+  for (; remaining != NULL; remaining = remaining->tail) {
+    Param head = remaining->head;
+    const LType *found;
+    done = params_item(instantiate_result(fuel, environment, params, values, tokens, head.type, &found)
+                           ? (Param){head.name, found}
+                           : head,
+                       done);
+  }
+  return reverse_params_onto(NULL, done);
+}
+
+const Bindings *argument_bindings(Nat index, const Params *params, const Values *values,
+                                  const Bindings *environment) {
+  const Bindings *done = NULL;
+  for (; params != NULL; params = params->tail, index = index + 1) {
+    if (is_type_param(params->head) == 1) continue;
+    done = bindings_item(value_binding(marker_name(index), params->head.type, argument_head(values)), done);
+    values = argument_tail(values);
+  }
+  return reverse_bindings_onto(environment, done);
+}
