@@ -262,3 +262,15 @@ Nat has_field(Text key, const Attrs *attrs) {
   }
   return 0;
 }
+
+Text text_of_cstring(const char *bytes) {
+  return text_of_bytes((const unsigned char *)bytes, strlen(bytes));
+}
+
+/* Texts of schema.mech and operations.mech (see ledger.h). */
+Text sHash(void) { return text_of_cstring("Hash"); }
+Text sRef(void) { return text_of_cstring("Ref"); }
+Text sHashOf(void) { return text_of_cstring("hashOf"); }
+Text sRefTo(void) { return text_of_cstring("refTo"); }
+Text opsTextQuery(void) { return text_of_cstring("Query"); }
+Text eQueryIndex(void) { return text_of_cstring("this constructor gives a Query of another answer type"); }

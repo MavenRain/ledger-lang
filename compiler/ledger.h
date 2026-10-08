@@ -49,6 +49,7 @@ Nat nat_sub(Nat a, Nat b);
 
 Text text_end(void);
 Text text_of_bytes(const unsigned char *bytes, size_t size);
+Text text_of_cstring(const char *bytes);
 Text text_one(Nat item);
 Text text_byte(Nat item, Text rest);
 Nat text_is_end(Text text);
@@ -247,6 +248,48 @@ int ops_query_answer(Text name, const LType **type);
 int ops_type(Text name, const LType **type);
 Nat ops_later_type(Text name);
 Nat ops_reserved_name(Text name);
+
+/* Texts of schema.mech and operations.mech. literals.h keeps the texts of
+   literals.mech as constants. Each other text is a function with the mech
+   name that returns text_of_cstring of its bytes (runtime.c). */
+Text sHash(void);
+Text sRef(void);
+Text sHashOf(void);
+Text sRefTo(void);
+Text opsTextQuery(void);
+Text eQueryIndex(void);
+
+/* A parameter of a function type. A list of parameters; NULL is the end. */
+typedef struct {
+  Text name;
+  const LType *type;
+} Param;
+
+typedef struct Params Params;
+struct Params {
+  Param head;
+  const Params *tail;
+};
+
+/* types.c: constructor_plan returns 1 and writes the plan, or returns 0
+   for none. */
+Nat encodes_null(const LType *ty);
+Nat has_arguments(const LTypes *types);
+const LTypes *plan_arguments(const Plan *selected);
+Text type_name(const LType *ty);
+Nat type_level(const LType *ty);
+Nat same_type(const LType *a, const LType *b);
+int constructor_plan(const LType *ty, Text name, Plan *plan);
+Nat is_query_type(const LType *ty);
+const Params *arrow_params(const LType *ty);
+const LType *arrow_result(const LType *ty);
+Nat is_arrow_type(const LType *ty);
+const LType *arrow_type(const Params *params, const LType *result);
+Nat is_term_type(const LType *ty);
+Text unknown_name(const LType *expected, Text name);
+Nat primitive_reserved_name(Text name);
+Nat form_reserved_name(Text name);
+Nat reserved_name(Text name);
 
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
