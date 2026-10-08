@@ -580,6 +580,88 @@ const Params *instantiate_params(Fuel fuel, const Bindings *environment, const P
 const Bindings *argument_bindings(Nat index, const Params *params, const Values *values,
                                   const Bindings *environment);
 
+/* checker.c (S5b: checker.mech lines 1364..2313, the mutual group of
+   synth_term). A Worked answer follows S5a2: int 1 with the answer, the rest
+   tokens and the remaining budget written, or 0 with the failure written. A
+   List Value and a Values are both a Values list. close_side,
+   close_body_side and close_result return 1 and write the answer, or return
+   0 for none; close_result takes its Option argument as resolved (0 = none)
+   and result. */
+int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tokens tokens, Typed *typed, Tokens *rest,
+               Nat *left, Failure *failure);
+int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bindings *environment, Tokens tokens,
+               const Value **value, Tokens *rest, Nat *left, Failure *failure);
+int partial_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
+                     const Params *params, const LType *result, const Bindings *environment, Tokens tokens,
+                     const Value **value, Tokens *rest, Nat *left, Failure *failure);
+int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
+                    const Params *params, const Params *formal, const LType *result, const Bindings *environment,
+                    Tokens tokens, Tokens after_types, const Value **value, Tokens *rest, Nat *left, Failure *failure);
+int inline_argument(Fuel fuel, Nat budget, Nat position, const LType *expected, const Bindings *environment,
+                    Tokens tokens, const Value **value, Tokens *rest, Nat *left, Failure *failure);
+int parse_arguments(Fuel fuel, Nat budget, Nat atom, const LTypes *types, const Bindings *environment, Tokens tokens,
+                    const Values **values, Tokens *rest, Nat *left, Failure *failure);
+int dependent_arguments(Fuel fuel, Nat budget, const Bindings *chosen, const Bindings *environment,
+                        const Params *params, const Params *remaining, const Values *seen, Tokens start,
+                        Tokens tokens, const Values **values, Tokens *rest, Nat *left, Failure *failure);
+int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *closed);
+int close_body_side(Fuel fuel, const Bindings *environment, const LType *a, Val side, Val *closed);
+int close_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, int resolved,
+                 const LType *result, const LType **closed);
+const Params *close_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                           const Params *remaining);
+int unary_term(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, Tokens tokens, Unary *op,
+               Tokens *rest, Nat *left, Failure *failure);
+int partial_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, Tokens tokens, Unary *op,
+                  Tokens *rest, Nat *left, Failure *failure);
+int inline_unary(Fuel fuel, Nat budget, Nat position, const LType *wanted, const Bindings *environment, Tokens tokens,
+                 Unary *op, Tokens *rest, Nat *left, Failure *failure);
+int bound_unary(Fuel fuel, Nat budget, Nat position, Text name, const Params *params, const LType *result,
+                const Bindings *environment, Tokens tokens, Unary *op, Tokens *rest, Nat *left, Failure *failure);
+int stepper_term(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment, Tokens tokens,
+                 Stepper *op, Tokens *rest, Nat *left, Failure *failure);
+int partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                    Tokens tokens, Stepper *op, Tokens *rest, Nat *left, Failure *failure);
+int inline_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                   Tokens tokens, Stepper *op, Tokens *rest, Nat *left, Failure *failure);
+int bound_stepper(Fuel fuel, Nat budget, Nat position, Text name, const Params *params, const LType *result,
+                  const Bindings *environment, Tokens tokens, Stepper *op, Tokens *rest, Nat *left, Failure *failure);
+int bound_arguments(Fuel fuel, Nat budget, const Params *params, const Bindings *environment, Tokens tokens,
+                    const Values **values, Tokens *rest, Nat *left, Failure *failure);
+int structure_term(Fuel fuel, Nat budget, Nat position, Nat form, Nat atom, const LType *expected,
+                   const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest, Nat *left,
+                   Failure *failure);
+int map_items(Fuel fuel, Nat budget, Nat position, Nat form, Unary op, const Values *items, const Values **mapped,
+              Tokens *rest, Nat *left, Failure *failure);
+int either_term(Fuel fuel, Nat budget, Nat position, const Bindings *environment, Tokens tokens, Typed *typed,
+                Tokens *rest, Nat *left, Failure *failure);
+int fold_term(Fuel fuel, Nat budget, Nat position, Nat atom, const LType *expected, const Bindings *environment,
+              Tokens tokens, const Value **value, Tokens *rest, Nat *left, Failure *failure);
+int fold_items(Fuel fuel, Nat budget, Nat position, Stepper op, Nat code, const Values *items, const Value *start,
+               const Value **folded, Tokens *rest, Nat *left, Failure *failure);
+int unfold_term(Fuel fuel, Nat budget, Nat position, Nat atom, const LType *expected, const Bindings *environment,
+                Tokens tokens, const Value **value, Tokens *rest, Nat *left, Failure *failure);
+int unfold_items(Fuel fuel, Nat budget, Nat position, Stepper op, Nat code, Nat limit, const Value *seed,
+                 const Values **values, Tokens *rest, Nat *left, Failure *failure);
+int algebra_term(Fuel fuel, Nat budget, Nat index, const LType *result, const Bindings *environment, Tokens tokens,
+                 Stepper *op, Tokens *rest, Nat *left, Failure *failure);
+int algebra_terms(Fuel fuel, Nat budget, const LType *result, Stepper on_nat, const Bindings *environment,
+                  Tokens tokens, ValueAlgebra *ops, Tokens *rest, Nat *left, Failure *failure);
+Nat second_function(Fuel fuel, Nat budget, const LType *result, const Bindings *environment, Tokens tokens);
+int fold_value_term(Fuel fuel, Nat budget, Nat position, Nat function_position, const LType *expected,
+                    Stepper on_nat, const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest,
+                    Nat *left, Failure *failure);
+int fold_value(Fuel fuel, Nat budget, Nat position, ValueAlgebra ops, const Value *start, const Value *value,
+               const Value **folded, Tokens *rest, Nat *left, Failure *failure);
+int fold_children(Fuel fuel, Nat budget, Nat position, ValueAlgebra ops, const Value *start, Nat keyed,
+                  const Values *elements, const Values **folded, Tokens *rest, Nat *left, Failure *failure);
+int unfold_value_term(Fuel fuel, Nat budget, Nat position, const Bindings *environment, Tokens tokens,
+                      const Value **value, Tokens *rest, Nat *left, Failure *failure);
+int unfold_node(Fuel fuel, Nat budget, Nat position, Stepper op, Nat limit, const Value *seed, Grown *grown,
+                Tokens *rest, Nat *left, Failure *failure);
+int unfold_seeds(Fuel fuel, Nat budget, Nat position, Stepper op, Nat keyed, Nat limit, const Values *seeds,
+                 Grown *grown, Tokens *rest, Nat *left, Failure *failure);
+
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
 int compile_program(Text source, Text *output, Failure *failure);

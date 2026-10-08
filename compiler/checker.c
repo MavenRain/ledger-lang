@@ -1281,3 +1281,1135 @@ const Bindings *argument_bindings(Nat index, const Params *params, const Values 
   }
   return reverse_bindings_onto(environment, done);
 }
+
+/* S5b1: checker.mech lines 1364..1869 (synthTerm to partialStepper), the
+   first half of the mutual group. A def that matches on Fuel fails (or
+   gives none) at fuel 0 and passes fuel - 1 on. */
+static int worked_typed(Typed found, Tokens after, Nat budget, Typed *typed, Tokens *rest, Nat *left) {
+  *typed = found;
+  *rest = after;
+  *left = budget;
+  return 1;
+}
+
+static int worked_value(const Value *found, Tokens after, Nat budget, const Value **value, Tokens *rest, Nat *left) {
+  *value = found;
+  *rest = after;
+  *left = budget;
+  return 1;
+}
+
+/* takeCount (dropCount rest body) body: the body tokens before rest. */
+static Tokens taken_tokens(Tokens body, Tokens rest) { return (Tokens){body.items, nat_sub(body.size, rest.size)}; }
+
+int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tokens tokens, Typed *typed, Tokens *rest,
+               Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  if (tokens.size == 0) return fail_at(failure, 0, eInfer);
+  Token head = tokens.items[0];
+  Tokens tail = {tokens.items + 1, tokens.size - 1};
+  Typed found;
+  Tokens after;
+  Nat spent;
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+  case TOKEN_STRING: return fail_at(failure, head.position, eInfer);
+  case TOKEN_PUNCTUATION:
+    if (head.number != 40) return fail_at(failure, head.position, eInfer);
+    if (!synth_term(more, budget, 0, environment, tail, &found, &after, &spent, failure)) return 0;
+    *typed = found;
+    return lift_parsed(spent, close_parsed(after, rest, failure), left);
+  case TOKEN_IDENTIFIER: {
+    const Binding *item;
+    if (lookup(head.text, environment, &item)) {
+      switch (item->kind) {
+      case BIND_VALUE:
+        if (proof_in_scope(item->name, item->type, environment))
+          return worked_typed((Typed){item->type, item->value}, tail, budget, typed, rest, left);
+        return fail_at(failure, head.position, eTerm);
+      case BIND_TYPE:
+      case BIND_ARROW: return fail_at(failure, head.position, eInfer);
+      case BIND_FUN: {
+        if (atom == 1) return fail_at(failure, head.position, eParen);
+        const Bindings *chosen;
+        Tokens after_types;
+        if (!type_arguments(more, item->params, environment, NULL, tail, &chosen, &after_types, failure)) return 0;
+        const Values *values;
+        if (!dependent_arguments(more, budget, chosen, environment, item->params, item->params, NULL, after_types,
+                                 after_types, &values, &after, &spent, failure))
+          return 0;
+        const LType *instantiated = NULL;
+        int resolved = instantiate_result(more, environment, item->params, values, after_types,
+                                          subst_type(chosen, item->type), &instantiated);
+        const LType *applied;
+        if (!close_result(more, environment, item->params, values, resolved, instantiated, &applied))
+          return fail_at(failure, head.position, eTerm);
+        if (checking_body(environment) == 1)
+          return worked_typed((Typed){applied, &null_value}, after, spent, typed, rest, left);
+        const Params *closed =
+            close_params(more, environment, item->params, values,
+                         instantiate_params(more, environment, item->params, values, after_types, item->params));
+        const Bindings *scope = bind_arguments(environment, value_params(chosen, closed), values,
+                                               reverse_bindings_onto(definition_scope(item->name, environment), chosen));
+        const Value *value;
+        Tokens ignored;
+        Nat used;
+        if (!parse_term(more, nat_sub(spent, 1), 0, applied, scope, item->body, &value, &ignored, &used, failure))
+          return 0;
+        return worked_typed((Typed){applied, value}, after, used, typed, rest, left);
+      }
+      case BIND_CLOSURE: {
+        if (dependent_result(item->type) == 1 || dependent_params(item->params) == 1)
+          return fail_at(failure, head.position, eTerm);
+        if (atom == 1) return fail_at(failure, head.position, eParen);
+        const Values *values;
+        if (!parse_arguments(more, budget, 1, param_types(item->params), environment, tail, &values, &after, &spent,
+                             failure))
+          return 0;
+        if (checking_body(environment) == 1)
+          return worked_typed((Typed){item->type, &null_value}, after, spent, typed, rest, left);
+        const Value *value;
+        Tokens ignored;
+        Nat used;
+        if (!parse_term(more, nat_sub(spent, 1), 0, item->type,
+                        bind_arguments(environment, item->params, values, item->scope), item->body, &value, &ignored,
+                        &used, failure))
+          return 0;
+        return worked_typed((Typed){item->type, value}, after, used, typed, rest, left);
+      }
+      }
+      return 0;
+    }
+    Nat form = synth_form(head.text);
+    if (form == 0) return fail_at(failure, head.position, eInfer);
+    if (atom == 1) return fail_at(failure, head.position, eParen);
+    if (form == 5) return either_term(more, budget, head.position, environment, tail, typed, rest, left, failure);
+    if (!synth_term(more, budget, 1, environment, tail, &found, &after, &spent, failure)) return 0;
+    if (form < 3) return lift_parsed(spent, project(head.position, form, found, after, typed, rest, failure), left);
+    if (form == 3) return lift_parsed(spent, symm_proof(head.position, found, after, typed, rest, failure), left);
+    Typed other;
+    Tokens later;
+    Nat used;
+    if (!synth_term(more, spent, 1, environment, after, &other, &later, &used, failure)) return 0;
+    return lift_parsed(used, trans_proof(head.position, found, other, later, typed, rest, failure), left);
+  }
+  }
+  return 0;
+}
+
+/* checkWorked position expected (synthTerm fuel budget atom environment tokens). */
+static int checked_synth(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected,
+                         const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest, Nat *left,
+                         Failure *failure) {
+  Typed found;
+  Tokens after;
+  Nat spent;
+  if (!synth_term(fuel, budget, atom, environment, tokens, &found, &after, &spent, failure)) return 0;
+  return check_worked(position, expected, found, after, spent, value, rest, left, failure);
+}
+
+int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bindings *environment, Tokens tokens,
+               const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  if (budget == 0) return fail_at(failure, first_position(tokens), eBudget);
+  if (tokens.size == 0) return fail_at(failure, 0, eTerm);
+  Token head = tokens.items[0];
+  Tokens tail = {tokens.items + 1, tokens.size - 1};
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+    if (same_type(expected, &nat_type)) return worked_value(nat_value(head.number), tail, budget, value, rest, left);
+    return fail_at(failure, head.position, eTerm);
+  case TOKEN_STRING:
+    if (same_type(expected, &text_type)) return worked_value(text_value(head.text), tail, budget, value, rest, left);
+    return fail_at(failure, head.position, eTerm);
+  case TOKEN_PUNCTUATION: {
+    if (head.number != 40) return fail_at(failure, head.position, eTerm);
+    const Value *inside;
+    Tokens after;
+    Nat spent;
+    if (!parse_term(more, budget, 0, expected, environment, tail, &inside, &after, &spent, failure)) return 0;
+    *value = inside;
+    return lift_parsed(spent, close_parsed(after, rest, failure), left);
+  }
+  case TOKEN_IDENTIFIER: {
+    if (same_text(head.text, sfun) == 1 && is_arrow_type(expected) == 1) {
+      if (atom == 1) return fail_at(failure, head.position, eParen);
+      return inline_argument(more, budget, head.position, expected, environment, tail, value, rest, left, failure);
+    }
+    const Binding *item;
+    if (lookup(head.text, environment, &item)) {
+      switch (item->kind) {
+      case BIND_VALUE:
+        if (proof_in_scope(item->name, item->type, environment) && same_type(expected, item->type))
+          return worked_value(item->value, tail, budget, value, rest, left);
+        return fail_at(failure, head.position, eTerm);
+      case BIND_TYPE:
+      case BIND_ARROW: return fail_at(failure, head.position, eTerm);
+      case BIND_FUN:
+      case BIND_CLOSURE:
+        if (is_arrow_type(expected) == 1)
+          return partial_argument(more, budget, atom, head.position, expected, head.text, item->params, item->type,
+                                  environment, tail, value, rest, left, failure);
+        return checked_synth(more, budget, atom, head.position, expected, environment, tokens, value, rest, left,
+                             failure);
+      }
+      return 0;
+    }
+    Plan selected;
+    if (!constructor_plan(expected, head.text, &selected)) {
+      if (synth_form(head.text) != 0)
+        return checked_synth(more, budget, atom, head.position, expected, environment, tokens, value, rest, left,
+                             failure);
+      Nat form = structure_form(head.text);
+      if (form == 0) {
+        if (same_text(head.text, srefl))
+          return lift_parsed(budget, refl_check(head.position, expected, tail, value, rest, failure), left);
+        return fail_at(failure, head.position, unknown_name(expected, head.text));
+      }
+      if (form < 5)
+        return structure_term(more, budget, head.position, form, atom, expected, environment, tail, value, rest, left,
+                              failure);
+      if (form == 5)
+        return fold_term(more, budget, head.position, atom, expected, environment, tail, value, rest, left, failure);
+      return unfold_term(more, budget, head.position, atom, expected, environment, tail, value, rest, left, failure);
+    }
+    if (atom == 1 && has_arguments(plan_arguments(&selected)) == 1) return fail_at(failure, head.position, eParen);
+    const Values *values;
+    Tokens after;
+    Nat spent;
+    if (!parse_arguments(more, budget, 1, plan_arguments(&selected), environment, tail, &values, &after, &spent,
+                         failure))
+      return 0;
+    const Value *made;
+    Failure refused;
+    if (evaluate_plan(&selected, values, &made, &refused)) return worked_value(made, after, spent, value, rest, left);
+    if (checking_body(environment)) return worked_value(&null_value, after, spent, value, rest, left);
+    return fail_at(failure, head.position, refused.message);
+  }
+  }
+  return 0;
+}
+
+int partial_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
+                     const Params *params, const LType *result, const Bindings *environment, Tokens tokens,
+                     const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (same_type(expected, arrow_type(params, result)) == 1)
+    return worked_value(text_value(name), tokens, budget, value, rest, left);
+  if (dependent_result(result) == 1 || dependent_params(params) == 1) return fail_at(failure, position, eTerm);
+  if (has_type_param(params) != 1)
+    return prefix_argument(more, budget, atom, position, expected, name, params, params, result, environment, tokens,
+                           tokens, value, rest, left, failure);
+  if (atom == 1) return fail_at(failure, position, eTerm);
+  const Bindings *chosen;
+  Tokens after_types;
+  if (!type_arguments(more, params, environment, NULL, tokens, &chosen, &after_types, failure)) return 0;
+  return prefix_argument(more, budget, atom, position, expected, name, params, value_params(chosen, params),
+                         subst_type(chosen, result), environment, tokens, after_types, value, rest, left, failure);
+}
+
+int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
+                    const Params *params, const Params *formal, const LType *result, const Bindings *environment,
+                    Tokens tokens, Tokens after_types, const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  const Params *bound = bound_params(formal, arrow_params(expected));
+  if (same_type(expected, arrow_type(drop_params(params_length(bound), formal), result)) == 0)
+    return fail_at(failure, position, eTerm);
+  if (atom == 1) return fail_at(failure, position, eParen);
+  const Values *values;
+  Tokens after;
+  Nat spent;
+  if (!parse_arguments(more, budget, 1, param_types(bound), environment, after_types, &values, &after, &spent, failure))
+    return 0;
+  if (bound_functions(bound, values))
+    return worked_value(
+        make_value((Value){.kind = VALUE_ITEMS,
+                           .items = values_item(text_value(name), typed_bound(params, tokens, after_types, values))}),
+        after, spent, value, rest, left);
+  return fail_at(failure, position, eTerm);
+}
+
+int inline_argument(Fuel fuel, Nat budget, Nat position, const LType *expected, const Bindings *environment,
+                    Tokens tokens, const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  const Params *params;
+  Tokens body;
+  if (!inline_binders(more, environment, NULL, tokens, &params, &body, failure)) return 0;
+  if (same_type(expected, arrow_type(params, arrow_result(expected))) != 1) return fail_at(failure, position, eTerm);
+  const Value *checked;
+  Tokens after;
+  Nat spent;
+  if (!parse_term(more, budget, 0, arrow_result(expected),
+                  bind_params(params, NULL, bindings_item(check_marker(), environment)), body, &checked, &after,
+                  &spent, failure))
+    return 0;
+  return worked_value(inline_value(params, taken_tokens(body, after)), after, spent, value, rest, left);
+}
+
+/* Each step takes one unit of fuel, as each recursive call of the mech def. */
+int parse_arguments(Fuel fuel, Nat budget, Nat atom, const LTypes *types, const Bindings *environment, Tokens tokens,
+                    const Values **values, Tokens *rest, Nat *left, Failure *failure) {
+  const Values *done = NULL;
+  for (;; types = types->tail) {
+    if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+    fuel = fuel - 1;
+    if (types == NULL) {
+      *values = reverse_values_onto(NULL, done);
+      *rest = tokens;
+      *left = budget;
+      return 1;
+    }
+    const Value *value;
+    if (!parse_term(fuel, budget, atom, types->head, environment, tokens, &value, &tokens, &budget, failure)) return 0;
+    done = values_item(value, done);
+  }
+}
+
+/* seen holds the earlier argument values, the latest first. */
+int dependent_arguments(Fuel fuel, Nat budget, const Bindings *chosen, const Bindings *environment,
+                        const Params *params, const Params *remaining, const Values *seen, Tokens start,
+                        Tokens tokens, const Values **values, Tokens *rest, Nat *left, Failure *failure) {
+  for (;; remaining = remaining->tail) {
+    if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+    fuel = fuel - 1;
+    if (remaining == NULL) {
+      *values = reverse_values_onto(NULL, seen);
+      *rest = tokens;
+      *left = budget;
+      return 1;
+    }
+    Param head = remaining->head;
+    if (is_type_param(head) == 1) continue;
+    const Values *earlier = reverse_values_onto(NULL, seen);
+    const LType *instantiated = NULL;
+    int resolved =
+        instantiate_result(fuel, environment, params, earlier, start, subst_type(chosen, head.type), &instantiated);
+    const LType *expected;
+    if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected))
+      return fail_at(failure, first_position(tokens), eTerm);
+    const Value *value;
+    if (!parse_term(fuel, budget, 1, expected, environment, tokens, &value, &tokens, &budget, failure)) return 0;
+    seen = values_item(value, seen);
+  }
+}
+
+int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *closed) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  switch (side.kind) {
+  case VAL_CLOSED:
+  case VAL_VAR: *closed = side; return 1;
+  case VAL_TERM: {
+    const Value *value;
+    Tokens rest;
+    Nat left;
+    Failure failure;
+    if (!parse_term(more, 1, 1, a, bound, side.term, &value, &rest, &left, &failure)) return 0;
+    return printed_side(more, value, closed);
+  }
+  }
+  return 0;
+}
+
+int close_body_side(Fuel fuel, const Bindings *environment, const LType *a, Val side, Val *closed) {
+  if (fuel == 0) return 0;
+  if (kept_side(side) == 1) {
+    *closed = side;
+    return 1;
+  }
+  return close_side(fuel - 1, environment, a, side, closed);
+}
+
+int close_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, int resolved,
+                 const LType *result, const LType **closed) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  if (!resolved) return 0;
+  const LType *a;
+  Val lhs;
+  Val rhs;
+  if (!sides_of(result, &a, &lhs, &rhs)) {
+    *closed = result;
+    return 1;
+  }
+  Val x;
+  Val y;
+  if (checking_body(environment) == 1) {
+    if (!close_body_side(more, environment, a, lhs, &x)) return 0;
+    if (!close_body_side(more, environment, a, rhs, &y)) return 0;
+    *closed = eq_type(a, x, y);
+    return 1;
+  }
+  const Bindings *bound = argument_bindings(0, params, values, environment);
+  if (!close_side(more, bound, a, lhs, &x)) return 0;
+  if (!close_side(more, bound, a, rhs, &y)) return 0;
+  *closed = eq_type(a, x, y);
+  return 1;
+}
+
+/* At fuel 0 the params not yet closed are kept as they are. */
+const Params *close_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                           const Params *remaining) {
+  const Params *done = NULL;
+  for (; remaining != NULL; remaining = remaining->tail) {
+    if (fuel == 0) return reverse_params_onto(remaining, done);
+    fuel = fuel - 1;
+    Param head = remaining->head;
+    const LType *found;
+    done = params_item(close_result(fuel, environment, params, values, 1, head.type, &found)
+                           ? (Param){head.name, found}
+                           : head,
+                       done);
+  }
+  return reverse_params_onto(NULL, done);
+}
+
+int unary_term(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, Tokens tokens, Unary *op,
+               Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  if (tokens.size == 0) return lift_parsed(budget, unary_argument(environment, tokens, op, rest, failure), left);
+  Token head = tokens.items[0];
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+  case TOKEN_STRING:
+  case TOKEN_IDENTIFIER: return lift_parsed(budget, unary_argument(environment, tokens, op, rest, failure), left);
+  case TOKEN_PUNCTUATION: {
+    if (head.number != 40) return fail_at(failure, head.position, eUnary);
+    Unary inside;
+    Tokens after;
+    Nat spent;
+    if (!partial_unary(more, budget, wanted, environment, (Tokens){tokens.items + 1, tokens.size - 1}, &inside,
+                       &after, &spent, failure))
+      return 0;
+    *op = inside;
+    return lift_parsed(spent, close_parsed(after, rest, failure), left);
+  }
+  }
+  return 0;
+}
+
+int partial_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, Tokens tokens, Unary *op,
+                  Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  if (tokens.size == 0) return fail_at(failure, 0, eUnary);
+  Token head = tokens.items[0];
+  Tokens tail = {tokens.items + 1, tokens.size - 1};
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+  case TOKEN_STRING: return fail_at(failure, head.position, eUnary);
+  case TOKEN_PUNCTUATION:
+    if (head.number != 40) return fail_at(failure, head.position, eUnary);
+    return unary_term(more, budget, wanted, environment, tokens, op, rest, left, failure);
+  case TOKEN_IDENTIFIER: {
+    if (same_text(head.text, sfun) == 1)
+      return inline_unary(more, budget, head.position, wanted, environment, tail, op, rest, left, failure);
+    const Binding *item;
+    if (!lookup(head.text, environment, &item)) return fail_at(failure, head.position, eUnary);
+    switch (item->kind) {
+    case BIND_VALUE:
+    case BIND_TYPE:
+    case BIND_ARROW: return fail_at(failure, head.position, eUnary);
+    case BIND_FUN:
+      if (dependent_params(item->params) == 1) return fail_at(failure, head.position, eUnary);
+      return bound_unary(more, budget, head.position, head.text, item->params, item->type, environment, tail, op,
+                         rest, left, failure);
+    case BIND_CLOSURE:
+      return bound_unary(more, budget, head.position, head.text, item->params, item->type, environment, tail, op,
+                         rest, left, failure);
+    }
+    return 0;
+  }
+  }
+  return 0;
+}
+
+/* A parse error of a mark gives eFun at its position. */
+int inline_unary(Fuel fuel, Nat budget, Nat position, const LType *wanted, const Bindings *environment, Tokens tokens,
+                 Unary *op, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  Tokens after_open;
+  Failure refused;
+  if (!expect_mark(40, tokens, &after_open, &refused)) return fail_at(failure, refused.position, eFun);
+  if (after_open.size == 0) return fail_at(failure, position, eFun);
+  Token head = after_open.items[0];
+  Tokens after_name = {after_open.items + 1, after_open.size - 1};
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+  case TOKEN_STRING:
+  case TOKEN_PUNCTUATION: return fail_at(failure, head.position, eFun);
+  case TOKEN_IDENTIFIER: {
+    if (reserved_name(head.text) == 1) return fail_at(failure, head.position, eReserved);
+    Tokens after_colon;
+    if (!expect_mark(58, after_name, &after_colon, &refused)) return fail_at(failure, refused.position, eFun);
+    const LType *ty;
+    Tokens after_type;
+    if (!parse_type(more, 0, environment, after_colon, &ty, &after_type, failure)) return 0;
+    if (type_level(ty) != 0) return fail_at(failure, first_position(after_colon), eData);
+    Tokens after_binder;
+    if (!expect_mark(41, after_type, &after_binder, &refused)) return fail_at(failure, refused.position, eFun);
+    Tokens body;
+    if (!expect_mark(63, after_binder, &body, &refused)) return fail_at(failure, refused.position, eFun);
+    const Value *value;
+    Tokens after;
+    Nat spent;
+    if (!parse_term(more, budget, 0, wanted,
+                    bindings_item(value_binding(head.text, ty, &null_value), bindings_item(check_marker(), environment)),
+                    body, &value, &after, &spent, failure))
+      return 0;
+    *op = (Unary){head.text, ty, wanted, taken_tokens(body, after), environment};
+    *rest = after;
+    *left = spent;
+    return 1;
+  }
+  }
+  return 0;
+}
+
+int bound_unary(Fuel fuel, Nat budget, Nat position, Text name, const Params *params, const LType *result,
+                const Bindings *environment, Tokens tokens, Unary *op, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  const Bindings *chosen;
+  Tokens after_types;
+  if (!type_arguments(more, params, environment, NULL, tokens, &chosen, &after_types, failure)) return 0;
+  const Params *formal = value_params(chosen, params);
+  const Params *front = front_params(formal);
+  const Values *values;
+  Tokens after;
+  Nat spent;
+  if (!parse_arguments(more, budget, 1, param_types(front), environment, after_types, &values, &after, &spent, failure))
+    return 0;
+  if (bound_functions(front, values) == 0) return fail_at(failure, position, eTerm);
+  Binding closure =
+      partial_closure(name, arrow_type(drop_params(params_length(front), formal), subst_type(chosen, result)), name,
+                      typed_bound(params, tokens, after_types, values), environment);
+  Unary shaped;
+  if (!unary_of(environment, &closure, &shaped)) return fail_at(failure, position, eUnary);
+  *op = shaped;
+  *rest = after;
+  *left = spent;
+  return 1;
+}
+
+int stepper_term(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment, Tokens tokens,
+                 Stepper *op, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  if (tokens.size == 0) return lift_parsed(budget, stepper_argument(environment, tokens, op, rest, failure), left);
+  Token head = tokens.items[0];
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+  case TOKEN_STRING:
+  case TOKEN_IDENTIFIER: return lift_parsed(budget, stepper_argument(environment, tokens, op, rest, failure), left);
+  case TOKEN_PUNCTUATION: {
+    if (head.number != 40) return fail_at(failure, head.position, eStep);
+    Stepper inside;
+    Tokens after;
+    Nat spent;
+    if (!partial_stepper(more, budget, mode, expected, environment, (Tokens){tokens.items + 1, tokens.size - 1},
+                         &inside, &after, &spent, failure))
+      return 0;
+    *op = inside;
+    return lift_parsed(spent, close_parsed(after, rest, failure), left);
+  }
+  }
+  return 0;
+}
+
+int partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                    Tokens tokens, Stepper *op, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  if (tokens.size == 0) return fail_at(failure, 0, eStep);
+  Token head = tokens.items[0];
+  Tokens tail = {tokens.items + 1, tokens.size - 1};
+  switch (head.kind) {
+  case TOKEN_NUMBER:
+  case TOKEN_STRING: return fail_at(failure, head.position, eStep);
+  case TOKEN_PUNCTUATION:
+    if (head.number != 40) return fail_at(failure, head.position, eStep);
+    return stepper_term(more, budget, mode, expected, environment, tokens, op, rest, left, failure);
+  case TOKEN_IDENTIFIER: {
+    if (same_text(head.text, sfun) == 1)
+      return inline_stepper(more, budget, mode, expected, environment, tail, op, rest, left, failure);
+    const Binding *item;
+    if (!lookup(head.text, environment, &item)) return fail_at(failure, head.position, eStep);
+    switch (item->kind) {
+    case BIND_VALUE:
+    case BIND_TYPE:
+    case BIND_ARROW: return fail_at(failure, head.position, eStep);
+    case BIND_FUN:
+      if (dependent_params(item->params) == 1) return fail_at(failure, head.position, eStep);
+      return bound_stepper(more, budget, head.position, head.text, item->params, item->type, environment, tail, op,
+                           rest, left, failure);
+    case BIND_CLOSURE:
+      return bound_stepper(more, budget, head.position, head.text, item->params, item->type, environment, tail, op,
+                           rest, left, failure);
+    }
+    return 0;
+  }
+  }
+  return 0;
+}
+
+static int worked_stepper(Stepper found, Tokens after, Nat budget, Stepper *op, Tokens *rest, Nat *left) {
+  *op = found;
+  *rest = after;
+  *left = budget;
+  return 1;
+}
+
+static int worked_values(const Values *found, Tokens after, Nat budget, const Values **values, Tokens *rest,
+                         Nat *left) {
+  *values = found;
+  *rest = after;
+  *left = budget;
+  return 1;
+}
+
+int inline_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                   Tokens tokens, Stepper *op, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  const Params *params = NULL;
+  Tokens body = {0};
+  if (!inline_binders(more, environment, NULL, tokens, &params, &body, failure)) return 0;
+  const LType *result = inline_result(mode, expected, params);
+  const Value *value = NULL;
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!parse_term(more, budget, 0, result, bind_params(params, NULL, bindings_item(check_marker(), environment)), body,
+                  &value, &after, &spent, failure))
+    return 0;
+  return worked_stepper((Stepper){params, result, taken_tokens(body, after), environment}, after, spent, op, rest,
+                        left);
+}
+
+/* The bound arguments are checked in the caller scope, one per parameter,
+   up to the closing parenthesis. A bound function argument is a name or an
+   inline function. */
+int bound_stepper(Fuel fuel, Nat budget, Nat position, Text name, const Params *params, const LType *result,
+                  const Bindings *environment, Tokens tokens, Stepper *op, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  const Bindings *chosen = NULL;
+  Tokens after_types = {0};
+  if (!type_arguments(more, params, environment, NULL, tokens, &chosen, &after_types, failure)) return 0;
+  const Params *formal = value_params(chosen, params);
+  const Values *values = NULL;
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!bound_arguments(more, budget, formal, environment, after_types, &values, &after, &spent, failure)) return 0;
+  if (bound_functions(take_params(values_length(values), formal), values) == 0)
+    return fail_at(failure, position, eTerm);
+  Binding made = partial_closure(name, arrow_type(drop_params(values_length(values), formal), subst_type(chosen, result)),
+                                 name, typed_bound(params, tokens, after_types, values), environment);
+  switch (made.kind) {
+  case BIND_VALUE: return fail_at(failure, position, eStep);
+  case BIND_TYPE: return fail_at(failure, position, eStep);
+  case BIND_ARROW: return fail_at(failure, position, eStep);
+  case BIND_FUN:
+    return worked_stepper((Stepper){made.params, made.type, made.body, definition_scope(made.name, environment)},
+                          after, spent, op, rest, left);
+  case BIND_CLOSURE:
+    return worked_stepper((Stepper){made.params, made.type, made.body, made.scope}, after, spent, op, rest, left);
+  }
+  return 0;
+}
+
+/* One bound argument per parameter, until the closing parenthesis or the
+   last parameter. */
+int bound_arguments(Fuel fuel, Nat budget, const Params *params, const Bindings *environment, Tokens tokens,
+                    const Values **values, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  if (params == NULL) return worked_values(NULL, tokens, budget, values, rest, left);
+  if (closes_next(tokens) == 1) return worked_values(NULL, tokens, budget, values, rest, left);
+  const Values *found = NULL;
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!parse_arguments(more, budget, 1, param_types(params_item(params->head, NULL)), environment, tokens, &found,
+                       &after, &spent, failure))
+    return 0;
+  const Values *later = NULL;
+  Tokens after_later = {0};
+  Nat used = 0;
+  if (!bound_arguments(more, spent, params->tail, environment, after, &later, &after_later, &used, failure)) return 0;
+  return worked_values(reverse_values_onto(later, reverse_values_onto(NULL, found)), after_later, used, values, rest,
+                       left);
+}
+
+/* pure x lifts x. map, bind and filter name or partially apply a function,
+   then take the source as an argument. In the check of a function body,
+   map, bind and filter check the function and the source and give null. */
+int structure_term(Fuel fuel, Nat budget, Nat position, Nat form, Nat atom, const LType *expected,
+                   const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest, Nat *left,
+                   Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (atom == 1) return fail_at(failure, position, eParen);
+  if (shape_code(form, expected) == 0) return fail_at(failure, position, eStructure);
+  if (form == 1) {
+    const Value *lifted = NULL;
+    Tokens after = {0};
+    Nat spent = 0;
+    if (!parse_term(more, budget, 1, shape_element(expected), environment, tokens, &lifted, &after, &spent, failure))
+      return 0;
+    return worked_value(pure_value(expected, lifted), after, spent, value, rest, left);
+  }
+  Unary op = {0};
+  Tokens after_function = {0};
+  Nat spent = 0;
+  if (!unary_term(more, budget, structure_result(form, expected), environment, tokens, &op, &after_function, &spent,
+                  failure))
+    return 0;
+  if (structure_fits(form, expected, op) != 1) return fail_at(failure, first_position(tokens), eTerm);
+  const Value *source = NULL;
+  Tokens after = {0};
+  Nat used = 0;
+  if (!parse_term(more, spent, 1, structure_source(form, expected, op), environment, after_function, &source, &after,
+                  &used, failure))
+    return 0;
+  if (checking_body(environment) == 1) return worked_value(&null_value, after, used, value, rest, left);
+  if (carrier_code(expected) == 2) {
+    const Values *items = NULL;
+    Tokens ignored = {0};
+    Nat mapped_left = 0;
+    if (!map_items(more, used, position, form, op, sequence_elements(source), &items, &ignored, &mapped_left, failure))
+      return 0;
+    const Value *rebuilt = NULL;
+    Failure refused = {0};
+    if (!rebuild(expected, items, &rebuilt, &refused)) return fail_at(failure, position, refused.message);
+    return worked_value(rebuilt, after, mapped_left, value, rest, left);
+  }
+  const Value *item = NULL;
+  if (!payload_of(expected, unary_param(op), source, &item)) return worked_value(source, after, used, value, rest, left);
+  const Value *applied = NULL;
+  Tokens applied_rest = {0};
+  Nat applied_left = 0;
+  if (!parse_term(more, nat_sub(used, 1), 0, unary_result(op), unary_environment(op, item), unary_body(op), &applied,
+                  &applied_rest, &applied_left, failure))
+    return 0;
+  return worked_value(step_one(form, expected, source, applied), after, applied_left, value, rest, left);
+}
+
+/* Over a list, the function applies to each item in order: 2 map keeps each
+   result, 3 bind joins the result lists, 4 filter keeps the items with the
+   result flagYes. Each item uses one step of the depth fuel. */
+int map_items(Fuel fuel, Nat budget, Nat position, Nat form, Unary op, const Values *items, const Values **mapped,
+              Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (items == NULL) return worked_values(NULL, (Tokens){0}, budget, mapped, rest, left);
+  const Value *applied = NULL;
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!parse_term(more, nat_sub(budget, 1), 0, unary_result(op), unary_environment(op, items->head), unary_body(op),
+                  &applied, &after, &spent, failure))
+    return 0;
+  const Values *later = NULL;
+  Tokens ignored = {0};
+  Nat used = 0;
+  if (!map_items(more, spent, position, form, op, items->tail, &later, &ignored, &used, failure)) return 0;
+  return worked_values(step_items(form, items->head, applied, later), (Tokens){0}, used, mapped, rest, left);
+}
+
+/* either f g s applies f to the payload of inl and g to the payload of inr.
+   The two functions must have the same result type. */
+int either_term(Fuel fuel, Nat budget, Nat position, const Bindings *environment, Tokens tokens, Typed *typed,
+                Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  Unary on_left = {0};
+  Tokens after_left = {0};
+  if (!unary_argument(environment, tokens, &on_left, &after_left, failure)) return 0;
+  Unary on_right = {0};
+  Tokens after_right = {0};
+  if (!unary_argument(environment, after_left, &on_right, &after_right, failure)) return 0;
+  const LType *result = unary_result(on_left);
+  if (!(dependent_result(result) == 0 && same_type(result, unary_result(on_right)) == 1))
+    return fail_at(failure, first_position(after_left), eTerm);
+  const Value *source = NULL;
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!parse_term(more, budget, 1, type_two(TY_SUM, unary_param(on_left), unary_param(on_right)), environment,
+                  after_right, &source, &after, &spent, failure))
+    return 0;
+  if (checking_body(environment) == 1) return worked_typed((Typed){result, &null_value}, after, spent, typed, rest, left);
+  Unary chosen = sum_left(source) != 0 ? on_left : on_right;
+  const Value *applied = NULL;
+  Tokens applied_rest = {0};
+  Nat applied_left = 0;
+  if (!parse_term(more, nat_sub(spent, 1), 0, result, unary_environment(chosen, project_value(1, source)),
+                  unary_body(chosen), &applied, &applied_rest, &applied_left, failure))
+    return 0;
+  return worked_typed((Typed){result, applied}, after, applied_left, typed, rest, left);
+}
+
+/* fold f z t synthesizes the type of t. Over a sequence it applies f from
+   the last element: fold f z nil is z, and fold f z (cons x xs) is
+   f x (fold f z xs). Over the number n it applies f n times to z. With five
+   functions the source is a Value. */
+int fold_term(Fuel fuel, Nat budget, Nat position, Nat atom, const LType *expected, const Bindings *environment,
+              Tokens tokens, const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (atom == 1) return fail_at(failure, position, eParen);
+  Stepper op = {0};
+  Tokens after_function = {0};
+  Nat spent = 0;
+  if (!stepper_term(more, budget, 0, expected, environment, tokens, &op, &after_function, &spent, failure)) return 0;
+  if (second_function(more, spent, expected, environment, after_function) == 1)
+    return fold_value_term(more, spent, position, first_position(tokens), expected, op, environment, after_function,
+                           value, rest, left, failure);
+  const Value *start = NULL;
+  Tokens after_start = {0};
+  Nat used = 0;
+  if (!parse_term(more, spent, 1, expected, environment, after_function, &start, &after_start, &used, failure))
+    return 0;
+  Typed found = {0};
+  Tokens after = {0};
+  Nat found_left = 0;
+  if (!synth_term(more, used, 1, environment, after_start, &found, &after, &found_left, failure)) return 0;
+  if (carrier_code(found.type) == 0)
+    return fail_at(failure, first_position(after_start), same_type(found.type, &value_type) != 0 ? eCases : eStructure);
+  if (fold_fits(found.type, expected, op) != 1) return fail_at(failure, first_position(tokens), eTerm);
+  if (checking_body(environment) == 1) return worked_value(&null_value, after, found_left, value, rest, left);
+  const Values *items = NULL;
+  if (!elements_of(more, found.value, &items)) return fail_at(failure, position, eFuel);
+  const Value *result = NULL;
+  Tokens ignored = {0};
+  Nat folded_left = 0;
+  if (!fold_items(more, found_left, position, op, carrier_code(found.type), items, start, &result, &ignored,
+                  &folded_left, failure))
+    return 0;
+  return worked_value(result, after, folded_left, value, rest, left);
+}
+
+/* Each element uses one step of the depth fuel. Over Nat (code 1) the
+   function takes only the accumulator. */
+int fold_items(Fuel fuel, Nat budget, Nat position, Stepper op, Nat code, const Values *items, const Value *start,
+               const Value **folded, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (items == NULL) return worked_value(start, (Tokens){0}, budget, folded, rest, left);
+  const Value *acc = NULL;
+  Tokens ignored = {0};
+  Nat spent = 0;
+  if (!fold_items(more, budget, position, op, code, items->tail, start, &acc, &ignored, &spent, failure)) return 0;
+  const Values *arguments = code == 1 ? values_item(acc, NULL) : values_item(items->head, values_item(acc, NULL));
+  return parse_term(more, nat_sub(spent, 1), 0, stepper_result(op), stepper_environment(op, arguments),
+                    stepper_body(op), folded, rest, left, failure);
+}
+
+/* unfold g n s checks against a carrier. It applies g to the seed s until g
+   gives none or n elements exist. */
+int unfold_term(Fuel fuel, Nat budget, Nat position, Nat atom, const LType *expected, const Bindings *environment,
+                Tokens tokens, const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (atom == 1) return fail_at(failure, position, eParen);
+  if (carrier_code(expected) == 0) {
+    if (same_type(expected, &value_type) == 1)
+      return unfold_value_term(more, budget, position, environment, tokens, value, rest, left, failure);
+    return fail_at(failure, position, eStructure);
+  }
+  Stepper op = {0};
+  Tokens after_function = {0};
+  Nat spent = 0;
+  if (!stepper_term(more, budget, 1, expected, environment, tokens, &op, &after_function, &spent, failure)) return 0;
+  if (unfold_fits(expected, op) != 1) return fail_at(failure, first_position(tokens), eTerm);
+  const Value *limit = NULL;
+  Tokens after_limit = {0};
+  Nat limit_left = 0;
+  if (!parse_term(more, spent, 1, &nat_type, environment, after_function, &limit, &after_limit, &limit_left, failure))
+    return 0;
+  const Value *seed = NULL;
+  Tokens after = {0};
+  Nat seed_left = 0;
+  if (!parse_term(more, limit_left, 1, unfold_seed(op), environment, after_limit, &seed, &after, &seed_left, failure))
+    return 0;
+  if (checking_body(environment) == 1) return worked_value(&null_value, after, seed_left, value, rest, left);
+  const Values *items = NULL;
+  Tokens ignored = {0};
+  Nat built_left = 0;
+  if (!unfold_items(more, seed_left, position, op, carrier_code(expected), count_of(limit), seed, &items, &ignored,
+                    &built_left, failure))
+    return 0;
+  const Value *rebuilt = NULL;
+  Failure refused = {0};
+  if (!rebuild(expected, items, &rebuilt, &refused)) return fail_at(failure, position, refused.message);
+  return worked_value(rebuilt, after, built_left, value, rest, left);
+}
+
+/* Each element uses one step of the depth fuel. Into Nat (code 1) the
+   payload of g is the next seed. Otherwise it is the pair of the element and
+   the next seed. */
+int unfold_items(Fuel fuel, Nat budget, Nat position, Stepper op, Nat code, Nat limit, const Value *seed,
+                 const Values **values, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (limit == 0) return worked_values(NULL, (Tokens){0}, budget, values, rest, left);
+  const Value *result = NULL;
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!parse_term(more, nat_sub(budget, 1), 0, stepper_result(op), stepper_environment(op, values_item(seed, NULL)),
+                  stepper_body(op), &result, &after, &spent, failure))
+    return 0;
+  const Value *payload = NULL;
+  if (!payload_of(stepper_result(op), shape_element(stepper_result(op)), result, &payload))
+    return worked_values(NULL, (Tokens){0}, spent, values, rest, left);
+  const Values *items = NULL;
+  Tokens ignored = {0};
+  Nat used = 0;
+  if (!unfold_items(more, spent, position, op, code, nat_sub(limit, 1), code == 1 ? payload : project_value(2, payload),
+                    &items, &ignored, &used, failure))
+    return 0;
+  return worked_values(values_item(code == 1 ? &null_value : project_value(1, payload), items), (Tokens){0}, used,
+                       values, rest, left);
+}
+
+/* One of the five functions of a fold over Value is a name or a partial
+   application. Its parameter is the payload of its constructor and its
+   result is the declared type. */
+int algebra_term(Fuel fuel, Nat budget, Nat index, const LType *result, const Bindings *environment, Tokens tokens,
+                 Stepper *op, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  Stepper found = {0};
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!stepper_term(more, budget, 0, result, environment, tokens, &found, &after, &spent, failure)) return 0;
+  if (same_type(stepper_result(found), result) != 0 &&
+      same_types(param_types(stepper_params(found)), types_item(algebra_param(index, result), NULL)) != 0)
+    return worked_stepper(found, after, spent, op, rest, left);
+  return fail_at(failure, first_position(tokens), eTerm);
+}
+
+/* The remaining four functions of a fold over Value. The first function has
+   already been parsed and checked by fold_value_term. */
+int algebra_terms(Fuel fuel, Nat budget, const LType *result, Stepper on_nat, const Bindings *environment,
+                  Tokens tokens, ValueAlgebra *ops, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  Stepper on_flag = {0};
+  Tokens after_flag = {0};
+  Nat flag_left = 0;
+  if (!algebra_term(more, budget, 2, result, environment, tokens, &on_flag, &after_flag, &flag_left, failure)) return 0;
+  Stepper on_text = {0};
+  Tokens after_text = {0};
+  Nat text_left = 0;
+  if (!algebra_term(more, flag_left, 3, result, environment, after_flag, &on_text, &after_text, &text_left, failure))
+    return 0;
+  Stepper on_items = {0};
+  Tokens after_items = {0};
+  Nat items_left = 0;
+  if (!algebra_term(more, text_left, 4, result, environment, after_text, &on_items, &after_items, &items_left, failure))
+    return 0;
+  Stepper on_attrs = {0};
+  Tokens after = {0};
+  Nat attrs_left = 0;
+  if (!algebra_term(more, items_left, 5, result, environment, after_items, &on_attrs, &after, &attrs_left, failure))
+    return 0;
+  *ops = (ValueAlgebra){on_nat, on_flag, on_text, on_items, on_attrs};
+  *rest = after;
+  *left = attrs_left;
+  return 1;
+}
+
+/* A second function after the first selects the fold over Value. A name
+   selects it, as the initial value is never the bare name of a function. A
+   partial application selects it only when it fits the Flag position, as a
+   parenthesized initial value also starts with an opening parenthesis. */
+Nat second_function(Fuel fuel, Nat budget, const LType *result, const Bindings *environment, Tokens tokens) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  if (names_function(environment, tokens) == 1) return 1;
+  Stepper op = {0};
+  Tokens rest = {0};
+  Nat left = 0;
+  Failure dropped = {0};
+  return algebra_term(more, budget, 2, result, environment, tokens, &op, &rest, &left, &dropped) ? 1 : 0;
+}
+
+/* A fold over Value takes five functions before z. Each function is checked
+   against the declared type before the source is read. */
+int fold_value_term(Fuel fuel, Nat budget, Nat position, Nat function_position, const LType *expected,
+                    Stepper on_nat, const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest,
+                    Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (!(same_type(stepper_result(on_nat), expected) == 1 &&
+        same_types(param_types(stepper_params(on_nat)), types_item(&nat_type, NULL)) == 1))
+    return fail_at(failure, function_position, eTerm);
+  ValueAlgebra ops = {0};
+  Tokens after_functions = {0};
+  Nat spent = 0;
+  if (!algebra_terms(more, budget, expected, on_nat, environment, tokens, &ops, &after_functions, &spent, failure))
+    return 0;
+  const Value *start = NULL;
+  Tokens after_start = {0};
+  Nat used = 0;
+  if (!parse_term(more, spent, 1, expected, environment, after_functions, &start, &after_start, &used, failure))
+    return 0;
+  Typed found = {0};
+  Tokens after = {0};
+  Nat found_left = 0;
+  if (!synth_term(more, used, 1, environment, after_start, &found, &after, &found_left, failure)) return 0;
+  if (same_type(found.type, &value_type) != 1) return fail_at(failure, first_position(after_start), eCases);
+  if (checking_body(environment) == 1) return worked_value(&null_value, after, found_left, value, rest, left);
+  const Value *result = NULL;
+  Tokens ignored = {0};
+  Nat folded_left = 0;
+  if (!fold_value(more, found_left, position, ops, start, found.value, &result, &ignored, &folded_left, failure))
+    return 0;
+  return worked_value(result, after, folded_left, value, rest, left);
+}
+
+/* valueNull gives z. A scalar applies its function to the payload. Items and
+   fields fold each child first, in order, and then apply their function to
+   the list of the results. Each node and each child uses one step of the
+   depth fuel. */
+int fold_value(Fuel fuel, Nat budget, Nat position, ValueAlgebra ops, const Value *start, const Value *value,
+               const Value **folded, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (value_index(value) == 0) return worked_value(start, (Tokens){0}, budget, folded, rest, left);
+  const Values *results = NULL;
+  Tokens ignored = {0};
+  Nat spent = 0;
+  if (!fold_children(more, budget, position, ops, start, value_index(value) == 5, child_elements(value), &results,
+                     &ignored, &spent, failure))
+    return 0;
+  Stepper step = algebra_step(value_index(value), ops);
+  return parse_term(more, nat_sub(spent, 1), 0, stepper_result(step),
+                    stepper_environment(step, values_item(algebra_input(value, results), NULL)), stepper_body(step),
+                    folded, rest, left, failure);
+}
+
+/* A child of the fields (keyed = 1) is the pair of its key and its value.
+   Its result is the pair of the key and the folded value. */
+int fold_children(Fuel fuel, Nat budget, Nat position, ValueAlgebra ops, const Value *start, Nat keyed,
+                  const Values *elements, const Values **folded, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (elements == NULL) return worked_values(NULL, (Tokens){0}, budget, folded, rest, left);
+  const Value *head = elements->head;
+  const Value *result = NULL;
+  Tokens ignored = {0};
+  Nat spent = 0;
+  if (!fold_value(more, budget, position, ops, start, keyed != 0 ? project_value(2, head) : head, &result, &ignored,
+                  &spent, failure))
+    return 0;
+  const Values *results = NULL;
+  Tokens unused = {0};
+  Nat used = 0;
+  if (!fold_children(more, spent, position, ops, start, keyed, elements->tail, &results, &unused, &used, failure))
+    return 0;
+  const Value *child = keyed != 0 ? object_two(kFirst, project_value(1, head), kSecond, result) : result;
+  return worked_values(values_item(child, results), (Tokens){0}, used, folded, rest, left);
+}
+
+/* unfold g n s into Value. g gives the layer of a seed. unfold applies g to
+   the seeds in depth-first order, at most n times. A seed that is left after
+   n applications becomes valueNull. */
+int unfold_value_term(Fuel fuel, Nat budget, Nat position, const Bindings *environment, Tokens tokens,
+                      const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  Stepper op = {0};
+  Tokens after_function = {0};
+  Nat spent = 0;
+  if (!stepper_term(more, budget, 2, &value_type, environment, tokens, &op, &after_function, &spent, failure))
+    return 0;
+  if (unfold_value_fits(op) != 1) return fail_at(failure, first_position(tokens), eTerm);
+  const Value *limit = NULL;
+  Tokens after_limit = {0};
+  Nat limit_left = 0;
+  if (!parse_term(more, spent, 1, &nat_type, environment, after_function, &limit, &after_limit, &limit_left, failure))
+    return 0;
+  const Value *seed = NULL;
+  Tokens after = {0};
+  Nat seed_left = 0;
+  if (!parse_term(more, limit_left, 1, unfold_seed(op), environment, after_limit, &seed, &after, &seed_left, failure))
+    return 0;
+  if (checking_body(environment) == 1) return worked_value(&null_value, after, seed_left, value, rest, left);
+  Grown node = {0};
+  Tokens ignored = {0};
+  Nat built_left = 0;
+  if (!unfold_node(more, seed_left, position, op, count_of(limit), seed, &node, &ignored, &built_left, failure))
+    return 0;
+  return worked_value(grown_head(node), after, built_left, value, rest, left);
+}
+
+static int worked_grown(Grown found, Tokens after, Nat budget, Grown *grown, Tokens *rest, Nat *left) {
+  *grown = found;
+  *rest = after;
+  *left = budget;
+  return 1;
+}
+
+/* Each application of g uses one step of the depth fuel and one of the n
+   applications. Duplicate keys of the fields are an error at unfold. */
+int unfold_node(Fuel fuel, Nat budget, Nat position, Stepper op, Nat limit, const Value *seed, Grown *grown,
+                Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (limit == 0) return worked_grown(grown_leaf(&null_value, 0), (Tokens){0}, budget, grown, rest, left);
+  const Value *layer = NULL;
+  Tokens after = {0};
+  Nat spent = 0;
+  if (!parse_term(more, nat_sub(budget, 1), 0, stepper_result(op), stepper_environment(op, values_item(seed, NULL)),
+                  stepper_body(op), &layer, &after, &spent, failure))
+    return 0;
+  if (layer_index(layer) < 4)
+    return worked_grown(grown_leaf(layer_payload(layer), nat_sub(limit, 1)), (Tokens){0}, spent, grown, rest, left);
+  Grown built = {0};
+  Tokens ignored = {0};
+  Nat used = 0;
+  if (!unfold_seeds(more, spent, position, op, layer_index(layer) == 5, nat_sub(limit, 1),
+                    items_of(layer_payload(layer)), &built, &ignored, &used, failure))
+    return 0;
+  if (layer_index(layer) != 5)
+    return worked_grown(grown_leaf(items_value(grown_items(built)), grown_limit(built)), (Tokens){0}, used, grown, rest,
+                        left);
+  const Attrs *fields = NULL;
+  Failure refused = {0};
+  if (!fields_of(grown_items(built), &fields, &refused)) return fail_at(failure, position, refused.message);
+  return worked_grown(grown_leaf(make_value((Value){.kind = VALUE_ATTRS, .attrs = fields}), grown_limit(built)),
+                      (Tokens){0}, used, grown, rest, left);
+}
+
+/* The seeds of the items, or the keys and seeds of the fields (keyed = 1),
+   from the left. The applications that remain pass from each seed to the
+   next seed. */
+int unfold_seeds(Fuel fuel, Nat budget, Nat position, Stepper op, Nat keyed, Nat limit, const Values *seeds,
+                 Grown *grown, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, position, eFuel);
+  Fuel more = fuel - 1;
+  if (seeds == NULL) return worked_grown((Grown){NULL, limit}, (Tokens){0}, budget, grown, rest, left);
+  const Value *head = seeds->head;
+  Grown node = {0};
+  Tokens ignored = {0};
+  Nat spent = 0;
+  if (!unfold_node(more, budget, position, op, limit, keyed != 0 ? project_value(2, head) : head, &node, &ignored,
+                   &spent, failure))
+    return 0;
+  Grown others = {0};
+  Tokens unused = {0};
+  Nat used = 0;
+  if (!unfold_seeds(more, spent, position, op, keyed, grown_limit(node), seeds->tail, &others, &unused, &used, failure))
+    return 0;
+  const Value *child =
+      keyed != 0 ? object_two(kFirst, project_value(1, head), kSecond, grown_head(node)) : grown_head(node);
+  return worked_grown((Grown){values_item(child, grown_items(others)), grown_limit(others)}, (Tokens){0}, used, grown,
+                      rest, left);
+}
