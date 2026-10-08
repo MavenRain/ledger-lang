@@ -452,6 +452,84 @@ int unary_from(const Bindings *scope, const Params *params, const LType *result,
 int unary_of(const Bindings *scope, const Binding *item, Unary *op);
 int unary_argument(const Bindings *environment, Tokens tokens, Unary *op, Tokens *rest, Failure *failure);
 
+/* checker.c (S5a1: checker.mech lines 615..1012). A Shape keeps the element
+   type of Option, List, Sum E and the sequences, and the error type of Sum E.
+   A Stepper is the function argument of fold and unfold: the parameters, the
+   result type, the body tokens and the scope. A ValueAlgebra keeps the five
+   steppers of a fold over Value in constructor order. payload_of, unit_items,
+   elements_of and text_of_elements return 1 and write the answer, or 0 for
+   none; fields_of and rebuild return 0 with a Failure. */
+typedef enum { SHAPE_OPTION, SHAPE_LIST, SHAPE_SUM, SHAPE_SEQUENCE, SHAPE_NONE } ShapeKind;
+
+typedef struct {
+  ShapeKind kind;
+  const LType *error;
+  const LType *element;
+} Shape;
+
+typedef struct {
+  const Params *params;
+  const LType *result;
+  Tokens body;
+  const Bindings *scope;
+} Stepper;
+
+typedef struct {
+  Stepper on_nat;
+  Stepper on_flag;
+  Stepper on_text;
+  Stepper on_items;
+  Stepper on_attrs;
+} ValueAlgebra;
+
+Shape shape_of(const LType *ty);
+Nat shape_code(Nat form, const LType *ty);
+const LType *shape_element(const LType *ty);
+const LType *shape_with(const LType *ty, const LType *element);
+const Value *some_value(const LType *ty, const Value *value);
+const Value *pure_value(const LType *ty, const Value *value);
+Nat is_null(const Value *value);
+Nat is_yes(const Value *value);
+Nat sum_left(const Value *value);
+const Values *items_of(const Value *value);
+const Values *append_values(const Values *front, const Values *back);
+int payload_of(const LType *ty, const LType *element, const Value *value, const Value **payload);
+const Value *step_one(Nat form, const LType *ty, const Value *source, const Value *result);
+const Values *step_items(Nat form, const Value *item, const Value *result, const Values *rest);
+Nat structure_fits(Nat form, const LType *ty, Unary op);
+const LType *structure_source(Nat form, const LType *ty, Unary op);
+const LType *structure_result(Nat form, const LType *ty);
+const Params *stepper_params(Stepper op);
+const LType *stepper_result(Stepper op);
+Tokens stepper_body(Stepper op);
+const Bindings *stepper_environment(Stepper op, const Values *values);
+int stepper_argument(const Bindings *environment, Tokens tokens, Stepper *op, Tokens *rest, Failure *failure);
+Nat same_types(const LTypes *left, const LTypes *right);
+Nat carrier_code(const LType *ty);
+const Values *text_elements(Text text);
+const Values *field_elements(const Attrs *attrs);
+const Values *sequence_elements(const Value *value);
+int unit_items(Fuel fuel, Nat count, const Values **items);
+int elements_of(Fuel fuel, const Value *value, const Values **items);
+Nat count_of(const Value *value);
+Nat count_values(const Values *items);
+int text_of_elements(const Values *items, Text *text);
+Text key_of(const Value *item);
+int fields_of(const Values *items, const Attrs **attrs, Failure *failure);
+int rebuild(const LType *ty, const Values *items, const Value **value, Failure *failure);
+Nat fold_fits(const LType *ty, const LType *result, Stepper op);
+const LType *param_seed(const Params *params);
+const LType *unfold_seed(Stepper op);
+Nat unfold_fits(const LType *ty, Stepper op);
+Stepper algebra_step(Nat index, ValueAlgebra ops);
+Nat value_index(const Value *value);
+const LType *algebra_param(Nat index, const LType *result);
+Nat names_function(const Bindings *environment, Tokens tokens);
+const Values *child_elements(const Value *value);
+const Value *algebra_input(const Value *value, const Values *results);
+const LType *value_layer(const LType *seed);
+Nat unfold_value_fits(Stepper op);
+
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
 int compile_program(Text source, Text *output, Failure *failure);

@@ -590,3 +590,394 @@ int unary_argument(const Bindings *environment, Tokens tokens, Unary *op, Tokens
   *rest = (Tokens){tokens.items + 1, tokens.size - 1};
   return 1;
 }
+
+/* S5a1 ports checker.mech lines 615..1012: the shapes of the structure
+   forms, the steppers of fold and unfold, the elements of a carrier, the
+   rebuild of a carrier and the value algebra. */
+
+static const LType text_type = {.tag = TY_TEXT};
+static const LType flag_type = {.tag = TY_FLAG};
+static const LType value_type = {.tag = TY_VALUE};
+static const LType attrs_type = {.tag = TY_ATTRS};
+
+static const LType *type_one(LTypeTag tag, const LType *left) { return make_type((LType){.tag = tag, .left = left}); }
+
+static const LType *type_two(LTypeTag tag, const LType *left, const LType *right) {
+  return make_type((LType){.tag = tag, .left = left, .right = right});
+}
+
+static const Values *reverse_values_onto(const Values *onto, const Values *items) {
+  for (; items != NULL; items = items->tail) onto = values_item(items->head, onto);
+  return onto;
+}
+
+Shape shape_of(const LType *ty) {
+  switch (ty->tag) {
+  case TY_TEXT: return (Shape){.kind = SHAPE_SEQUENCE, .element = &nat_type};
+  case TY_VALUES: return (Shape){.kind = SHAPE_SEQUENCE, .element = &value_type};
+  case TY_ATTRS: return (Shape){.kind = SHAPE_SEQUENCE, .element = type_two(TY_PROD, &text_type, &value_type)};
+  case TY_OPTION: return (Shape){.kind = SHAPE_OPTION, .element = ty->left};
+  case TY_LIST: return (Shape){.kind = SHAPE_LIST, .element = ty->left};
+  case TY_SUM: return (Shape){.kind = SHAPE_SUM, .error = ty->left, .element = ty->right};
+  default: return (Shape){.kind = SHAPE_NONE};
+  }
+}
+
+/* 0 no instance, 1 Option, 2 List, 3 Sum E, 4 Text, Values or Attrs. Filter
+   has no Sum instance, and the sequences have only filter. */
+Nat shape_code(Nat form, const LType *ty) {
+  switch (shape_of(ty).kind) {
+  case SHAPE_OPTION: return 1;
+  case SHAPE_LIST: return 2;
+  case SHAPE_SUM: return form == 4 ? 0 : 3;
+  case SHAPE_SEQUENCE: return form == 4 ? 4 : 0;
+  case SHAPE_NONE: return 0;
+  }
+  return 0;
+}
+
+const LType *shape_element(const LType *ty) {
+  Shape shape = shape_of(ty);
+  return shape.kind == SHAPE_NONE ? ty : shape.element;
+}
+
+const LType *shape_with(const LType *ty, const LType *element) {
+  Shape shape = shape_of(ty);
+  switch (shape.kind) {
+  case SHAPE_OPTION: return type_one(TY_OPTION, element);
+  case SHAPE_LIST: return type_one(TY_LIST, element);
+  case SHAPE_SUM: return type_two(TY_SUM, shape.error, element);
+  case SHAPE_SEQUENCE: return ty;
+  case SHAPE_NONE: return ty;
+  }
+  return ty;
+}
+
+const Value *some_value(const LType *ty, const Value *value) {
+  return encodes_null(ty) ? object_one(kSome, value) : value;
+}
+
+/* pure x is some x, the list with the one item x, or inr x. */
+const Value *pure_value(const LType *ty, const Value *value) {
+  Shape shape = shape_of(ty);
+  switch (shape.kind) {
+  case SHAPE_OPTION: return some_value(shape.element, value);
+  case SHAPE_LIST: return items_value(values_item(value, NULL));
+  case SHAPE_SUM: return object_one(kInr, value);
+  case SHAPE_SEQUENCE: return value;
+  case SHAPE_NONE: return value;
+  }
+  return value;
+}
+
+Nat is_null(const Value *value) { return value->kind == VALUE_NULL; }
+
+Nat is_yes(const Value *value) { return value->kind == VALUE_FLAG && value->flag == FLAG_YES; }
+
+Nat sum_left(const Value *value) {
+  return value->kind == VALUE_ATTRS && value->attrs != NULL ? same_text(value->attrs->key, kInl) : 0;
+}
+
+const Values *items_of(const Value *value) { return value->kind == VALUE_ITEMS ? value->items : NULL; }
+
+const Values *append_values(const Values *front, const Values *back) {
+  return reverse_values_onto(back, reverse_values_onto(NULL, front));
+}
+
+/* The payload of some x or of inr x. The values none and inl e have none. */
+int payload_of(const LType *ty, const LType *element, const Value *value, const Value **payload) {
+  switch (shape_of(ty).kind) {
+  case SHAPE_OPTION:
+    if (is_null(value)) return 0;
+    *payload = encodes_null(element) ? project_value(1, value) : value;
+    return 1;
+  case SHAPE_SUM:
+    if (sum_left(value)) return 0;
+    *payload = project_value(1, value);
+    return 1;
+  case SHAPE_LIST: return 0;
+  case SHAPE_SEQUENCE: return 0;
+  case SHAPE_NONE: return 0;
+  }
+  return 0;
+}
+
+/* Join a source value and the result of one application: 2 map wraps the
+   result again, 3 bind keeps it, 4 filter keeps the source or gives none. */
+const Value *step_one(Nat form, const LType *ty, const Value *source, const Value *result) {
+  if (form == 3) return result;
+  if (form == 4) return is_yes(result) ? source : &null_value;
+  return pure_value(ty, result);
+}
+
+const Values *step_items(Nat form, const Value *item, const Value *result, const Values *rest) {
+  if (form == 3) return append_values(items_of(result), rest);
+  if (form == 4) return is_yes(result) ? values_item(item, rest) : rest;
+  return values_item(result, rest);
+}
+
+/* map takes A -> B for F B, bind takes A -> F B, filter takes A -> Flag. */
+Nat structure_fits(Nat form, const LType *ty, Unary op) {
+  if (form == 2) return same_type(unary_result(op), shape_element(ty));
+  if (form == 3) return same_type(unary_result(op), ty);
+  return same_type(unary_result(op), &flag_type) ? same_type(unary_param(op), shape_element(ty)) : 0;
+}
+
+/* map and bind read F A for the parameter type A. Filter reads F A itself. */
+const LType *structure_source(Nat form, const LType *ty, Unary op) {
+  return form == 4 ? ty : shape_with(ty, unary_param(op));
+}
+
+/* The result type of an inline function: B for map into F B, F B for bind,
+   Flag for filter. */
+const LType *structure_result(Nat form, const LType *ty) {
+  return form == 2 ? shape_element(ty) : form == 3 ? ty : &flag_type;
+}
+
+const Params *stepper_params(Stepper op) { return op.params; }
+
+const LType *stepper_result(Stepper op) { return op.result; }
+
+Tokens stepper_body(Stepper op) { return op.body; }
+
+const Bindings *stepper_environment(Stepper op, const Values *values) {
+  return bind_params(op.params, values, op.scope);
+}
+
+int stepper_argument(const Bindings *environment, Tokens tokens, Stepper *op, Tokens *rest, Failure *failure) {
+  if (tokens.size == 0) return fail_at(failure, 0, eStep);
+  Token head = tokens.items[0];
+  const Binding *item;
+  if (head.kind != TOKEN_IDENTIFIER || !lookup(head.text, environment, &item)) return fail_at(failure, head.position, eStep);
+  switch (item->kind) {
+  case BIND_FUN:
+    if (has_type_param(item->params)) return fail_at(failure, head.position, eStep);
+    *op = (Stepper){item->params, item->type, item->body, definition_scope(item->name, environment)};
+    break;
+  case BIND_CLOSURE: *op = (Stepper){item->params, item->type, item->body, item->scope}; break;
+  case BIND_VALUE: return fail_at(failure, head.position, eStep);
+  case BIND_TYPE: return fail_at(failure, head.position, eStep);
+  case BIND_ARROW: return fail_at(failure, head.position, eStep);
+  }
+  *rest = (Tokens){tokens.items + 1, tokens.size - 1};
+  return 1;
+}
+
+Nat same_types(const LTypes *left, const LTypes *right) {
+  for (; left != NULL && right != NULL; left = left->tail, right = right->tail)
+    if (!same_type(left->head, right->head)) return 0;
+  return left == NULL && right == NULL;
+}
+
+/* Algebra carriers: 1 Nat, 2 a sequence (List A, Text, Values or Attrs),
+   0 no instance. */
+Nat carrier_code(const LType *ty) {
+  switch (shape_of(ty).kind) {
+  case SHAPE_OPTION: return 0;
+  case SHAPE_LIST: return 2;
+  case SHAPE_SUM: return 0;
+  case SHAPE_SEQUENCE: return 2;
+  case SHAPE_NONE: return same_type(ty, &nat_type) ? 1 : 0;
+  }
+  return 0;
+}
+
+const Values *text_elements(Text text) {
+  const Values *items = NULL;
+  for (Nat index = text.size; index > 0; index--) items = values_item(nat_value(text.items[index - 1]), items);
+  return items;
+}
+
+const Values *field_elements(const Attrs *attrs) {
+  const Values *reversed = NULL;
+  for (; attrs != NULL; attrs = attrs->rest)
+    reversed = values_item(object_two(kFirst, text_value(attrs->key), kSecond, attrs->value), reversed);
+  return reverse_values_onto(NULL, reversed);
+}
+
+const Values *sequence_elements(const Value *value) {
+  switch (value->kind) {
+  case VALUE_TEXT: return text_elements(value->text);
+  case VALUE_ITEMS: return value->items;
+  case VALUE_ATTRS: return field_elements(value->attrs);
+  case VALUE_NULL: return NULL;
+  case VALUE_FLAG: return NULL;
+  case VALUE_NAT: return NULL;
+  }
+  return NULL;
+}
+
+/* A fold over the number n applies its function n times, once for each of n
+   null items. The fuel bounds n: the items exist when n <= fuel. */
+int unit_items(Fuel fuel, Nat count, const Values **items) {
+  if ((Fuel)count > fuel) return 0;
+  const Values *made = NULL;
+  for (Nat index = 0; index < count; index++) made = values_item(&null_value, made);
+  *items = made;
+  return 1;
+}
+
+int elements_of(Fuel fuel, const Value *value, const Values **items) {
+  Nat count;
+  if (!as_nat(value, &count)) {
+    *items = sequence_elements(value);
+    return 1;
+  }
+  return unit_items(fuel, count, items);
+}
+
+Nat count_of(const Value *value) {
+  Nat count;
+  return as_nat(value, &count) ? count : 0;
+}
+
+Nat count_values(const Values *items) { return values_length(items); }
+
+int text_of_elements(const Values *items, Text *text) {
+  Nat size = values_length(items);
+  Nat *bytes = arena_alloc((size + 1) * sizeof *bytes);
+  Nat index = 0;
+  for (; items != NULL; items = items->tail) {
+    Nat number;
+    if (!as_nat(items->head, &number) || number >= 256) return 0;
+    bytes[index++] = number;
+  }
+  *text = (Text){bytes, size};
+  return 1;
+}
+
+Text key_of(const Value *item) {
+  Text text;
+  return as_text(project_value(1, item), &text) ? text : text_end();
+}
+
+/* The fields of the items from the last one back, so a key that comes again
+   fails at position 0. */
+int fields_of(const Values *items, const Attrs **attrs, Failure *failure) {
+  const Attrs *built = NULL;
+  for (const Values *rest = reverse_values_onto(NULL, items); rest != NULL; rest = rest->tail) {
+    Text key = key_of(rest->head);
+    if (has_field(key, built)) return fail_at(failure, 0, eField);
+    Attrs *field = arena_alloc(sizeof *field);
+    *field = (Attrs){key, project_value(2, rest->head), built};
+    built = field;
+  }
+  *attrs = built;
+  return 1;
+}
+
+/* Build a carrier value from its elements: the count for Nat, the bytes for
+   Text, the fields for Attrs, and the items otherwise. Reject invalid bytes
+   and duplicate attribute keys before the value can be consumed or printed. */
+int rebuild(const LType *ty, const Values *items, const Value **value, Failure *failure) {
+  if (same_type(ty, &text_type)) {
+    Text bytes;
+    if (!text_of_elements(items, &bytes)) return fail_at(failure, 0, eByte);
+    *value = text_value(bytes);
+    return 1;
+  }
+  if (same_type(ty, &attrs_type)) {
+    const Attrs *fields;
+    if (!fields_of(items, &fields, failure)) return 0;
+    *value = make_value((Value){.kind = VALUE_ATTRS, .attrs = fields});
+    return 1;
+  }
+  *value = same_type(ty, &nat_type) ? nat_value(count_values(items)) : items_value(items);
+  return 1;
+}
+
+/* fold over Nat takes C -> C. Over a sequence of E it takes E -> C -> C. */
+Nat fold_fits(const LType *ty, const LType *result, Stepper op) {
+  const LTypes *expected = same_type(ty, &nat_type) ? types_item(result, NULL)
+                                                    : types_item(shape_element(ty), types_item(result, NULL));
+  return same_type(stepper_result(op), result) ? same_types(param_types(stepper_params(op)), expected) : 0;
+}
+
+/* The seed of unfold is the type of the first parameter. */
+const LType *param_seed(const Params *params) {
+  const LTypes *types = param_types(params);
+  return types == NULL ? &nat_type : types->head;
+}
+
+const LType *unfold_seed(Stepper op) { return param_seed(stepper_params(op)); }
+
+/* unfold into Nat takes S -> Option S. Into a sequence of E it takes
+   S -> Option (Prod E S). */
+Nat unfold_fits(const LType *ty, Stepper op) {
+  const LType *step = same_type(ty, &nat_type) ? unfold_seed(op) : type_two(TY_PROD, shape_element(ty), unfold_seed(op));
+  return same_types(param_types(stepper_params(op)), types_item(unfold_seed(op), NULL))
+             ? same_type(stepper_result(op), type_one(TY_OPTION, step))
+             : 0;
+}
+
+/* The algebra of a fold over Value: 1 valueNat, 2 valueFlag, 3 valueText,
+   4 valueItems, and valueAttrs otherwise. */
+Stepper algebra_step(Nat index, ValueAlgebra ops) {
+  return index == 1 ? ops.on_nat : index == 2 ? ops.on_flag : index == 3 ? ops.on_text : index == 4 ? ops.on_items : ops.on_attrs;
+}
+
+/* 0 valueNull, 1 valueNat, 2 valueFlag, 3 valueText, 4 valueItems,
+   5 valueAttrs. */
+Nat value_index(const Value *value) {
+  switch (value->kind) {
+  case VALUE_NULL: return 0;
+  case VALUE_NAT: return 1;
+  case VALUE_FLAG: return 2;
+  case VALUE_TEXT: return 3;
+  case VALUE_ITEMS: return 4;
+  case VALUE_ATTRS: return 5;
+  }
+  return 0;
+}
+
+/* For the result type C the functions take Nat, Flag, Text, List C and
+   List (Prod Text C). */
+const LType *algebra_param(Nat index, const LType *result) {
+  if (index == 1) return &nat_type;
+  if (index == 2) return &flag_type;
+  if (index == 3) return &text_type;
+  if (index == 4) return type_one(TY_LIST, result);
+  return type_one(TY_LIST, type_two(TY_PROD, &text_type, result));
+}
+
+/* A second function name after the first selects the fold over Value. */
+Nat names_function(const Bindings *environment, Tokens tokens) {
+  Stepper op;
+  Tokens rest;
+  Failure failure;
+  return stepper_argument(environment, tokens, &op, &rest, &failure) ? 1 : 0;
+}
+
+/* The children of a Value: its items, or its fields as pairs of key and value. */
+const Values *child_elements(const Value *value) {
+  switch (value->kind) {
+  case VALUE_ITEMS: return value->items;
+  case VALUE_ATTRS: return field_elements(value->attrs);
+  case VALUE_NULL: return NULL;
+  case VALUE_NAT: return NULL;
+  case VALUE_FLAG: return NULL;
+  case VALUE_TEXT: return NULL;
+  }
+  return NULL;
+}
+
+/* A scalar gives its payload to its function. Items and fields give the list
+   of the results of their children. */
+const Value *algebra_input(const Value *value, const Values *results) {
+  return value_index(value) < 4 ? value : items_value(results);
+}
+
+/* The layer of a seed of type S: none for valueNull, or a number, a flag, a
+   text, the seeds of the items, or the keys and seeds of the fields. */
+const LType *value_layer(const LType *seed) {
+  const LType *fields = type_one(TY_LIST, type_two(TY_PROD, &text_type, seed));
+  const LType *inner = type_two(TY_SUM, type_one(TY_LIST, seed), fields);
+  return type_one(TY_OPTION,
+                  type_two(TY_SUM, &nat_type, type_two(TY_SUM, &flag_type, type_two(TY_SUM, &text_type, inner))));
+}
+
+Nat unfold_value_fits(Stepper op) {
+  return same_types(param_types(stepper_params(op)), types_item(unfold_seed(op), NULL))
+             ? same_type(stepper_result(op), value_layer(unfold_seed(op)))
+             : 0;
+}
