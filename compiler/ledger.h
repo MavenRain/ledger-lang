@@ -258,6 +258,9 @@ Text sHashOf(void);
 Text sRefTo(void);
 Text opsTextQuery(void);
 Text eQueryIndex(void);
+Text kRefKind(void);
+Text kRefHash(void);
+Text kSchemaTag(void);
 
 /* A parameter of a function type. A list of parameters; NULL is the end. */
 typedef struct {
@@ -290,6 +293,27 @@ Text unknown_name(const LType *expected, Text name);
 Nat primitive_reserved_name(Text name);
 Nat form_reserved_name(Text name);
 Nat reserved_name(Text name);
+
+/* evaluate.c: a List Value is a Values list, and a missing argument is
+   null. The as_ functions return 1 and write the payload when the value
+   has that form, or return 0. The build, plan and record functions return
+   1 and write the answer, or return 0 and write the failure. */
+const Value *argument_head(const Values *args);
+const Values *argument_tail(const Values *args);
+const Value *argument_second(const Values *args);
+const Value *argument_third(const Values *args);
+const Value *object_one(Text key, const Value *value);
+const Value *object_two(Text a, const Value *x, Text b, const Value *y);
+int as_nat(const Value *value, Nat *number);
+int as_text(const Value *value, Text *text);
+int as_values(const Value *value, const Values **items);
+int as_attrs(const Value *value, const Attrs **attrs);
+int build_byte(const Values *args, const Value **value, Failure *failure);
+int build_prepend(const Values *args, const Value **value, Failure *failure);
+int build_field(const Values *args, const Value **value, Failure *failure);
+int apply_plan(Nat mode, Text label, const Values *args, const Value **value, Failure *failure);
+int record_fields(const Texts *fields, const Values *values, const Attrs **attrs, Failure *failure);
+int evaluate_plan(const Plan *selected, const Values *values, const Value **value, Failure *failure);
 
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */

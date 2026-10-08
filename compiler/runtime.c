@@ -274,3 +274,6 @@ Text sHashOf(void) { return text_of_cstring("hashOf"); }
 Text sRefTo(void) { return text_of_cstring("refTo"); }
 Text opsTextQuery(void) { return text_of_cstring("Query"); }
 Text eQueryIndex(void) { return text_of_cstring("this constructor gives a Query of another answer type"); }
+Text kRefKind(void) { return text_of_cstring("kind"); }
+Text kRefHash(void) { return text_of_cstring("hash"); }
+Text kSchemaTag(void) { return text_of_cstring("tag"); }
