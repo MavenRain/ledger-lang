@@ -367,6 +367,91 @@ int data_types(Nat at, const LType *a, Nat bt, const LType *b, const LType *resu
 int parse_type(Fuel fuel, Nat atom, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
                Failure *failure);
 
+/* checker.c (S4: checker.mech lines 1..614). A checked term keeps its type
+   and its value. A unary function argument keeps the parameter name and
+   type, the result type, the body tokens and the scope of the definition.
+   A Parsed answer follows parser.c; check_synthesized takes the synthesized
+   term (the caller passes an error on). sides_of, unary_from and unary_of
+   return 1 and write the answer, or return 0 for none. */
+typedef struct {
+  const LType *type;
+  const Value *value;
+} Typed;
+
+typedef struct {
+  Text name;
+  const LType *type;
+  const LType *result;
+  Tokens body;
+  const Bindings *scope;
+} Unary;
+
+Nat projection_index(Text name);
+const Value *project_value(Nat index, const Value *value);
+int project(Nat position, Nat index, Typed found, Tokens tokens, Typed *result, Tokens *rest, Failure *failure);
+int check_synthesized(Nat position, const LType *expected, Typed found, Tokens tokens, const Value **value,
+                      Tokens *rest, Failure *failure);
+Nat synth_form(Text name);
+Nat structure_form(Text name);
+int sides_of(const LType *ty, const LType **a, Val *lhs, Val *rhs);
+Nat is_neutral_side(Val side);
+Nat dependent_result(const LType *ty);
+Nat dependent_params(const Params *params);
+int refl_check(Nat position, const LType *expected, Tokens tokens, const Value **value, Tokens *rest,
+               Failure *failure);
+int symm_proof(Nat position, Typed found, Tokens tokens, Typed *result, Tokens *rest, Failure *failure);
+int trans_proof(Nat position, Typed left, Typed right, Tokens tokens, Typed *result, Tokens *rest,
+                Failure *failure);
+Binding check_marker(void);
+Nat checking_body(const Bindings *environment);
+const LTypes *param_types(const Params *params);
+Nat is_type_param(Param item);
+Nat has_type_param(const Params *params);
+Nat has_value_param(const Params *params);
+const LType *type_argument(Text name, const Bindings *chosen);
+const LType *subst_type(const Bindings *chosen, const LType *ty);
+const Params *value_params(const Bindings *chosen, const Params *params);
+int type_arguments(Fuel fuel, const Params *params, const Bindings *environment, const Bindings *chosen,
+                   Tokens tokens, const Bindings **result, Tokens *rest, Failure *failure);
+const Bindings *definition_scope(Text name, const Bindings *environment);
+Binding opaque_closure(Text name, const LType *ty);
+Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings *caller);
+const Value *inline_item(Nat kind, Nat position, const Value *payload);
+const Value *inline_token_value(Token token);
+const Values *inline_token_values(Tokens tokens);
+const Values *inline_names(const Params *params);
+const Value *inline_value(const Params *params, Tokens body);
+Nat inline_nat(const Value *value);
+Text inline_text(const Value *value);
+Token inline_token(Nat kind, Nat position, const Value *payload);
+const Values *inline_parts(const Value *value);
+Token inline_token_of(const Values *parts);
+Tokens inline_tokens(const Values *items);
+const Params *inline_params(const Values *names, const Params *params);
+Binding inline_closure(Text name, const LType *ty, const Value *names, const Values *body, const Bindings *caller);
+Fuel type_fuel(Tokens tokens);
+Tokens type_tokens_of(const Value *types);
+const Values *typed_bound(const Params *params, Tokens tokens, Tokens rest, const Values *values);
+Binding bound_binding(const Value *value, Text name, const LType *ty, const Bindings *caller);
+const Bindings *bind_bound(const Values *values, const Params *params, const Bindings *caller,
+                           const Bindings *scope);
+Binding partial_closure(Text name, const LType *ty, Text target, const Values *bound, const Bindings *caller);
+Binding bind_param(Text name, const LType *ty, const Value *value, const Bindings *caller);
+const Bindings *bind_arguments(const Bindings *caller, const Params *params, const Values *values,
+                               const Bindings *environment);
+const Bindings *bind_params(const Params *params, const Values *values, const Bindings *environment);
+Nat bound_functions(const Params *params, const Values *values);
+Nat closes_next(Tokens tokens);
+const Params *front_params(const Params *params);
+const Params *bound_params(const Params *params, const Params *expected);
+const LType *unary_param(Unary op);
+const LType *unary_result(Unary op);
+Tokens unary_body(Unary op);
+const Bindings *unary_environment(Unary op, const Value *value);
+int unary_from(const Bindings *scope, const Params *params, const LType *result, Tokens body, Unary *op);
+int unary_of(const Bindings *scope, const Binding *item, Unary *op);
+int unary_argument(const Bindings *environment, Tokens tokens, Unary *op, Tokens *rest, Failure *failure);
+
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
 int compile_program(Text source, Text *output, Failure *failure);
