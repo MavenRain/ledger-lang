@@ -39,19 +39,30 @@ const Term *term_named(TermTag tag, Nat position, Nat cost, Text name, const Ter
   return make_term((Term){.tag = tag, .position = position, .cost = cost, .name = name, .types = types, .args = args});
 }
 
-const Term *term_call(TermTag tag, Nat position, Nat cost, const Term *callee, const TermTypes *types, const Terms *args) {
+/* TERM_APPLY and TERM_PARTIAL with a callee, and TERM_CONSTRUCT with
+   callee NULL. tokens is the argument span and end the position after the
+   argument list. */
+const Term *term_call(TermTag tag, Nat position, Nat cost, Tokens tokens, Nat end, Text name, const Term *callee,
+                      const TermTypes *types, const Terms *args) {
   return make_term((Term){.tag = tag,
                           .position = position,
                           .cost = cost,
-                          .name = callee->name,
+                          .name = name,
                           .callee = callee,
                           .types = types,
-                          .args = args});
+                          .args = args,
+                          .tokens = tokens,
+                          .end = end});
 }
 
-const Term *term_fun(Nat position, Nat cost, const TermTypes *binders, const Term *body) {
-  return make_term(
-      (Term){.tag = TERM_FUN, .position = position, .cost = cost, .types = binders, .args = terms_item(body, NULL)});
+/* TERM_FUN: tokens is the binder span. */
+const Term *term_fun(Nat position, Nat cost, Tokens tokens, const TermTypes *binders, const Term *body) {
+  return make_term((Term){.tag = TERM_FUN,
+                          .position = position,
+                          .cost = cost,
+                          .types = binders,
+                          .args = terms_item(body, NULL),
+                          .tokens = tokens});
 }
 
 /* TERM_GROUP, TERM_REFL and the keyword forms. */

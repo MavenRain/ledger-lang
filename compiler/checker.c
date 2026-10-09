@@ -1352,11 +1352,10 @@ static const Terms *reverse_terms_onto(const Terms *done, const Terms *terms) {
 }
 
 static const Term *named_term(TermTag tag, Nat position, Text name, const TermTypes *types, const Terms *args,
-                              const Bindings *environment) {
+                              Tokens tokens, Nat end, const Bindings *environment) {
   if (terms_built(args) != 1) return NULL;
-  if (tag == TERM_APPLY || tag == TERM_PARTIAL)
-    return term_call(tag, position, 0, reference_term(position, name, environment), types, args);
-  return term_named(tag, position, 0, name, types, args);
+  const Term *callee = tag == TERM_APPLY || tag == TERM_PARTIAL ? reference_term(position, name, environment) : NULL;
+  return term_call(tag, position, 0, tokens, end, name, callee, types, args);
 }
 
 static const Term *form_term(TermTag tag, Nat position, const Terms *args) {
@@ -1506,8 +1505,10 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         if (!dependent_arguments(more, budget, chosen, environment, item->params, item->params, NULL, after_types,
                                  after_types, &values, &after, &spent, want_terms(term, &args), failure))
           return 0;
-        const Term *applied_term =
-            term != NULL ? named_term(TERM_APPLY, head.position, head.text, types, args, environment) : NULL;
+        const Term *applied_term = term != NULL ? named_term(TERM_APPLY, head.position, head.text, types, args,
+                                                             taken_tokens(tail, after), first_position(after),
+                                                             environment)
+                                                : NULL;
         const LType *instantiated = NULL;
         int resolved = instantiate_result(more, environment, item->params, values, after_types,
                                           subst_type(chosen, item->type), &instantiated);
@@ -1542,8 +1543,10 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         if (!parse_arguments(more, budget, 1, param_types(item->params), environment, tail, &values, &after, &spent,
                              want_terms(term, &args), failure))
           return 0;
-        const Term *applied_term =
-            term != NULL ? named_term(TERM_APPLY, head.position, head.text, NULL, args, environment) : NULL;
+        const Term *applied_term = term != NULL ? named_term(TERM_APPLY, head.position, head.text, NULL, args,
+                                                             taken_tokens(tail, after), first_position(after),
+                                                             environment)
+                                                : NULL;
         if (checking_body(environment) == 1)
           return with_term(worked_typed((Typed){item->type, &null_value}, after, spent, typed, rest, left), term,
                            applied_term);
@@ -1694,8 +1697,9 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
     if (!parse_arguments(more, budget, 1, plan_arguments(&selected), environment, tail, &values, &after, &spent,
                          want_terms(term, &args), failure))
       return 0;
-    const Term *built =
-        term != NULL ? named_term(TERM_CONSTRUCT, head.position, head.text, NULL, args, environment) : NULL;
+    const Term *built = term != NULL ? named_term(TERM_CONSTRUCT, head.position, head.text, NULL, args, (Tokens){0},
+                                                  first_position(after), environment)
+                                     : NULL;
     const Value *made;
     Failure refused;
     if (evaluate_plan(&selected, values, &made, &refused))
@@ -2651,7 +2655,9 @@ int partial_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType 
                            subst_type(chosen, result), environment, tokens, after_types, value, rest, left,
                            want_term(term, &partial), failure);
   return with_term(ok, term,
-                   partial != NULL ? term_call(TERM_PARTIAL, position, 0, partial->callee, types, partial->args) : NULL);
+                   partial != NULL ? term_call(TERM_PARTIAL, position, 0, partial->tokens, partial->end, partial->name,
+                                               partial->callee, types, partial->args)
+                                   : NULL);
 }
 
 int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
@@ -2675,7 +2681,10 @@ int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *
         make_value((Value){.kind = VALUE_ITEMS,
                            .items = values_item(text_value(name), typed_bound(params, tokens, after_types, values))}),
                          after, spent, value, rest, left),
-                     term, term != NULL ? named_term(TERM_PARTIAL, position, name, NULL, args, environment) : NULL);
+                     term,
+                     term != NULL ? named_term(TERM_PARTIAL, position, name, NULL, args, taken_tokens(tokens, after),
+                                               first_position(after), environment)
+                                  : NULL);
   return fail_at(failure, position, eTerm);
 }
 
@@ -2697,8 +2706,9 @@ int inline_argument(Fuel fuel, Nat budget, Nat position, const LType *expected, 
     return 0;
   /* The FUN node, the argument Value and its closure share one TERM_BODY. */
   const Term *carrier = term != NULL ? term_body(taken_tokens(body, after), inner) : NULL;
+  Tokens binder_span = taken_tokens(tokens, body);
   const Term *made = inner != NULL
-                         ? term_fun(position, 0, binder_types(params, taken_tokens(tokens, body), environment), carrier)
+                         ? term_fun(position, 0, binder_span, binder_types(params, binder_span, environment), carrier)
                          : NULL;
   return with_term(
       worked_value(inline_value(params, taken_tokens(body, after), carrier), after, spent, value, rest, left), term, made);
@@ -2935,10 +2945,11 @@ int inline_unary(Fuel fuel, Nat budget, Nat position, const LType *wanted, const
     *op = (Unary){head.text, ty, wanted, taken_tokens(body, after), environment};
     *rest = after;
     *left = spent;
+    Tokens binder_span = taken_tokens(tokens, body);
     return with_term(1, term,
-                     inner != NULL ? term_fun(position, 0,
-                                              binder_types(params_item((Param){head.text, ty}, NULL),
-                                                           taken_tokens(tokens, body), environment),
+                     inner != NULL ? term_fun(position, 0, binder_span,
+                                              binder_types(params_item((Param){head.text, ty}, NULL), binder_span,
+                                                           environment),
                                               inner)
                                    : NULL);
   }
@@ -2974,7 +2985,10 @@ int bound_unary(Fuel fuel, Nat budget, Nat position, Text name, const Params *pa
   *op = shaped;
   *rest = after;
   *left = spent;
-  return with_term(1, term, term != NULL ? named_term(TERM_PARTIAL, position, name, types, args, environment) : NULL);
+  return with_term(1, term,
+                   term != NULL ? named_term(TERM_PARTIAL, position, name, types, args, taken_tokens(tokens, after),
+                                             first_position(after), environment)
+                                : NULL);
 }
 
 int stepper_term(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment, Tokens tokens,
@@ -3073,9 +3087,9 @@ int inline_stepper(Fuel fuel, Nat budget, Nat position, Nat mode, const LType *e
   if (!parse_term(more, budget, 0, result, bind_params(params, NULL, bindings_item(check_marker(), environment)), body,
                   &value, &after, &spent, want_term(term, &inner), failure))
     return 0;
-  const Term *made = inner != NULL ? term_fun(position, 0,
-                                              binder_types(params, taken_tokens(tokens, body), environment), inner)
-                                   : NULL;
+  Tokens binder_span = taken_tokens(tokens, body);
+  const Term *made =
+      inner != NULL ? term_fun(position, 0, binder_span, binder_types(params, binder_span, environment), inner) : NULL;
   return with_term(
       worked_stepper((Stepper){params, result, taken_tokens(body, after), environment}, after, spent, op, rest, left),
       term, made);
@@ -3106,7 +3120,9 @@ int bound_stepper(Fuel fuel, Nat budget, Nat position, Text name, const Params *
     return fail_at(failure, position, eTerm);
   Binding made = partial_closure(name, arrow_type(drop_params(values_length(values), formal), subst_type(chosen, result)),
                                  name, typed_bound(params, tokens, after_types, values), environment);
-  const Term *called = term != NULL ? named_term(TERM_PARTIAL, position, name, types, args, environment) : NULL;
+  const Term *called = term != NULL ? named_term(TERM_PARTIAL, position, name, types, args, taken_tokens(tokens, after),
+                                                 first_position(after), environment)
+                                    : NULL;
   switch (made.kind) {
   case BIND_VALUE: return fail_at(failure, position, eStep);
   case BIND_TYPE: return fail_at(failure, position, eStep);

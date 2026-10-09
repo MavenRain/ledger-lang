@@ -114,7 +114,8 @@ static void test_term(void) {
                        term_named(TERM_NAME, 0, 1, text("xs"), NULL, NULL),
                        term_named(TERM_APPLY, 0, 1, text("f"), nat_types, one(n)),
                        term_named(TERM_PARTIAL, 0, 1, text("f"), nat_types, one(n)),
-                       term_fun(0, 1, term_types_item((TermType){text("x"), 0, &nat, nat_source}, NULL), n),
+                       term_fun(0, 1, (Tokens){0},
+                                term_types_item((TermType){text("x"), 0, &nat, nat_source}, NULL), n),
                        term_named(TERM_CONSTRUCT, 0, 1, text("some"), NULL, one(n)),
                        term_form(TERM_REFL, 0, 1, NULL),
                        term_form(TERM_FIRST, 0, 1, one(n)),
@@ -162,7 +163,7 @@ static void test_term(void) {
                     term_named(TERM_APPLY, 0, 1, text("f"), txt_types, one(n))));
   assert(!same_term(term_named(TERM_APPLY, 0, 1, text("f"), NULL, one(n)),
                     term_named(TERM_APPLY, 0, 1, text("f"), NULL, terms_item(n, one(n)))));
-  assert(!same_term(term_fun(0, 1, nat_types, n), term_fun(0, 1, txt_types, n)));
+  assert(!same_term(term_fun(0, 1, (Tokens){0}, nat_types, n), term_fun(0, 1, (Tokens){0}, txt_types, n)));
   assert(!same_term(term_form(TERM_FOLD, 0, 1, one(n)), term_form(TERM_FOLD_VALUE, 0, 1, one(n))));
 
   /* term_text gives tokens_text of the source. Tokens:
@@ -179,7 +180,7 @@ static void test_term(void) {
                       term_types_item((TermType){text("acc"), folded.items[9].position, &nat, slice(folded, 11, 12)},
                                       NULL));
   const Term *body = term_named(TERM_APPLY, folded.items[14].position, 1, text("add"), NULL, terms_item(x, one(acc)));
-  const Term *function = term_form(TERM_GROUP, 5, 1, one(term_fun(6, 1, binders, body)));
+  const Term *function = term_form(TERM_GROUP, 5, 1, one(term_fun(6, 1, (Tokens){0}, binders, body)));
   const Term *fold = term_form(TERM_FOLD, 0, 1,
                                terms_item(function, terms_item(term_number(46, 1, 0),
                                                                one(term_named(TERM_NAME, 48, 1, text("xs"), NULL, NULL)))));
@@ -243,9 +244,10 @@ static const Term *nested_body(const LType *nat, Tokens nat_source, Nat w, Nat z
   const Term *outer_pick =
       term_named(TERM_APPLY, 0, 0, text("pickK"), NULL,
                  terms_item(term_var(0, 0, text("k"), 0), one(term_form(TERM_GROUP, 0, 0, one(inner_pick)))));
-  const Term *inner_fun = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, zs, outer_pick)));
+  const Term *inner_fun = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, (Tokens){0}, zs, outer_pick)));
   const Term *outer_fun = term_form(
-      TERM_GROUP, 0, 0, one(term_fun(0, 0, yw, term_named(TERM_APPLY, 0, 0, text("useOne"), NULL, one(inner_fun)))));
+      TERM_GROUP, 0, 0,
+      one(term_fun(0, 0, (Tokens){0}, yw, term_named(TERM_APPLY, 0, 0, text("useOne"), NULL, one(inner_fun)))));
   return term_named(TERM_APPLY, 0, 0, text("useTwo"), NULL, one(outer_fun));
 }
 
@@ -351,7 +353,7 @@ static const Term *map_body(const LType *nat, Tokens nat_source, Nat y) {
   const TermTypes *binders = term_types_item((TermType){text("y"), 0, nat, nat_source}, NULL);
   const Term *pick = term_named(TERM_APPLY, 0, 0, text("pickK"), NULL,
                                 terms_item(term_var(0, 0, text("k"), 0), one(term_var(0, 0, text("y"), y))));
-  const Term *function = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, binders, pick)));
+  const Term *function = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, (Tokens){0}, binders, pick)));
   return term_form(TERM_MAP, 0, 0, terms_item(function, one(term_var(0, 0, text("ys"), 1))));
 }
 
@@ -362,7 +364,7 @@ static const Term *fold_body(const LType *nat, Tokens nat_source, Nat acc) {
                                              term_types_item((TermType){text("acc"), 0, nat, nat_source}, NULL));
   const Term *pick = term_named(TERM_APPLY, 0, 0, text("pickK"), NULL,
                                 terms_item(term_var(0, 0, text("k"), 0), one(term_var(0, 0, text("acc"), acc))));
-  const Term *function = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, binders, pick)));
+  const Term *function = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, (Tokens){0}, binders, pick)));
   return term_form(TERM_FOLD, 0, 0,
                    terms_item(function, terms_item(term_number(0, 0, 0),
                                                    one(term_named(TERM_NAME, 0, 0, text("xs"), NULL, NULL)))));
@@ -454,6 +456,58 @@ static Nat check_fun_positions(const Term *term, Tokens body) {
   if (term->callee != NULL) count += check_fun_positions(term->callee, body);
   for (const Terms *args = term->args; args != NULL; args = args->tail)
     count += check_fun_positions(args->head, body);
+  return count;
+}
+
+/* D3-s5 part A. The span of an APPLY or a PARTIAL starts after the head
+   name; the head name and the span give term_text. The binder span of a FUN
+   starts after fun and stops at the body. end is the position of the first
+   token after the argument list. The parse input of a body can continue
+   after the body span, so at the end of a body end is 0 or the position of
+   the token after the body. */
+typedef struct {
+  Nat calls;
+  Nat funs;
+  Nat ends;
+} SpanCount;
+
+static SpanCount add_spans(SpanCount left, SpanCount right) {
+  return (SpanCount){left.calls + right.calls, left.funs + right.funs, left.ends + right.ends};
+}
+
+static SpanCount check_spans(const Term *term, Tokens body) {
+  SpanCount count = {0, 0, 0};
+  const Token *limit = body.items + body.size;
+  if (term->tag == TERM_APPLY || term->tag == TERM_PARTIAL) {
+    const Token *head = term->tokens.items - 1;
+    const Token *next = term->tokens.items + term->tokens.size;
+    assert(head >= body.items && next <= limit && head->position == term->position);
+    assert(same_text(tokens_text((Tokens){head, term->tokens.size + 1}), term_text(term)));
+    assert(term->end == (next < limit || term->end != 0 ? next->position : 0));
+    count = add_spans(count, (SpanCount){term->args != NULL ? 1 : 0, 0, term->end != 0 ? 1 : 0});
+  }
+  if (term->tag == TERM_CONSTRUCT) {
+    Nat at = 0;
+    for (; at < body.size && body.items[at].position != term->position; at++) {}
+    assert(at < body.size);
+    if (term->args == NULL)
+      assert(term->end == (at + 1 < body.size || term->end != 0 ? body.items[at + 1].position : 0));
+    else assert(term->end == 0 || term->end > term->position);
+  }
+  if (term->tag == TERM_FUN) {
+    const Token *fun = term->tokens.items - 1;
+    const Token *next = term->tokens.items + term->tokens.size;
+    assert(fun >= body.items && next < limit && fun->position == term->position && same_text(fun->text, text("fun")));
+    assert(next->position == term->args->head->position);
+    TextBuilder whole = builder_new();
+    builder_append(&whole, tokens_text((Tokens){fun, term->tokens.size + 1}));
+    builder_append(&whole, term_text(term->args->head));
+    assert(same_text(builder_text(&whole), term_text(term)));
+    count = add_spans(count, (SpanCount){0, 1, 0});
+  }
+  if (term->callee != NULL) count = add_spans(count, check_spans(term->callee, body));
+  for (const Terms *args = term->args; args != NULL; args = args->tail)
+    count = add_spans(count, check_spans(args->head, body));
   return count;
 }
 
@@ -706,13 +760,18 @@ static void test_term_evaluator(void) {
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
 
-  /* D3-s4 part A: the term of a BIND_FUN is the TERM_BODY of its body span. */
+  /* D3-s4 part A: the term of a BIND_FUN is the TERM_BODY of its body span.
+     D3-s5 part A: the spans and end of the nodes of each body. */
+  SpanCount spans = {0, 0, 0};
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
     const Term *carrier = item->head.term;
     assert(carrier->tag == TERM_BODY);
-    if (carrier->callee != NULL) assert(same_text(term_text(carrier), tokens_text(term_tokens(item->head.term))));
+    if (carrier->callee == NULL) continue;
+    assert(same_text(term_text(carrier), tokens_text(term_tokens(item->head.term))));
+    spans = add_spans(spans, check_spans(carrier->callee, term_tokens(carrier)));
   }
+  assert(spans.calls > 0 && spans.funs > 0 && spans.ends > 0);
   /* An inline argument Value at check time keeps the TERM_BODY of the FUN
      node, and its closure keeps the same pointer. The argument tokens start
      after fun, as at the call in parse_term. The type is One (the g of mapV). */

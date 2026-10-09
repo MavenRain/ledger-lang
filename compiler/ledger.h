@@ -751,10 +751,15 @@ typedef enum {
    TERM_FUN keeps the
    binders in types and the body as the one item of args. TERM_GROUP keeps
    the inner term as the one item of args. TERM_REFL and the keyword forms
-   keep their arguments in args, in source order. TERM_BODY keeps the
-   source span of a body in tokens (a view into the token array of the
-   lexer) and the body term in callee (NULL when parse_term built no term);
-   its position is the first body token. A list of terms; NULL is the end. */
+   keep their arguments in args, in source order. TERM_BODY keeps the body
+   term in callee (NULL when parse_term built no term); its position is the
+   first body token. tokens is a view into the token array of the lexer:
+   the argument span on TERM_APPLY and TERM_PARTIAL (the tokens after the
+   head name to the end of the argument list, the type arguments first),
+   the binder span on TERM_FUN (the tokens after fun up to the body) and
+   the body span on TERM_BODY. end is the position of the first token after
+   the argument list on TERM_APPLY, TERM_PARTIAL and TERM_CONSTRUCT (0 when
+   no token follows). A list of terms; NULL is the end. */
 typedef struct Term Term;
 typedef struct Terms Terms;
 struct Term {
@@ -768,6 +773,7 @@ struct Term {
   const TermTypes *types;
   const Terms *args;
   Tokens tokens;
+  Nat end;
 };
 
 struct Terms {
@@ -776,8 +782,12 @@ struct Terms {
 };
 
 /* term.c: constructors on the arena, structural equality and the printer.
-   same_term ignores the position, the cost and the names of parameters and
-   binders. term_text gives the tokens_text of the source of the term.
+   same_term ignores the position, the cost, the spans, end and the names of
+   parameters and binders. term_text gives the tokens_text of the source of
+   the term; it does not read the spans or end. term_named makes a node with
+   no callee, no span and end 0. term_call makes TERM_APPLY and TERM_PARTIAL
+   with a callee, and TERM_CONSTRUCT with callee NULL, with the argument
+   span and end. term_fun takes the binder span.
    term_body makes the TERM_BODY of a body span: its cost and term_text are
    those of the callee (empty text for NULL), and same_term compares it as
    its callee. term_tokens gives the span of a TERM_BODY, else no tokens. */
@@ -787,8 +797,9 @@ const Term *term_number(Nat position, Nat cost, Nat number);
 const Term *term_string(Nat position, Nat cost, Text text);
 const Term *term_var(Nat position, Nat cost, Text name, Nat index);
 const Term *term_named(TermTag tag, Nat position, Nat cost, Text name, const TermTypes *types, const Terms *args);
-const Term *term_call(TermTag tag, Nat position, Nat cost, const Term *callee, const TermTypes *types, const Terms *args);
-const Term *term_fun(Nat position, Nat cost, const TermTypes *binders, const Term *body);
+const Term *term_call(TermTag tag, Nat position, Nat cost, Tokens tokens, Nat end, Text name, const Term *callee,
+                      const TermTypes *types, const Terms *args);
+const Term *term_fun(Nat position, Nat cost, Tokens tokens, const TermTypes *binders, const Term *body);
 const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args);
 Nat same_term(const Term *left, const Term *right);
 Nat same_terms(const Terms *left, const Terms *right);
