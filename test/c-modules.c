@@ -695,7 +695,12 @@ static void test_term_evaluator(void) {
       "def mapC : (g : Two) -> (k : Nat) -> (ys : List Nat) -> List Nat := "
       "fun (g : Two) (k : Nat) (ys : List Nat) => map (g k) ys\n"
       "def foldC : (g : PushK) -> (k : Nat) -> (ys : List Nat) -> List Nat := "
-      "fun (g : PushK) (k : Nat) (ys : List Nat) => fold (g k) nil ys\n";
+      "fun (g : PushK) (k : Nat) (ys : List Nat) => fold (g k) nil ys\n"
+      "def twiceF : (k : Nat) -> (n : Nat) -> Nat := "
+      "fun (k : Nat) (n : Nat) => twice (fun (y : Nat) => pickK k y) n\n"
+      "def twiceP : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice (pickK k) n\n"
+      "def twiceT : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice (constA Nat k) n\n"
+      "def twiceN : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice size n\n";
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
@@ -887,6 +892,55 @@ static void test_term_evaluator(void) {
   assert(same_text(body_at(environment, "viaNat", "4 7", 1000, 1000).value, text("7")));
   Fuel margin = term_text(fun_named(environment, "viaNat")->term).size + 2;
   assert(body_at(environment, "viaNat", "4 7", margin, 1000).eval == 0);
+
+  /* D3-s4 part C: a FUN or a PARTIAL argument at an arrow expected type in
+     the body (the checked tree). Each row gives the value at fuel 1000 by
+     eval_term, thus the replay count is 0. twiceP gives the same answer at
+     each point of the grid. twiceF can differ near the margin of the inline
+     fun: the token path reads the binder tokens with fuel. */
+  const struct {
+    const char *name;
+    Nat exact;
+  } arrow_rows[] = {{"twiceF", 0}, {"twiceP", 1}};
+  Nat replays = 0;
+  for (Nat i = 0; i < sizeof arrow_rows / sizeof arrow_rows[0]; i++) {
+    GridCount count = body_grid(environment, arrow_rows[i].name, "4 7");
+    assert(count.worked > 0 && (arrow_rows[i].exact == 0 || count.differ == 0));
+    BothPaths full = body_at(environment, arrow_rows[i].name, "4 7", 1000, 1000);
+    assert(same_text(full.value, text("4")));
+    replays += full.eval != 1;
+  }
+  assert(replays == 0);
+
+  /* The closure by term. The argument is a GROUP (the atom rule). A FUN
+     gives a Value with the TERM_BODY of the FUN node. A PARTIAL gives the
+     name and the bound values. */
+  const Value *arrow_value;
+  Nat arrow_left;
+  const Binding *fun_item = fun_named(environment, "twiceF");
+  const Term *fun_group = fun_item->term->callee->args->head;
+  const Term *fun_node = fun_group->args->head;
+  assert(fun_group->tag == TERM_GROUP && fun_node->tag == TERM_FUN);
+  assert(eval_term(1000, 1000, one_type, call_scope(environment, fun_item, "4 7"), fun_group, &arrow_value,
+                   &arrow_left) == 1);
+  assert(arrow_value->term == fun_node->args->head);
+  const Binding *partial_item = fun_named(environment, "twiceP");
+  const Term *partial_group = partial_item->term->callee->args->head;
+  assert(partial_group->tag == TERM_GROUP && partial_group->args->head->tag == TERM_PARTIAL);
+  assert(eval_term(1000, 1000, one_type, call_scope(environment, partial_item, "4 7"), partial_group, &arrow_value,
+                   &arrow_left) == 1);
+  assert(arrow_value->kind == VALUE_ITEMS && arrow_value->items->head->kind == VALUE_TEXT);
+  assert(same_text(arrow_value->items->head->text, text("pickK")));
+
+  /* Fallback: at the margin of the inline fun, a typed partial and a NAME
+     argument (Q-S4-4), eval_term gives 0 and the token path gives the value. */
+  BothPaths fun_margin = body_at(environment, "twiceF", "4 7", term_text(fun_node).size + 2, 1000);
+  assert(fun_margin.eval == 0);
+  assert(fun_margin.parse == 1);
+  BothPaths typed_arrow = body_at(environment, "twiceT", "4 7", 1000, 1000);
+  assert(typed_arrow.eval == 0 && typed_arrow.parse == 1);
+  BothPaths name_arrow = body_at(environment, "twiceN", "4 7", 1000, 1000);
+  assert(name_arrow.eval == 0 && name_arrow.parse == 1);
 }
 
 int main(void) {

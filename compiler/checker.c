@@ -1712,9 +1712,9 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
    synth_term with a Term in place of the tokens: the same helpers, the same
    fuel steps and the same work charges in the same order. It reports no
    failure. It gives 0 (the caller replays the tokens) when the budget is 0
-   at the entry of a node, for an arrow expected type (Q-S3-4), for a
-   dependent callee, at the fuel margin of the type arguments (Q-S3-3) and
-   for the keyword forms (part B). */
+   at the entry of a node, for an arrow expected type other than a FUN or
+   PARTIAL argument (Q-S4-4), for a dependent callee, at the fuel margin of
+   the type arguments (Q-S3-3) and for the keyword forms (part B). */
 static const Tokens no_tokens = {NULL, 0};
 
 static int eval_worked(const Value *found, Nat budget, const Value **value, Nat *left) {
@@ -2491,9 +2491,82 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   return 0;
 }
 
+/* 1 for the tags that eval_term takes at an arrow expected type: a FUN or a
+   PARTIAL argument and the GROUP around it (the atom rule). NAME and VAR
+   give 0 (Q-S4-4). */
+static Nat arrow_tag(const Term *term) {
+  switch (term->tag) {
+  case TERM_GROUP:
+  case TERM_FUN:
+  case TERM_PARTIAL: return 1;
+  case TERM_NUMBER:
+  case TERM_STRING:
+  case TERM_VAR:
+  case TERM_NAME:
+  case TERM_APPLY:
+  case TERM_CONSTRUCT:
+  case TERM_REFL:
+  case TERM_FIRST:
+  case TERM_SECOND:
+  case TERM_SYMM:
+  case TERM_TRANS:
+  case TERM_EITHER:
+  case TERM_PURE:
+  case TERM_MAP:
+  case TERM_BIND:
+  case TERM_FILTER:
+  case TERM_FOLD:
+  case TERM_FOLD_VALUE:
+  case TERM_UNFOLD:
+  case TERM_UNFOLD_VALUE:
+  case TERM_BODY: return 0;
+  }
+  return 0;
+}
+
+/* inline_argument on a FUN term. The token path reads the binder tokens with
+   fuel, thus the margin rule of eval_inline_unary. The body walk is in check
+   mode with its charge. The Value keeps the TERM_BODY of the FUN node. */
+static int eval_inline_argument(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
+                                const Term *term, const Value **value, Nat *left) {
+  if (fuel == 0 || fuel <= term_text(term).size + 2) return 0;
+  Fuel more = fuel - 1;
+  const Term *body = first_arg(term);
+  const Params *params;
+  if (body == NULL || body->tag != TERM_BODY || !binder_params(environment, term->types, &params)) return 0;
+  if (same_type(expected, arrow_type(params, arrow_result(expected))) != 1) return 0;
+  const Value *checked;
+  Nat spent;
+  if (!eval_term(more, budget, arrow_result(expected),
+                 bind_params(params, NULL, bindings_item(check_marker(), environment)), body, &checked, &spent))
+    return 0;
+  return eval_worked(inline_value(params, term_tokens(body), body), spent, value, left);
+}
+
+/* partial_argument and prefix_argument on a PARTIAL term: one fuel step
+   each, then eval_arguments (parse_arguments in mode 1). */
+static int eval_partial_argument(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
+                                 const Term *term, const Value **value, Nat *left) {
+  const Binding *item;
+  if (fuel <= 1 || !lookup(term->name, environment, &item) || partial_callee(item) == 0) return 0;
+  const Params *params = item->params;
+  const LType *result = item->type;
+  if (same_type(expected, arrow_type(params, result)) == 1 || dependent_result(result) == 1 ||
+      dependent_params(params) == 1 || has_type_param(params) == 1)
+    return 0;
+  const Params *bound = bound_params(params, arrow_params(expected));
+  if (same_type(expected, arrow_type(drop_params(params_length(bound), params), result)) != 1) return 0;
+  const Values *values;
+  Nat spent;
+  if (!eval_arguments(fuel - 2, budget, param_types(bound), environment, term->args, &values, &spent)) return 0;
+  if (bound_functions(bound, values) == 0) return 0;
+  return eval_worked(make_value((Value){.kind = VALUE_ITEMS, .items = values_item(text_value(term->name), values)}),
+                     spent, value, left);
+}
+
 int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
               const Value **value, Nat *left) {
-  if (term == NULL || fuel == 0 || budget == 0 || is_arrow_type(expected) == 1) return 0;
+  if (term == NULL || fuel == 0 || budget == 0 || (is_arrow_type(expected) == 1 && arrow_tag(term) == 0)) return 0;
   Fuel more = fuel - 1;
   Tokens rest;
   Failure failure;
@@ -2544,7 +2617,9 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_UNFOLD: return eval_unfold(more, budget, expected, environment, term, value, left);
   case TERM_UNFOLD_VALUE: return eval_unfold_value(more, budget, expected, environment, term, value, left);
   case TERM_PARTIAL:
-  case TERM_FUN: return 0;
+    return is_arrow_type(expected) == 1 && eval_partial_argument(more, budget, expected, environment, term, value, left);
+  case TERM_FUN:
+    return is_arrow_type(expected) == 1 && eval_inline_argument(more, budget, expected, environment, term, value, left);
   /* A TERM_BODY takes no fuel step and no charge (the token path has no node for it). */
   case TERM_BODY: return eval_term(fuel, budget, expected, environment, term->callee, value, left);
   }
