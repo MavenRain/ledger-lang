@@ -275,7 +275,7 @@ static void test_definitions(void) {
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
     assert(item->head.term != NULL);
-    assert(same_text(term_text(item->head.term), tokens_text(item->head.body)));
+    assert(same_text(term_text(item->head.term), tokens_text(term_tokens(item->head.term))));
     checked++;
   }
   assert(checked == 7);
@@ -335,7 +335,7 @@ static void test_function_references(void) {
   assert(passed->args->head->tag == TERM_VAR && passed->args->head->index == 0);
   for (const Bindings *item = environment; item != NULL; item = item->tail)
     if (item->head.kind == BIND_FUN)
-      assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(item->head.body)));
+      assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(term_tokens(item->head.term))));
 }
 
 /* The number of terms in a list. */
@@ -406,7 +406,7 @@ static void test_keyword_definitions(void) {
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
     assert(item->head.term != NULL);
-    assert(same_text(term_text(item->head.term), tokens_text(item->head.body)));
+    assert(same_text(term_text(item->head.term), tokens_text(term_tokens(item->head.term))));
     checked++;
   }
   assert(checked == 18);
@@ -481,8 +481,8 @@ static void test_keyword_positions(void) {
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
     assert(item->head.term != NULL);
-    assert(same_text(term_text(item->head.term), tokens_text(item->head.body)));
-    count += check_fun_positions(item->head.term, item->head.body);
+    assert(same_text(term_text(item->head.term), tokens_text(term_tokens(item->head.term))));
+    count += check_fun_positions(item->head.term, term_tokens(item->head.term));
   }
   assert(count == 10);
 }
@@ -517,7 +517,7 @@ static void test_type_references(void) {
   assert(same_term(body_term(environment, "partialA"), body_term(environment, "partialB")));
   for (const Bindings *item = environment; item != NULL; item = item->tail)
     if (item->head.kind == BIND_FUN)
-      assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(item->head.body)));
+      assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(term_tokens(item->head.term))));
 }
 
 /* The binding of the function name, or NULL. */
@@ -565,7 +565,8 @@ static BothPaths both_paths(const Bindings *scope, const Binding *item, Fuel fue
   Tokens rest;
   Nat parse_left = 0;
   Failure failure;
-  int parse = parse_term(fuel, budget, 0, item->type, scope, item->body, &parse_value, &rest, &parse_left, NULL, &failure);
+  int parse = parse_term(fuel, budget, 0, item->type, scope, term_tokens(item->term), &parse_value, &rest, &parse_left,
+                         NULL, &failure);
   if (eval == 1) {
     assert(parse == 1 && eval_left == parse_left);
     assert(same_text(printed(eval_value), printed(parse_value)));
@@ -710,8 +711,7 @@ static void test_term_evaluator(void) {
     if (item->head.kind != BIND_FUN) continue;
     const Term *carrier = item->head.term;
     assert(carrier->tag == TERM_BODY);
-    assert(term_tokens(carrier).items == item->head.body.items && term_tokens(carrier).size == item->head.body.size);
-    if (carrier->callee != NULL) assert(same_text(term_text(carrier), tokens_text(item->head.body)));
+    if (carrier->callee != NULL) assert(same_text(term_text(carrier), tokens_text(term_tokens(item->head.term))));
   }
   /* An inline argument Value at check time keeps the TERM_BODY of the FUN
      node, and its closure keeps the same pointer. The argument tokens start
@@ -731,13 +731,11 @@ static void test_term_evaluator(void) {
   assert(argument->term != NULL && argument->term == made->args->head);
   Binding closure = bound_binding(argument, text("g"), one_type, environment);
   assert(closure.kind == BIND_CLOSURE && closure.term == argument->term);
-  assert(closure.body.items == term_tokens(argument->term).items);
-  assert(closure.body.size == term_tokens(argument->term).size);
   Value replayed = *argument;
   replayed.term = NULL;
   Binding decoded = bound_binding(&replayed, text("g"), one_type, environment);
   assert(decoded.kind == BIND_CLOSURE && decoded.term->tag == TERM_BODY && decoded.term->callee == NULL);
-  assert(decoded.body.size == closure.body.size);
+  assert(term_tokens(decoded.term).size == term_tokens(closure.term).size);
 
   const char *exact[] = {"pickK", "twoList", "label", "grouped", "deep"};
   for (Nat i = 0; i < sizeof exact / sizeof exact[0]; i++) {
@@ -852,8 +850,8 @@ static void test_term_evaluator(void) {
   const Value *starved_value;
   Tokens starved_rest;
   Nat starved_left;
-  assert(parse_term(1000, 1, 0, mapped->type, three, mapped->body, &starved_value, &starved_rest, &starved_left,
-                    NULL, &failure) == 0);
+  assert(parse_term(1000, 1, 0, mapped->type, three, term_tokens(mapped->term), &starved_value, &starved_rest,
+                    &starved_left, NULL, &failure) == 0);
   assert(failure.position == (Nat)(strstr(source, "=> pickK k y) ys") + 3 - source) &&
          same_text(failure.message, eBudget));
 
@@ -871,8 +869,8 @@ static void test_term_evaluator(void) {
   const Binding *folded = fun_named(environment, "foldF");
   const Bindings *three_folded = call_scope(environment, folded, "4 (cons 1 (cons 2 (cons 3 nil)))");
   assert(both_paths(three_folded, folded, 1000, 1).eval == 0);
-  assert(parse_term(1000, 1, 0, folded->type, three_folded, folded->body, &starved_value, &starved_rest,
-                    &starved_left, NULL, &failure) == 0);
+  assert(parse_term(1000, 1, 0, folded->type, three_folded, term_tokens(folded->term), &starved_value,
+                    &starved_rest, &starved_left, NULL, &failure) == 0);
   assert(failure.position == (Nat)(strstr(source, "=> cons y a) nil ys") + 3 - source) &&
          same_text(failure.message, eBudget));
 
@@ -882,8 +880,8 @@ static void test_term_evaluator(void) {
   const Binding *valued = fun_named(environment, "foldValue");
   const Bindings *nine = call_scope(environment, valued, "4 (valueNat 9)");
   assert(both_paths(nine, valued, 8, 1000).eval == 0);
-  assert(parse_term(8, 1000, 0, valued->type, nine, valued->body, &starved_value, &starved_rest, &starved_left,
-                    NULL, &failure) == 0);
+  assert(parse_term(8, 1000, 0, valued->type, nine, term_tokens(valued->term), &starved_value, &starved_rest,
+                    &starved_left, NULL, &failure) == 0);
   assert(failure.position == (Nat)(strstr(source, "(fun (b : Flag) => 1)") + 1 - source));
 
   /* Type arguments: eval 1 gives parse 1 on the grid, and the margin is

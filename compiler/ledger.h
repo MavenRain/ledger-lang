@@ -305,7 +305,6 @@ typedef struct {
   const Value *value;
   const LType *defined;
   const Params *params;
-  Tokens body;
   const struct Term *term;
   const Bindings *scope;
 } Binding;

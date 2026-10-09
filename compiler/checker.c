@@ -71,10 +71,9 @@ static Binding type_binding(Text name, const LType *universe, const LType *defin
   return (Binding){.kind = BIND_TYPE, .name = name, .type = universe, .defined = defined};
 }
 
-static Binding closure_binding(Text name, const Params *params, const LType *result, Tokens body, const Term *term,
+static Binding closure_binding(Text name, const Params *params, const LType *result, const Term *term,
                                const Bindings *scope) {
-  return (Binding){
-      .kind = BIND_CLOSURE, .name = name, .type = result, .params = params, .body = body, .term = term, .scope = scope};
+  return (Binding){.kind = BIND_CLOSURE, .name = name, .type = result, .params = params, .term = term, .scope = scope};
 }
 
 static Nat params_length(const Params *params) {
@@ -335,7 +334,7 @@ const Bindings *definition_scope(Text name, const Bindings *environment) {
 }
 
 Binding opaque_closure(Text name, const LType *ty) {
-  return closure_binding(name, arrow_params(ty), arrow_result(ty), (Tokens){0}, NULL, NULL);
+  return closure_binding(name, arrow_params(ty), arrow_result(ty), NULL, NULL);
 }
 
 Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings *caller) {
@@ -347,9 +346,9 @@ Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings 
   case BIND_ARROW:
     return opaque_closure(name, ty);
   case BIND_FUN:
-    return closure_binding(name, item->params, item->type, item->body, item->term, definition_scope(item->name, caller));
+    return closure_binding(name, item->params, item->type, item->term, definition_scope(item->name, caller));
   case BIND_CLOSURE:
-    return closure_binding(name, item->params, item->type, item->body, item->term, item->scope);
+    return closure_binding(name, item->params, item->type, item->term, item->scope);
   }
   return opaque_closure(name, ty);
 }
@@ -438,7 +437,7 @@ const Params *inline_params(const Values *names, const Params *params) {
 Binding inline_closure(Text name, const LType *ty, const Value *value, const Bindings *caller) {
   const Term *term = value->term != NULL ? value->term : term_body(inline_tokens(value->items->tail), NULL);
   return closure_binding(name, inline_params(inline_parts(value->items->head), arrow_params(ty)), arrow_result(ty),
-                         term_tokens(term), term, caller);
+                         term, caller);
 }
 
 Fuel type_fuel(Tokens tokens) { return (Fuel)tokens.size + 1; }
@@ -457,7 +456,7 @@ const Values *typed_bound(const Params *params, Tokens tokens, Tokens rest, cons
 }
 
 static Binding typed_closure(const Values *rest, Text name, const LType *ty, Text other, const Params *params,
-                             const LType *result, Tokens body, const Term *term, const Bindings *caller);
+                             const LType *result, const Term *term, const Bindings *caller);
 
 /* A partial application `(g a1 .. ak)` binds the first k parameters of g in
    the scope of the closure. Recursion follows the checked values. */
@@ -477,11 +476,11 @@ Binding bound_binding(const Value *value, Text name, const LType *ty, const Bind
     return opaque_closure(name, ty);
   case BIND_FUN:
     if (has_type_param(item->params))
-      return typed_closure(rest, name, ty, item->name, item->params, item->type, item->body, item->term, caller);
-    return closure_binding(name, drop_params(values_length(rest), item->params), item->type, item->body, item->term,
+      return typed_closure(rest, name, ty, item->name, item->params, item->type, item->term, caller);
+    return closure_binding(name, drop_params(values_length(rest), item->params), item->type, item->term,
                            bind_bound(rest, item->params, caller, definition_scope(item->name, caller)));
   case BIND_CLOSURE:
-    return closure_binding(name, drop_params(values_length(rest), item->params), item->type, item->body, item->term,
+    return closure_binding(name, drop_params(values_length(rest), item->params), item->type, item->term,
                            bind_bound(rest, item->params, caller, item->scope));
   }
   return opaque_closure(name, ty);
@@ -502,7 +501,7 @@ const Bindings *bind_bound(const Values *values, const Params *params, const Bin
 /* The closure of a function with type parameters binds the type arguments
    in front of the definition scope, as an application does. */
 static Binding typed_closure(const Values *rest, Text name, const LType *ty, Text other, const Params *params,
-                             const LType *result, Tokens body, const Term *term, const Bindings *caller) {
+                             const LType *result, const Term *term, const Bindings *caller) {
   const Bindings *chosen;
   Tokens after;
   Failure ignored;
@@ -512,7 +511,7 @@ static Binding typed_closure(const Values *rest, Text name, const LType *ty, Tex
   if (!type_arguments(type_fuel(types), params, caller, NULL, types, &chosen, &after, NULL, &ignored))
     return opaque_closure(name, ty);
   const Params *formal = value_params(chosen, params);
-  return closure_binding(name, drop_params(values_length(values), formal), subst_type(chosen, result), body, term,
+  return closure_binding(name, drop_params(values_length(values), formal), subst_type(chosen, result), term,
                          bind_bound(values, formal, caller,
                                     reverse_bindings_onto(definition_scope(other, caller), chosen)));
 }
@@ -593,9 +592,9 @@ int unary_of(const Bindings *scope, const Binding *item, Unary *op) {
   case BIND_ARROW:
     return 0;
   case BIND_FUN:
-    return unary_from(scope, item->params, item->type, item->body, op);
+    return unary_from(scope, item->params, item->type, term_tokens(item->term), op);
   case BIND_CLOSURE:
-    return unary_from(item->scope, item->params, item->type, item->body, op);
+    return unary_from(item->scope, item->params, item->type, term_tokens(item->term), op);
   }
   return 0;
 }
@@ -779,9 +778,9 @@ int stepper_argument(const Bindings *environment, Tokens tokens, Stepper *op, To
   switch (item->kind) {
   case BIND_FUN:
     if (has_type_param(item->params)) return fail_at(failure, head.position, eStep);
-    *op = (Stepper){item->params, item->type, item->body, definition_scope(item->name, environment)};
+    *op = (Stepper){item->params, item->type, term_tokens(item->term), definition_scope(item->name, environment)};
     break;
-  case BIND_CLOSURE: *op = (Stepper){item->params, item->type, item->body, item->scope}; break;
+  case BIND_CLOSURE: *op = (Stepper){item->params, item->type, term_tokens(item->term), item->scope}; break;
   case BIND_VALUE: return fail_at(failure, head.position, eStep);
   case BIND_TYPE: return fail_at(failure, head.position, eStep);
   case BIND_ARROW: return fail_at(failure, head.position, eStep);
@@ -1529,7 +1528,8 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         if (item->term != NULL && eval_term(more, nat_sub(spent, 1), applied, scope, item->term, &value, &used))
           return with_term(worked_typed((Typed){applied, value}, after, used, typed, rest, left), term, applied_term);
         /* The evaluator gave 0: the token path gives the value or the failure. */
-        if (!parse_term(more, nat_sub(spent, 1), 0, applied, scope, item->body, &value, &ignored, &used, NULL, failure))
+        if (!parse_term(more, nat_sub(spent, 1), 0, applied, scope, term_tokens(item->term), &value, &ignored, &used,
+                        NULL, failure))
           return 0;
         return with_term(worked_typed((Typed){applied, value}, after, used, typed, rest, left), term, applied_term);
       }
@@ -1555,8 +1555,8 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
           return with_term(worked_typed((Typed){item->type, value}, after, used, typed, rest, left), term,
                            applied_term);
         /* The evaluator gave 0: the token path gives the value or the failure. */
-        if (!parse_term(more, nat_sub(spent, 1), 0, item->type, scope, item->body, &value, &ignored, &used, NULL,
-                        failure))
+        if (!parse_term(more, nat_sub(spent, 1), 0, item->type, scope, term_tokens(item->term), &value, &ignored,
+                        &used, NULL, failure))
           return 0;
         return with_term(worked_typed((Typed){item->type, value}, after, used, typed, rest, left), term,
                          applied_term);
@@ -1851,7 +1851,8 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
       return eval_typed((Typed){item->type, value}, used, typed, left);
     Tokens ignored;
     Failure failure;
-    if (!parse_term(fuel, nat_sub(spent, 1), 0, item->type, scope, item->body, &value, &ignored, &used, NULL, &failure))
+    if (!parse_term(fuel, nat_sub(spent, 1), 0, item->type, scope, term_tokens(item->term), &value, &ignored, &used,
+                    NULL, &failure))
       return 0;
     return eval_typed((Typed){item->type, value}, used, typed, left);
   }
@@ -2107,10 +2108,11 @@ static int eval_stepper_argument(const Bindings *environment, const Term *term, 
   case BIND_ARROW: return 0;
   case BIND_FUN:
     if (has_type_param(item->params) == 1 || dependent_params(item->params) == 1) return 0;
-    *op = (Stepper){item->params, item->type, item->body, definition_scope(item->name, environment), item->term};
+    *op = (Stepper){item->params, item->type, term_tokens(item->term), definition_scope(item->name, environment),
+                    item->term};
     return 1;
   case BIND_CLOSURE:
-    *op = (Stepper){item->params, item->type, item->body, item->scope,
+    *op = (Stepper){item->params, item->type, term_tokens(item->term), item->scope,
                     dependent_params(item->params) == 0 ? item->term : NULL};
     return 1;
   }
@@ -2235,9 +2237,9 @@ static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment
   case BIND_TYPE:
   case BIND_ARROW: return 0;
   case BIND_FUN:
-    *op = (Stepper){made.params, made.type, made.body, definition_scope(made.name, environment), body};
+    *op = (Stepper){made.params, made.type, term_tokens(made.term), definition_scope(made.name, environment), body};
     break;
-  case BIND_CLOSURE: *op = (Stepper){made.params, made.type, made.body, made.scope, body}; break;
+  case BIND_CLOSURE: *op = (Stepper){made.params, made.type, term_tokens(made.term), made.scope, body}; break;
   }
   *left = spent;
   return 1;
@@ -3110,11 +3112,11 @@ int bound_stepper(Fuel fuel, Nat budget, Nat position, Text name, const Params *
   case BIND_TYPE: return fail_at(failure, position, eStep);
   case BIND_ARROW: return fail_at(failure, position, eStep);
   case BIND_FUN: {
-    Stepper found = {made.params, made.type, made.body, definition_scope(made.name, environment)};
+    Stepper found = {made.params, made.type, term_tokens(made.term), definition_scope(made.name, environment)};
     return with_term(worked_stepper(found, after, spent, op, rest, left), term, called);
   }
   case BIND_CLOSURE: {
-    Stepper found = {made.params, made.type, made.body, made.scope};
+    Stepper found = {made.params, made.type, term_tokens(made.term), made.scope};
     return with_term(worked_stepper(found, after, spent, op, rest, left), term, called);
   }
   }
