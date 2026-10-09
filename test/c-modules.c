@@ -317,6 +317,155 @@ static void test_function_references(void) {
       assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(item->head.body)));
 }
 
+/* The number of terms in a list. */
+static Nat args_count(const Terms *terms) {
+  Nat count = 0;
+  for (; terms != NULL; terms = terms->tail) count++;
+  return count;
+}
+
+/* The body of mapK in test_keyword_definitions, with the index of y:
+   map (fun (y : Nat) => pickK k y) ys */
+static const Term *map_body(const LType *nat, Tokens nat_source, Nat y) {
+  const TermTypes *binders = term_types_item((TermType){text("y"), 0, nat, nat_source}, NULL);
+  const Term *pick = term_named(TERM_APPLY, 0, 0, text("pickK"), NULL,
+                                terms_item(term_var(0, 0, text("k"), 0), one(term_var(0, 0, text("y"), y))));
+  const Term *function = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, binders, pick)));
+  return term_form(TERM_MAP, 0, 0, terms_item(function, one(term_var(0, 0, text("ys"), 1))));
+}
+
+/* The body of foldTwo in test_keyword_definitions, with the index of acc:
+   fold (fun (x : Nat) (acc : Nat) => pickK k acc) 0 xs */
+static const Term *fold_body(const LType *nat, Tokens nat_source, Nat acc) {
+  const TermTypes *binders = term_types_item((TermType){text("x"), 0, nat, nat_source},
+                                             term_types_item((TermType){text("acc"), 0, nat, nat_source}, NULL));
+  const Term *pick = term_named(TERM_APPLY, 0, 0, text("pickK"), NULL,
+                                terms_item(term_var(0, 0, text("k"), 0), one(term_var(0, 0, text("acc"), acc))));
+  const Term *function = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, binders, pick)));
+  return term_form(TERM_FOLD, 0, 0,
+                   terms_item(function, terms_item(term_number(0, 0, 0),
+                                                   one(term_named(TERM_NAME, 0, 0, text("xs"), NULL, NULL)))));
+}
+
+/* Each keyword form gives its term in a function body. The binders of an
+   inline fun continue after the function parameters, and a parameter name
+   as the function of a form gives a TERM_VAR. */
+static void test_keyword_definitions(void) {
+  const char *source =
+      "def xs : List Nat := cons 4 (cons 7 nil)\n"
+      "def pickK : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => k\n"
+      "def keepK : (k : Flag) -> (b : Flag) -> Flag := fun (k : Flag) (b : Flag) => k\n"
+      "def Three : Type 0 := (k : Nat) -> (x : Nat) -> (acc : Nat) -> Nat\n"
+      "def pick3 : Three := fun (k : Nat) (x : Nat) (acc : Nat) => k\n"
+      "def One : Type 0 := (n : Nat) -> Nat\n"
+      "def again : (s : Nat) -> Option (Prod Nat Nat) := fun (s : Nat) => some (pair s s)\n"
+      "def size : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def mapK : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "map (fun (y : Nat) => pickK k y) ys\n"
+      "def bindK : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "bind (fun (y : Nat) => cons k (cons y nil)) ys\n"
+      "def filterK : (k : Flag) -> (bs : List Flag) -> List Flag := fun (k : Flag) (bs : List Flag) => "
+      "filter (fun (b : Flag) => keepK k b) bs\n"
+      "def mapG : (g : One) -> List Nat := fun (g : One) => map g xs\n"
+      "def mapH : (h : One) -> List Nat := fun (h : One) => map h xs\n"
+      "def foldTwo : (k : Nat) -> Nat := fun (k : Nat) => fold (fun (x : Nat) (acc : Nat) => pickK k acc) 0 xs\n"
+      "def foldPartial : (k : Nat) -> Nat := fun (k : Nat) => fold (pick3 k) 0 xs\n"
+      "def settle : (s : Sum Nat Nat) -> Nat := fun (s : Sum Nat Nat) => either size size s\n"
+      "def single : (k : Nat) -> List Nat := fun (k : Nat) => pure k\n"
+      "def foldValue : (k : Nat) -> (v : Value) -> Nat := fun (k : Nat) (v : Value) => fold (pickK k) "
+      "(fun (b : Flag) => 0) (fun (t : Text) => 0) (fun (ns : List Nat) => 0) (fun (fs : List (Prod Text Nat)) => k) 0 v\n"
+      "def unfoldList : (n : Nat) -> List Nat := fun (n : Nat) => unfold again 3 n\n"
+      "def grow : (s : Text) -> Option (Sum Nat (Sum Flag (Sum Text (Sum (List Text) (List (Prod Text Text)))))) :=\n"
+      "  fun (s : Text) => some (inr (inr (inr (inr (cons (pair \"left\" s) (cons (pair \"right\" s) nil))))))\n"
+      "def unfoldValue : (s : Text) -> Value := fun (s : Text) => unfold grow 2 s\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure) == 1);
+  Nat checked = 0;
+  for (const Bindings *item = environment; item != NULL; item = item->tail) {
+    if (item->head.kind != BIND_FUN) continue;
+    assert(item->head.term != NULL);
+    assert(same_text(term_text(item->head.term), tokens_text(item->head.body)));
+    checked++;
+  }
+  assert(checked == 18);
+
+  /* mapK: k and ys are 0 and 1, y is 2. foldTwo: k is 0, x and acc are 1
+     and 2. A fun that starts its binders at 0 again gives a different term. */
+  LType nat = {.tag = TY_NAT};
+  Tokens nat_source = lexed("Nat");
+  assert(same_term(body_term(environment, "mapK"), map_body(&nat, nat_source, 2)));
+  assert(!same_term(body_term(environment, "mapK"), map_body(&nat, nat_source, 0)));
+  assert(same_term(body_term(environment, "foldTwo"), fold_body(&nat, nat_source, 2)));
+  assert(!same_term(body_term(environment, "foldTwo"), fold_body(&nat, nat_source, 1)));
+
+  const Term *by_g = body_term(environment, "mapG");
+  assert(by_g->tag == TERM_MAP && by_g->args->head->tag == TERM_VAR && by_g->args->head->index == 0);
+  assert(same_term(by_g, body_term(environment, "mapH")));
+
+  assert(body_term(environment, "bindK")->tag == TERM_BIND);
+  assert(body_term(environment, "filterK")->tag == TERM_FILTER);
+  const Term *partial = body_term(environment, "foldPartial");
+  assert(partial->tag == TERM_FOLD && partial->args->head->tag == TERM_GROUP &&
+         partial->args->head->args->head->tag == TERM_PARTIAL);
+  const Term *either = body_term(environment, "settle");
+  assert(either->tag == TERM_EITHER && args_count(either->args) == 3);
+  assert(body_term(environment, "single")->tag == TERM_PURE);
+  /* fold over Value: the first function, the four others, start, source. */
+  const Term *value_fold = body_term(environment, "foldValue");
+  assert(value_fold->tag == TERM_FOLD_VALUE && args_count(value_fold->args) == 7);
+  assert(value_fold->args->head->tag == TERM_GROUP && value_fold->args->head->args->head->tag == TERM_PARTIAL);
+  const Term *unfolded = body_term(environment, "unfoldList");
+  assert(unfolded->tag == TERM_UNFOLD && args_count(unfolded->args) == 3);
+  const Term *grown = body_term(environment, "unfoldValue");
+  assert(grown->tag == TERM_UNFOLD_VALUE && args_count(grown->args) == 3);
+}
+
+static Nat check_fun_positions(const Term *term, Tokens body) {
+  Nat count = 0;
+  if (term->tag == TERM_FUN) {
+    Nat at = 0;
+    for (; at < body.size && body.items[at].position != term->position; at++) {}
+    assert(at < body.size);
+    assert(body.items[at].kind == TOKEN_IDENTIFIER && same_text(body.items[at].text, text("fun")));
+    count++;
+  }
+  if (term->callee != NULL) count += check_fun_positions(term->callee, body);
+  for (const Terms *args = term->args; args != NULL; args = args->tail)
+    count += check_fun_positions(args->head, body);
+  return count;
+}
+
+/* Inline stepper nodes start at fun in every fold and unfold mode. */
+static void test_keyword_positions(void) {
+  const char *source =
+      "def xs : List Nat := cons 3 nil\n"
+      "def foldNat : (k : Nat) -> Nat := fun (k : Nat) => "
+      "fold (fun (acc : Nat) => acc) 0 k\n"
+      "def foldList : (k : Nat) -> Nat := fun (k : Nat) => "
+      "fold (fun (n : Nat) (acc : Nat) => acc) k xs\n"
+      "def unfoldList : (n : Nat) -> List Nat := fun (n : Nat) => "
+      "unfold (fun (s : Nat) => some (pair s s)) 2 n\n"
+      "def unfoldNat : (n : Nat) -> Nat := fun (n : Nat) => "
+      "unfold (fun (s : Nat) => some s) 2 n\n"
+      "def foldValue : (v : Value) -> Nat := fun (v : Value) => "
+      "fold (fun (n : Nat) => n) (fun (b : Flag) => 0) (fun (t : Text) => 0) "
+      "(fun (ns : List Nat) => 0) (fun (fs : List (Prod Text Nat)) => 0) 0 v\n"
+      "def unfoldValue : (n : Nat) -> Value := fun (n : Nat) => "
+      "unfold (fun (s : Nat) => none) 2 n\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure));
+  Nat count = 0;
+  for (const Bindings *item = environment; item != NULL; item = item->tail) {
+    if (item->head.kind != BIND_FUN) continue;
+    assert(item->head.term != NULL);
+    assert(same_text(term_text(item->head.term), tokens_text(item->head.body)));
+    count += check_fun_positions(item->head.term, item->head.body);
+  }
+  assert(count == 10);
+}
+
 static void test_type_references(void) {
   const char *source =
       "def id : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => x\n"
@@ -357,6 +506,8 @@ int main(void) {
   test_term();
   test_definitions();
   test_function_references();
+  test_keyword_definitions();
+  test_keyword_positions();
   test_type_references();
   puts("C module tests passed");
   return 0;
