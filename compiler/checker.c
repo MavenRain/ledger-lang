@@ -1847,6 +1847,573 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
   return 0;
 }
 
+static int apply_body(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, Tokens body,
+                      const Term *term, const Value **value, Tokens *rest, Nat *left, Failure *failure);
+
+static const Term *third_arg(const Term *term) {
+  return term->args != NULL && term->args->tail != NULL && term->args->tail->tail != NULL
+             ? term->args->tail->tail->head
+             : NULL;
+}
+
+/* unary_argument on a name term. A function gives its body term. A closure
+   keeps the body tokens (D3-s4). */
+static int eval_unary_argument(const Bindings *environment, const Term *term, Unary *op) {
+  const Binding *item;
+  if (term == NULL || !lookup(term->name, environment, &item)) return 0;
+  if (!unary_of(definition_scope(term->name, environment), item, op)) return 0;
+  switch (item->kind) {
+  case BIND_VALUE:
+  case BIND_TYPE:
+  case BIND_ARROW: return 0;
+  case BIND_FUN:
+    op->term = item->term;
+    return dependent_params(item->params) == 0;
+  case BIND_CLOSURE: return 1;
+  }
+  return 0;
+}
+
+static int eval_partial_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment,
+                              const Term *term, Unary *op, Nat *left);
+
+/* unary_term on the head term of a keyword form. */
+static int eval_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, const Term *term,
+                      Unary *op, Nat *left) {
+  if (term == NULL || fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  switch (term->tag) {
+  case TERM_VAR:
+  case TERM_NAME:
+    if (!eval_unary_argument(environment, term, op)) return 0;
+    *left = budget;
+    return 1;
+  case TERM_GROUP: return eval_partial_unary(more, budget, wanted, environment, first_arg(term), op, left);
+  case TERM_NUMBER:
+  case TERM_STRING:
+  case TERM_APPLY:
+  case TERM_PARTIAL:
+  case TERM_FUN:
+  case TERM_CONSTRUCT:
+  case TERM_REFL:
+  case TERM_FIRST:
+  case TERM_SECOND:
+  case TERM_SYMM:
+  case TERM_TRANS:
+  case TERM_EITHER:
+  case TERM_PURE:
+  case TERM_MAP:
+  case TERM_BIND:
+  case TERM_FILTER:
+  case TERM_FOLD:
+  case TERM_FOLD_VALUE:
+  case TERM_UNFOLD:
+  case TERM_UNFOLD_VALUE: return 0;
+  }
+  return 0;
+}
+
+/* inline_unary on a FUN term. The token path checks the body here in check
+   mode with no charge. The evaluator does not, thus it gives 0 at budget 0
+   and at fuel at or below the margin (finding a, Q-S3-3). */
+static int eval_inline_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment,
+                             const Term *term, Unary *op, Nat *left) {
+  if (fuel == 0 || budget == 0 || term->types == NULL || term->types->tail != NULL || first_arg(term) == NULL)
+    return 0;
+  if (fuel <= term_text(term).size + 2) return 0;
+  TermType binder = term->types->head;
+  const LType *ty = subst_type(environment, binder.type);
+  if (type_level(ty) != 0) return 0;
+  *op = (Unary){binder.name, ty, wanted, (Tokens){0}, environment, first_arg(term)};
+  *left = budget;
+  return 1;
+}
+
+/* 1 when partial_unary makes a bound_unary op from the binding. */
+static Nat partial_callee(const Binding *item) {
+  switch (item->kind) {
+  case BIND_VALUE:
+  case BIND_TYPE:
+  case BIND_ARROW: return 0;
+  case BIND_FUN: return dependent_params(item->params) == 1 ? 0 : 1;
+  case BIND_CLOSURE: return 1;
+  }
+  return 0;
+}
+
+/* bound_unary on a PARTIAL term. A callee with type params gives 0, because
+   typed_bound keeps the type tokens (finding b). A function callee gives its
+   body term in the closure scope; a closure callee keeps the body tokens. */
+static int eval_bound_unary(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Unary *op,
+                            Nat *left) {
+  const Binding *item;
+  if (fuel == 0 || !lookup(term->name, environment, &item) || partial_callee(item) == 0) return 0;
+  if (has_type_param(item->params) == 1) return 0;
+  Fuel more = fuel - 1;
+  const Params *formal = value_params(NULL, item->params);
+  const Params *front = front_params(formal);
+  const Values *values;
+  Nat spent;
+  if (!eval_arguments(more, budget, param_types(front), environment, term->args, &values, &spent)) return 0;
+  if (bound_functions(front, values) == 0) return 0;
+  Binding closure = partial_closure(
+      term->name, arrow_type(drop_params(params_length(front), formal), subst_type(NULL, item->type)), term->name,
+      values, environment);
+  if (!unary_of(environment, &closure, op)) return 0;
+  op->term = item->kind == BIND_FUN ? closure.term : NULL;
+  *left = spent;
+  return 1;
+}
+
+/* partial_unary on the inner term of a GROUP head. */
+static int eval_partial_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment,
+                              const Term *term, Unary *op, Nat *left) {
+  if (term == NULL || fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  switch (term->tag) {
+  case TERM_GROUP: return eval_unary(more, budget, wanted, environment, term, op, left);
+  case TERM_FUN: return eval_inline_unary(more, budget, wanted, environment, term, op, left);
+  case TERM_PARTIAL: return eval_bound_unary(more, budget, environment, term, op, left);
+  case TERM_NUMBER:
+  case TERM_STRING:
+  case TERM_VAR:
+  case TERM_NAME:
+  case TERM_APPLY:
+  case TERM_CONSTRUCT:
+  case TERM_REFL:
+  case TERM_FIRST:
+  case TERM_SECOND:
+  case TERM_SYMM:
+  case TERM_TRANS:
+  case TERM_EITHER:
+  case TERM_PURE:
+  case TERM_MAP:
+  case TERM_BIND:
+  case TERM_FILTER:
+  case TERM_FOLD:
+  case TERM_FOLD_VALUE:
+  case TERM_UNFOLD:
+  case TERM_UNFOLD_VALUE: return 0;
+  }
+  return 0;
+}
+
+/* structure_term on a PURE, MAP, BIND or FILTER term: fuel is the fuel of
+   structure_term. The steps and the charges are those of structure_term. */
+static int eval_structure(Fuel fuel, Nat budget, Nat form, const LType *expected, const Bindings *environment,
+                          const Term *term, const Value **value, Nat *left) {
+  if (fuel == 0 || shape_code(form, expected) == 0) return 0;
+  Fuel more = fuel - 1;
+  if (form == 1) {
+    const Value *lifted;
+    Nat spent;
+    if (!eval_term(more, budget, shape_element(expected), environment, first_arg(term), &lifted, &spent)) return 0;
+    return eval_worked(pure_value(expected, lifted), spent, value, left);
+  }
+  Unary op;
+  Nat spent;
+  if (!eval_unary(more, budget, structure_result(form, expected), environment, first_arg(term), &op, &spent))
+    return 0;
+  if (structure_fits(form, expected, op) != 1) return 0;
+  const Value *source;
+  Nat used;
+  if (!eval_term(more, spent, structure_source(form, expected, op), environment, second_arg(term), &source, &used))
+    return 0;
+  if (checking_body(environment) == 1) return eval_worked(&null_value, used, value, left);
+  Tokens ignored;
+  Failure failure;
+  if (carrier_code(expected) == 2) {
+    const Values *items;
+    Nat mapped_left;
+    if (!map_items(more, used, term->position, form, op, sequence_elements(source), &items, &ignored, &mapped_left,
+                   &failure))
+      return 0;
+    const Value *rebuilt;
+    if (!rebuild(expected, items, &rebuilt, &failure)) return 0;
+    return eval_worked(rebuilt, mapped_left, value, left);
+  }
+  const Value *item;
+  if (!payload_of(expected, unary_param(op), source, &item)) return eval_worked(source, used, value, left);
+  const Value *applied;
+  Nat applied_left;
+  if (!apply_body(more, nat_sub(used, 1), unary_result(op), unary_environment(op, item), unary_body(op), op.term,
+                  &applied, &ignored, &applied_left, &failure))
+    return 0;
+  return eval_worked(step_one(form, expected, source, applied), applied_left, value, left);
+}
+
+/* either_term on an EITHER term: fuel is the fuel of either_term. */
+static int eval_either(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed,
+                       Nat *left) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  Unary on_left;
+  Unary on_right;
+  if (!eval_unary_argument(environment, first_arg(term), &on_left) ||
+      !eval_unary_argument(environment, second_arg(term), &on_right))
+    return 0;
+  const LType *result = unary_result(on_left);
+  if (!(dependent_result(result) == 0 && same_type(result, unary_result(on_right)) == 1)) return 0;
+  const Value *source;
+  Nat spent;
+  if (!eval_term(more, budget, type_two(TY_SUM, unary_param(on_left), unary_param(on_right)), environment,
+                 third_arg(term), &source, &spent))
+    return 0;
+  if (checking_body(environment) == 1) return eval_typed((Typed){result, &null_value}, spent, typed, left);
+  Unary chosen = sum_left(source) != 0 ? on_left : on_right;
+  const Value *applied;
+  Tokens ignored;
+  Nat applied_left;
+  Failure failure;
+  if (!apply_body(more, nat_sub(spent, 1), result, unary_environment(chosen, project_value(1, source)),
+                  unary_body(chosen), chosen.term, &applied, &ignored, &applied_left, &failure))
+    return 0;
+  return eval_typed((Typed){result, applied}, applied_left, typed, left);
+}
+
+static Nat terms_count(const Terms *terms) { return terms == NULL ? 0 : 1 + terms_count(terms->tail); }
+
+static const Term *nth_term(const Terms *terms, Nat index) {
+  if (terms == NULL) return NULL;
+  if (index == 0) return terms->head;
+  return nth_term(terms->tail, index - 1);
+}
+
+/* stepper_argument on a VAR or NAME head. A function gives its body term (0
+   for dependent params); a closure keeps the body tokens. */
+static int eval_stepper_argument(const Bindings *environment, const Term *term, Stepper *op) {
+  const Binding *item;
+  if (term == NULL || !lookup(term->name, environment, &item)) return 0;
+  switch (item->kind) {
+  case BIND_VALUE:
+  case BIND_TYPE:
+  case BIND_ARROW: return 0;
+  case BIND_FUN:
+    if (has_type_param(item->params) == 1 || dependent_params(item->params) == 1) return 0;
+    *op = (Stepper){item->params, item->type, item->body, definition_scope(item->name, environment), item->term};
+    return 1;
+  case BIND_CLOSURE: *op = (Stepper){item->params, item->type, item->body, item->scope, NULL}; return 1;
+  }
+  return 0;
+}
+
+static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                                const Term *term, Stepper *op, Nat *left);
+
+/* stepper_term on the function term of fold or unfold. */
+static int eval_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                        const Term *term, Stepper *op, Nat *left) {
+  if (term == NULL || fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  switch (term->tag) {
+  case TERM_VAR:
+  case TERM_NAME:
+    if (!eval_stepper_argument(environment, term, op)) return 0;
+    *left = budget;
+    return 1;
+  case TERM_GROUP: return eval_partial_stepper(more, budget, mode, expected, environment, first_arg(term), op, left);
+  case TERM_NUMBER:
+  case TERM_STRING:
+  case TERM_APPLY:
+  case TERM_PARTIAL:
+  case TERM_FUN:
+  case TERM_CONSTRUCT:
+  case TERM_REFL:
+  case TERM_FIRST:
+  case TERM_SECOND:
+  case TERM_SYMM:
+  case TERM_TRANS:
+  case TERM_EITHER:
+  case TERM_PURE:
+  case TERM_MAP:
+  case TERM_BIND:
+  case TERM_FILTER:
+  case TERM_FOLD:
+  case TERM_FOLD_VALUE:
+  case TERM_UNFOLD:
+  case TERM_UNFOLD_VALUE: return 0;
+  }
+  return 0;
+}
+
+/* The params of an inline fun from its binder types, or 0 when a binder type
+   is not a type of level 0. */
+static int binder_params(const Bindings *environment, const TermTypes *types, const Params **params) {
+  if (types == NULL) {
+    *params = NULL;
+    return 1;
+  }
+  const LType *ty = subst_type(environment, types->head.type);
+  const Params *later;
+  if (type_level(ty) != 0 || !binder_params(environment, types->tail, &later)) return 0;
+  *params = params_item((Param){types->head.name, ty}, later);
+  return 1;
+}
+
+/* inline_stepper on a FUN term, with the margin rule of eval_inline_unary
+   (finding a): 0 at budget 0 and at fuel at or below the margin. */
+static int eval_inline_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                               const Term *term, Stepper *op, Nat *left) {
+  if (fuel == 0 || budget == 0 || term->types == NULL || first_arg(term) == NULL) return 0;
+  if (fuel <= term_text(term).size + 2) return 0;
+  const Params *params;
+  if (!binder_params(environment, term->types, &params)) return 0;
+  const LType *result = inline_result(mode, expected, params);
+  if (result == NULL) return 0;
+  *op = (Stepper){params, result, (Tokens){0}, environment, first_arg(term)};
+  *left = budget;
+  return 1;
+}
+
+/* bound_arguments on the argument terms: one fuel step per parameter, then
+   parse_arguments on one argument. */
+static int eval_bound_arguments(Fuel fuel, Nat budget, const Params *params, const Bindings *environment,
+                                const Terms *args, const Values **values, Nat *left) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  if (params == NULL && args != NULL) return 0;
+  if (params == NULL || args == NULL) {
+    *values = NULL;
+    *left = budget;
+    return 1;
+  }
+  const Values *found;
+  Nat spent;
+  if (!eval_arguments(more, budget, param_types(params_item(params->head, NULL)), environment,
+                      terms_item(args->head, NULL), &found, &spent))
+    return 0;
+  const Values *later;
+  Nat used;
+  if (!eval_bound_arguments(more, spent, params->tail, environment, args->tail, &later, &used)) return 0;
+  *values = reverse_values_onto(later, reverse_values_onto(NULL, found));
+  *left = used;
+  return 1;
+}
+
+/* bound_stepper on a PARTIAL term. A callee with type params gives 0
+   (finding b). A function callee gives its body term in the closure scope; a
+   closure callee keeps the body tokens. */
+static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Stepper *op,
+                              Nat *left) {
+  const Binding *item;
+  if (fuel == 0 || !lookup(term->name, environment, &item) || partial_callee(item) == 0) return 0;
+  if (has_type_param(item->params) == 1) return 0;
+  Fuel more = fuel - 1;
+  const Params *formal = value_params(NULL, item->params);
+  const Params *front = take_params(terms_count(term->args), formal);
+  const Values *values;
+  Nat spent;
+  if (!eval_bound_arguments(more, budget, front, environment, term->args, &values, &spent)) return 0;
+  if (bound_functions(front, values) == 0) return 0;
+  Binding made = partial_closure(
+      term->name, arrow_type(drop_params(params_length(front), formal), subst_type(NULL, item->type)), term->name,
+      values, environment);
+  const Term *body = item->kind == BIND_FUN ? made.term : NULL;
+  switch (made.kind) {
+  case BIND_VALUE:
+  case BIND_TYPE:
+  case BIND_ARROW: return 0;
+  case BIND_FUN:
+    *op = (Stepper){made.params, made.type, made.body, definition_scope(made.name, environment), body};
+    break;
+  case BIND_CLOSURE: *op = (Stepper){made.params, made.type, made.body, made.scope, body}; break;
+  }
+  *left = spent;
+  return 1;
+}
+
+/* partial_stepper on the inner term of a GROUP head. */
+static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
+                                const Term *term, Stepper *op, Nat *left) {
+  if (term == NULL || fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  switch (term->tag) {
+  case TERM_GROUP: return eval_stepper(more, budget, mode, expected, environment, term, op, left);
+  case TERM_FUN: return eval_inline_stepper(more, budget, mode, expected, environment, term, op, left);
+  case TERM_PARTIAL: return eval_bound_stepper(more, budget, environment, term, op, left);
+  case TERM_NUMBER:
+  case TERM_STRING:
+  case TERM_VAR:
+  case TERM_NAME:
+  case TERM_APPLY:
+  case TERM_CONSTRUCT:
+  case TERM_REFL:
+  case TERM_FIRST:
+  case TERM_SECOND:
+  case TERM_SYMM:
+  case TERM_TRANS:
+  case TERM_EITHER:
+  case TERM_PURE:
+  case TERM_MAP:
+  case TERM_BIND:
+  case TERM_FILTER:
+  case TERM_FOLD:
+  case TERM_FOLD_VALUE:
+  case TERM_UNFOLD:
+  case TERM_UNFOLD_VALUE: return 0;
+  }
+  return 0;
+}
+
+/* fold_term on a FOLD term [f, start, source]: fuel is the fuel of
+   fold_term. The token path selected FOLD because second_function gave 0.
+   At lower fuel it gives 0 again, thus FOLD has no guard (finding c). */
+static int eval_fold(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
+                     const Value **value, Nat *left) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  Stepper op;
+  Nat spent;
+  if (!eval_stepper(more, budget, 0, expected, environment, first_arg(term), &op, &spent)) return 0;
+  const Value *start;
+  Nat used;
+  if (!eval_term(more, spent, expected, environment, second_arg(term), &start, &used)) return 0;
+  Typed found;
+  Nat found_left;
+  if (!eval_synth(more, used, environment, third_arg(term), &found, &found_left)) return 0;
+  if (carrier_code(found.type) == 0 || fold_fits(found.type, expected, op) != 1) return 0;
+  if (checking_body(environment) == 1) return eval_worked(&null_value, found_left, value, left);
+  const Values *items;
+  if (!elements_of(more, found.value, &items)) return 0;
+  const Value *result;
+  Tokens ignored;
+  Nat folded_left;
+  Failure failure;
+  if (!fold_items(more, found_left, term->position, op, carrier_code(found.type), items, start, &result, &ignored,
+                  &folded_left, &failure))
+    return 0;
+  return eval_worked(result, folded_left, value, left);
+}
+
+/* algebra_term on one of f2 to f5 of a FOLD_VALUE term. */
+static int eval_algebra_term(Fuel fuel, Nat budget, Nat index, const LType *result, const Bindings *environment,
+                             const Term *term, Stepper *op, Nat *left) {
+  if (fuel == 0) return 0;
+  Stepper found;
+  Nat spent;
+  if (!eval_stepper(fuel - 1, budget, 0, result, environment, term, &found, &spent)) return 0;
+  if (same_type(stepper_result(found), result) == 0 ||
+      same_types(param_types(stepper_params(found)), types_item(algebra_param(index, result), NULL)) == 0)
+    return 0;
+  *op = found;
+  *left = spent;
+  return 1;
+}
+
+/* algebra_terms on [f2, f3, f4, f5, ...] of a FOLD_VALUE term. */
+static int eval_algebra_terms(Fuel fuel, Nat budget, const LType *result, Stepper on_nat,
+                              const Bindings *environment, const Terms *terms, ValueAlgebra *ops, Nat *left) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  Stepper on_flag, on_text, on_items, on_attrs;
+  Nat flag_left, text_left, items_left, attrs_left;
+  if (!eval_algebra_term(more, budget, 2, result, environment, nth_term(terms, 0), &on_flag, &flag_left) ||
+      !eval_algebra_term(more, flag_left, 3, result, environment, nth_term(terms, 1), &on_text, &text_left) ||
+      !eval_algebra_term(more, text_left, 4, result, environment, nth_term(terms, 2), &on_items, &items_left) ||
+      !eval_algebra_term(more, items_left, 5, result, environment, nth_term(terms, 3), &on_attrs, &attrs_left))
+    return 0;
+  *ops = (ValueAlgebra){on_nat, on_flag, on_text, on_items, on_attrs};
+  *left = attrs_left;
+  return 1;
+}
+
+/* fold_term on a FOLD_VALUE term [f1, f2, f3, f4, f5, start, source]: fuel
+   is the fuel of fold_term. The token path selects FOLD_VALUE with
+   second_function, a trial parse of f2 at fuel - 2. The evaluator runs that
+   trial first and gives 0 when it gives 0 (finding c). Then the steps of
+   fold_value_term at fuel - 1. */
+static int eval_fold_value(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
+                           const Term *term, const Value **value, Nat *left) {
+  if (fuel <= 2) return 0;
+  Fuel more = fuel - 1;
+  Fuel inner = more - 1;
+  Stepper on_nat;
+  Nat spent;
+  if (!eval_stepper(more, budget, 0, expected, environment, first_arg(term), &on_nat, &spent)) return 0;
+  Stepper trial;
+  Nat trial_left;
+  if (!eval_algebra_term(inner, spent, 2, expected, environment, second_arg(term), &trial, &trial_left)) return 0;
+  if (same_type(stepper_result(on_nat), expected) != 1 ||
+      same_types(param_types(stepper_params(on_nat)), types_item(&nat_type, NULL)) != 1)
+    return 0;
+  ValueAlgebra ops;
+  Nat functions_left;
+  if (!eval_algebra_terms(inner, spent, expected, on_nat, environment, term->args->tail, &ops, &functions_left))
+    return 0;
+  const Value *start;
+  Nat used;
+  if (!eval_term(inner, functions_left, expected, environment, nth_term(term->args, 5), &start, &used)) return 0;
+  Typed found;
+  Nat found_left;
+  if (!eval_synth(inner, used, environment, nth_term(term->args, 6), &found, &found_left)) return 0;
+  if (same_type(found.type, &value_type) != 1) return 0;
+  if (checking_body(environment) == 1) return eval_worked(&null_value, found_left, value, left);
+  const Value *result;
+  Tokens ignored;
+  Nat folded_left;
+  Failure failure;
+  if (!fold_value(inner, found_left, term->position, ops, start, found.value, &result, &ignored, &folded_left,
+                  &failure))
+    return 0;
+  return eval_worked(result, folded_left, value, left);
+}
+
+/* unfold_term on an UNFOLD term [g, n, seed]: fuel is the fuel of
+   unfold_term. */
+static int eval_unfold(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
+                       const Value **value, Nat *left) {
+  if (fuel == 0 || carrier_code(expected) == 0) return 0;
+  Fuel more = fuel - 1;
+  Stepper op;
+  Nat spent;
+  if (!eval_stepper(more, budget, 1, expected, environment, first_arg(term), &op, &spent)) return 0;
+  if (unfold_fits(expected, op) != 1) return 0;
+  const Value *limit;
+  Nat limit_left;
+  if (!eval_term(more, spent, &nat_type, environment, second_arg(term), &limit, &limit_left)) return 0;
+  const Value *seed;
+  Nat seed_left;
+  if (!eval_term(more, limit_left, unfold_seed(op), environment, third_arg(term), &seed, &seed_left)) return 0;
+  if (checking_body(environment) == 1) return eval_worked(&null_value, seed_left, value, left);
+  const Values *items;
+  Tokens ignored;
+  Nat built_left;
+  Failure failure;
+  if (!unfold_items(more, seed_left, term->position, op, carrier_code(expected), count_of(limit), seed, &items,
+                    &ignored, &built_left, &failure))
+    return 0;
+  const Value *rebuilt;
+  if (!rebuild(expected, items, &rebuilt, &failure)) return 0;
+  return eval_worked(rebuilt, built_left, value, left);
+}
+
+/* unfold_term on an UNFOLD_VALUE term [g, n, seed]: fuel is the fuel of
+   unfold_term, which calls unfold_value_term at fuel - 1. */
+static int eval_unfold_value(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
+                             const Term *term, const Value **value, Nat *left) {
+  if (fuel <= 2 || carrier_code(expected) != 0 || same_type(expected, &value_type) != 1) return 0;
+  Fuel more = fuel - 2;
+  Stepper op;
+  Nat spent;
+  if (!eval_stepper(more, budget, 2, &value_type, environment, first_arg(term), &op, &spent)) return 0;
+  if (unfold_value_fits(op) != 1) return 0;
+  const Value *limit;
+  Nat limit_left;
+  if (!eval_term(more, spent, &nat_type, environment, second_arg(term), &limit, &limit_left)) return 0;
+  const Value *seed;
+  Nat seed_left;
+  if (!eval_term(more, limit_left, unfold_seed(op), environment, third_arg(term), &seed, &seed_left)) return 0;
+  if (checking_body(environment) == 1) return eval_worked(&null_value, seed_left, value, left);
+  Grown node;
+  Tokens ignored;
+  Nat built_left;
+  Failure failure;
+  if (!unfold_node(more, seed_left, term->position, op, count_of(limit), seed, &node, &ignored, &built_left,
+                   &failure))
+    return 0;
+  return eval_worked(grown_head(node), built_left, value, left);
+}
+
 int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left) {
   if (term == NULL || fuel == 0 || budget == 0) return 0;
   Fuel more = fuel - 1;
@@ -1887,7 +2454,6 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   case TERM_FUN:
   case TERM_CONSTRUCT:
   case TERM_REFL:
-  case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
   case TERM_BIND:
@@ -1896,6 +2462,7 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   case TERM_FOLD_VALUE:
   case TERM_UNFOLD:
   case TERM_UNFOLD_VALUE: return 0;
+  case TERM_EITHER: return eval_either(more, budget, environment, term, typed, left);
   }
   return 0;
 }
@@ -1936,24 +2503,24 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_FIRST:
   case TERM_SECOND:
   case TERM_SYMM:
-  case TERM_TRANS: {
+  case TERM_TRANS:
+  case TERM_EITHER: {
     /* checked_synth: synth_term at fuel - 1, then the check of the type. */
     Typed found;
     Nat spent;
     if (!eval_synth(more, budget, environment, term, &found, &spent)) return 0;
     return check_worked(term->position, expected, found, no_tokens, spent, value, &rest, left, &failure);
   }
+  case TERM_PURE: return eval_structure(more, budget, 1, expected, environment, term, value, left);
+  case TERM_MAP: return eval_structure(more, budget, 2, expected, environment, term, value, left);
+  case TERM_BIND: return eval_structure(more, budget, 3, expected, environment, term, value, left);
+  case TERM_FILTER: return eval_structure(more, budget, 4, expected, environment, term, value, left);
+  case TERM_FOLD: return eval_fold(more, budget, expected, environment, term, value, left);
+  case TERM_FOLD_VALUE: return eval_fold_value(more, budget, expected, environment, term, value, left);
+  case TERM_UNFOLD: return eval_unfold(more, budget, expected, environment, term, value, left);
+  case TERM_UNFOLD_VALUE: return eval_unfold_value(more, budget, expected, environment, term, value, left);
   case TERM_PARTIAL:
-  case TERM_FUN:
-  case TERM_EITHER:
-  case TERM_PURE:
-  case TERM_MAP:
-  case TERM_BIND:
-  case TERM_FILTER:
-  case TERM_FOLD:
-  case TERM_FOLD_VALUE:
-  case TERM_UNFOLD:
-  case TERM_UNFOLD_VALUE: return 0;
+  case TERM_FUN: return 0;
   }
   return 0;
 }
@@ -2478,6 +3045,17 @@ int bound_arguments(Fuel fuel, Nat budget, const Params *params, const Bindings 
                        left);
 }
 
+/* The body of an op at one application: eval_term on the body term when the
+   op has one, else parse_term on the body tokens (D3-s3 part B). On the term
+   path rest is empty and failure is not written: a 0 makes the evaluator give
+   0, and the application site runs the token path again. */
+static int apply_body(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, Tokens body,
+                      const Term *term, const Value **value, Tokens *rest, Nat *left, Failure *failure) {
+  if (term == NULL) return parse_term(fuel, budget, 0, expected, environment, body, value, rest, left, NULL, failure);
+  *rest = (Tokens){0};
+  return eval_term(fuel, budget, expected, environment, term, value, left);
+}
+
 /* pure x lifts x. map, bind and filter name or partially apply a function,
    then take the source as an argument. In the check of a function body,
    map, bind and filter check the function and the source and give null. */
@@ -2535,8 +3113,8 @@ int structure_term(Fuel fuel, Nat budget, Nat position, Nat form, Nat atom, cons
   const Value *applied = NULL;
   Tokens applied_rest = {0};
   Nat applied_left = 0;
-  if (!parse_term(more, nat_sub(used, 1), 0, unary_result(op), unary_environment(op, item), unary_body(op), &applied,
-                  &applied_rest, &applied_left, NULL, failure))
+  if (!apply_body(more, nat_sub(used, 1), unary_result(op), unary_environment(op, item), unary_body(op), op.term,
+                  &applied, &applied_rest, &applied_left, failure))
     return 0;
   return with_term(worked_value(step_one(form, expected, source, applied), after, applied_left, value, rest, left), term,
                    made);
@@ -2553,8 +3131,8 @@ int map_items(Fuel fuel, Nat budget, Nat position, Nat form, Unary op, const Val
   const Value *applied = NULL;
   Tokens after = {0};
   Nat spent = 0;
-  if (!parse_term(more, nat_sub(budget, 1), 0, unary_result(op), unary_environment(op, items->head), unary_body(op),
-                  &applied, &after, &spent, NULL, failure))
+  if (!apply_body(more, nat_sub(budget, 1), unary_result(op), unary_environment(op, items->head), unary_body(op),
+                  op.term, &applied, &after, &spent, failure))
     return 0;
   const Values *later = NULL;
   Tokens ignored = {0};
@@ -2598,8 +3176,8 @@ int either_term(Fuel fuel, Nat budget, Nat position, const Bindings *environment
   const Value *applied = NULL;
   Tokens applied_rest = {0};
   Nat applied_left = 0;
-  if (!parse_term(more, nat_sub(spent, 1), 0, result, unary_environment(chosen, project_value(1, source)),
-                  unary_body(chosen), &applied, &applied_rest, &applied_left, NULL, failure))
+  if (!apply_body(more, nat_sub(spent, 1), result, unary_environment(chosen, project_value(1, source)),
+                  unary_body(chosen), chosen.term, &applied, &applied_rest, &applied_left, failure))
     return 0;
   return with_term(worked_typed((Typed){result, applied}, after, applied_left, typed, rest, left), term, made);
 }
@@ -2675,8 +3253,8 @@ int fold_items(Fuel fuel, Nat budget, Nat position, Stepper op, Nat code, const 
   Nat spent = 0;
   if (!fold_items(more, budget, position, op, code, items->tail, start, &acc, &ignored, &spent, failure)) return 0;
   const Values *arguments = code == 1 ? values_item(acc, NULL) : values_item(items->head, values_item(acc, NULL));
-  return parse_term(more, nat_sub(spent, 1), 0, stepper_result(op), stepper_environment(op, arguments),
-                    stepper_body(op), folded, rest, left, NULL, failure);
+  return apply_body(more, nat_sub(spent, 1), stepper_result(op), stepper_environment(op, arguments),
+                    stepper_body(op), op.term, folded, rest, left, failure);
 }
 
 /* unfold g n s checks against a carrier. It applies g to the seed s until g
@@ -2741,8 +3319,8 @@ int unfold_items(Fuel fuel, Nat budget, Nat position, Stepper op, Nat code, Nat 
   const Value *result = NULL;
   Tokens after = {0};
   Nat spent = 0;
-  if (!parse_term(more, nat_sub(budget, 1), 0, stepper_result(op), stepper_environment(op, values_item(seed, NULL)),
-                  stepper_body(op), &result, &after, &spent, NULL, failure))
+  if (!apply_body(more, nat_sub(budget, 1), stepper_result(op), stepper_environment(op, values_item(seed, NULL)),
+                  stepper_body(op), op.term, &result, &after, &spent, failure))
     return 0;
   const Value *payload = NULL;
   if (!payload_of(stepper_result(op), shape_element(stepper_result(op)), result, &payload))
@@ -2897,9 +3475,9 @@ int fold_value(Fuel fuel, Nat budget, Nat position, ValueAlgebra ops, const Valu
                      &ignored, &spent, failure))
     return 0;
   Stepper step = algebra_step(value_index(value), ops);
-  return parse_term(more, nat_sub(spent, 1), 0, stepper_result(step),
+  return apply_body(more, nat_sub(spent, 1), stepper_result(step),
                     stepper_environment(step, values_item(algebra_input(value, results), NULL)), stepper_body(step),
-                    folded, rest, left, NULL, failure);
+                    step.term, folded, rest, left, failure);
 }
 
 /* A child of the fields (keyed = 1) is the pair of its key and its value.
@@ -2984,8 +3562,8 @@ int unfold_node(Fuel fuel, Nat budget, Nat position, Stepper op, Nat limit, cons
   const Value *layer = NULL;
   Tokens after = {0};
   Nat spent = 0;
-  if (!parse_term(more, nat_sub(budget, 1), 0, stepper_result(op), stepper_environment(op, values_item(seed, NULL)),
-                  stepper_body(op), &layer, &after, &spent, NULL, failure))
+  if (!apply_body(more, nat_sub(budget, 1), stepper_result(op), stepper_environment(op, values_item(seed, NULL)),
+                  stepper_body(op), op.term, &layer, &after, &spent, failure))
     return 0;
   if (layer_index(layer) < 4)
     return worked_grown(grown_leaf(layer_payload(layer), nat_sub(limit, 1)), (Tokens){0}, spent, grown, rest, left);

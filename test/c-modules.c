@@ -599,7 +599,75 @@ static void test_term_evaluator(void) {
       "def viaSame : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => sameNat a refl\n"
       "def id : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => x\n"
       "def viaA : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => id A x\n"
-      "def viaNat : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => viaA Nat b\n";
+      "def viaNat : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => viaA Nat b\n"
+      "def size : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def half : (n : Nat) -> Option Nat := fun (n : Nat) => some n\n"
+      "def keep : (n : Nat) -> Flag := fun (n : Nat) => flagYes\n"
+      "def keepK : (k : Flag) -> (n : Nat) -> Flag := fun (k : Flag) (n : Nat) => k\n"
+      "def twoOf : (k : Nat) -> (y : Nat) -> List Nat := fun (k : Nat) (y : Nat) => cons k (cons y nil)\n"
+      "def someOf : (k : Nat) -> (y : Nat) -> Option Nat := fun (k : Nat) (y : Nat) => some k\n"
+      "def constA : (A : Type 0) -> (a : A) -> (n : Nat) -> A := fun (A : Type 0) (a : A) (n : Nat) => a\n"
+      "def One : Type 0 := (n : Nat) -> Nat\n"
+      "def ToOption : Type 0 := (n : Nat) -> Option Nat\n"
+      "def pureL : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => pure k\n"
+      "def mapP : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => map (pickK k) ys\n"
+      "def mapN : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => map size ys\n"
+      "def mapGP : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => map ((pickK k)) ys\n"
+      "def mapGF : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "map ((fun (y : Nat) => size y)) ys\n"
+      "def mapV : (g : One) -> (ys : List Nat) -> List Nat := fun (g : One) (ys : List Nat) => map g ys\n"
+      "def bindF : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "bind (fun (y : Nat) => cons k (cons y nil)) ys\n"
+      "def bindP : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => bind (twoOf k) ys\n"
+      "def filterF : (k : Flag) -> (ys : List Nat) -> List Nat := fun (k : Flag) (ys : List Nat) => "
+      "filter (fun (y : Nat) => k) ys\n"
+      "def filterP : (k : Flag) -> (ys : List Nat) -> List Nat := fun (k : Flag) (ys : List Nat) => "
+      "filter (keepK k) ys\n"
+      "def pureO : (k : Nat) -> (o : Option Nat) -> Option Nat := fun (k : Nat) (o : Option Nat) => pure k\n"
+      "def mapO : (k : Nat) -> (o : Option Nat) -> Option Nat := fun (k : Nat) (o : Option Nat) => map (pickK k) o\n"
+      "def mapOF : (k : Nat) -> (o : Option Nat) -> Option Nat := fun (k : Nat) (o : Option Nat) => "
+      "map (fun (y : Nat) => size y) o\n"
+      "def bindO : (k : Nat) -> (o : Option Nat) -> Option Nat := fun (k : Nat) (o : Option Nat) => "
+      "bind (someOf k) o\n"
+      "def bindOV : (h : ToOption) -> (o : Option Nat) -> Option Nat := fun (h : ToOption) (o : Option Nat) => "
+      "bind h o\n"
+      "def filterON : (k : Nat) -> (o : Option Nat) -> Option Nat := fun (k : Nat) (o : Option Nat) => "
+      "filter keep o\n"
+      "def filterOG : (k : Flag) -> (o : Option Nat) -> Option Nat := fun (k : Flag) (o : Option Nat) => "
+      "filter ((keepK k)) o\n"
+      "def settle : (s : Sum Nat Nat) -> Nat := fun (s : Sum Nat Nat) => either size size s\n"
+      "def settleV : (f : One) -> (g : One) -> (s : Sum Nat Nat) -> Nat := "
+      "fun (f : One) (g : One) (s : Sum Nat Nat) => either f g s\n"
+      "def mapT : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "map (constA Nat k) ys\n"
+      "def push : (y : Nat) -> (acc : List Nat) -> List Nat := fun (y : Nat) (acc : List Nat) => cons y acc\n"
+      "def pushK : (k : Nat) -> (y : Nat) -> (acc : List Nat) -> List Nat := "
+      "fun (k : Nat) (y : Nat) (acc : List Nat) => cons k (cons y acc)\n"
+      "def Pusher : Type 0 := (y : Nat) -> (acc : List Nat) -> List Nat\n"
+      "def foldN : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "fold push (cons k nil) ys\n"
+      "def foldP : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "fold (pushK k) nil ys\n"
+      "def foldG : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "fold ((pushK k)) nil ys\n"
+      "def foldF : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "fold (fun (y : Nat) (a : List Nat) => cons y a) nil ys\n"
+      "def foldV : (g : Pusher) -> (ys : List Nat) -> List Nat := fun (g : Pusher) (ys : List Nat) => fold g nil ys\n"
+      "def unfoldN : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => unfold half k n\n"
+      "def unfoldP : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => unfold (someOf k) 3 n\n"
+      "def unfoldG : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => unfold ((someOf k)) 3 n\n"
+      "def unfoldF : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => "
+      "unfold (fun (y : Nat) => some y) k n\n"
+      "def unfoldV : (h : ToOption) -> (n : Nat) -> Nat := fun (h : ToOption) (n : Nat) => unfold h 3 n\n"
+      "def foldValue : (k : Nat) -> (v : Value) -> Nat := fun (k : Nat) (v : Value) => "
+      "fold (pickK k) (fun (b : Flag) => 1) (fun (s : Text) => 2) (fun (xs : List Nat) => 3) "
+      "(fun (fs : List (Prod Text Nat)) => 4) 0 v\n"
+      "def foldValueT : (k : Nat) -> (v : Value) -> Nat := fun (k : Nat) (v : Value) => "
+      "fold (constA Nat k) (fun (b : Flag) => 1) (fun (s : Text) => 2) (fun (xs : List Nat) => 3) "
+      "(fun (fs : List (Prod Text Nat)) => 4) 0 v\n"
+      "def grow : (s : Text) -> Option (Sum Nat (Sum Flag (Sum Text (Sum (List Text) (List (Prod Text Text)))))) := "
+      "fun (s : Text) => some (inr (inr (inr (inr (cons (pair \"left\" s) nil)))))\n"
+      "def unfoldValue : (k : Nat) -> (s : Text) -> Value := fun (k : Nat) (s : Text) => unfold grow k s\n";
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
@@ -617,11 +685,101 @@ static void test_term_evaluator(void) {
   BothPaths starved = body_at(environment, "deep", "4 7", 1000, 1);
   assert(starved.eval == 0 && starved.parse == 0);
 
+  /* Keyword forms (part B1: pure, map, bind, filter and either; part B2:
+     fold and unfold, also over Value): eval 1 gives parse 1 on the grid, and eval 1
+     at fuel 1000 (no replay). Heads: VAR, NAME, GROUP, FUN and PARTIAL. A
+     FUN head gives 0 at or below its fuel margin, thus only the other heads
+     give the same answer at each point (exact 1). */
+  const struct {
+    const char *name;
+    const char *args;
+    const char *value;
+    int exact;
+  } keyword[] = {
+      {"mapK", "4 (cons 7 (cons 8 nil))", "[4,4]", 0},
+      {"pureL", "4 (cons 7 (cons 8 nil))", "[4]", 1},
+      {"mapP", "4 (cons 7 (cons 8 nil))", "[4,4]", 1},
+      {"mapN", "4 (cons 7 (cons 8 nil))", "[7,8]", 1},
+      {"mapGP", "4 (cons 7 (cons 8 nil))", "[4,4]", 1},
+      {"mapGF", "4 (cons 7 (cons 8 nil))", "[7,8]", 0},
+      {"mapV", "size (cons 7 (cons 8 nil))", "[7,8]", 1},
+      {"bindF", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 0},
+      {"bindP", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
+      {"filterF", "flagYes (cons 7 (cons 8 nil))", "[7,8]", 0},
+      {"filterP", "flagNo (cons 7 (cons 8 nil))", "[]", 1},
+      {"pureO", "4 (some 7)", "4", 1},
+      {"mapO", "4 (some 7)", "4", 1},
+      {"mapO", "4 none", "null", 1},
+      {"mapOF", "4 (some 7)", "7", 0},
+      {"bindO", "4 (some 7)", "4", 1},
+      {"bindOV", "half (some 7)", "7", 1},
+      {"filterON", "4 (some 7)", "7", 1},
+      {"filterOG", "flagNo (some 7)", "null", 1},
+      {"settle", "(inl 4)", "4", 1},
+      {"settleV", "size size (inr 9)", "9", 1},
+      {"foldN", "4 (cons 7 (cons 8 nil))", "[7,8,4]", 1},
+      {"foldP", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
+      {"foldG", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
+      {"foldF", "4 (cons 7 (cons 8 nil))", "[7,8]", 0},
+      {"foldV", "push (cons 7 (cons 8 nil))", "[7,8]", 1},
+      {"unfoldN", "3 7", "3", 1},
+      {"unfoldP", "3 7", "3", 1},
+      {"unfoldG", "3 7", "3", 1},
+      {"unfoldF", "3 7", "3", 0},
+      {"unfoldV", "half 7", "3", 1},
+      {"foldValue", "4 (valueNat 9)", "4", 0},
+      {"foldValue", "4 (valueText \"a\")", "2", 0},
+      {"unfoldValue", "2 \"s\"", "{\"left\":{\"left\":null}}", 1},
+  };
+  for (Nat i = 0; i < sizeof keyword / sizeof keyword[0]; i++) {
+    GridCount count = body_grid(environment, keyword[i].name, keyword[i].args);
+    assert(count.worked > 0 && (keyword[i].exact == 0 || count.differ == 0));
+    BothPaths full = body_at(environment, keyword[i].name, keyword[i].args, 1000, 1000);
+    assert(full.eval == 1 && same_text(full.value, text(keyword[i].value)));
+  }
+
+  /* Budget 1 on a map over 3 items: the first item spends it. eval_term
+     gives 0, and the token path gives eBudget at the first token of the
+     body. */
+  const Binding *mapped = fun_named(environment, "mapK");
+  const Bindings *three = call_scope(environment, mapped, "4 (cons 1 (cons 2 (cons 3 nil)))");
+  assert(both_paths(three, mapped, 1000, 1).eval == 0);
+  const Value *starved_value;
+  Tokens starved_rest;
+  Nat starved_left;
+  assert(parse_term(1000, 1, 0, mapped->type, three, mapped->body, &starved_value, &starved_rest, &starved_left,
+                    NULL, &failure) == 0);
+  assert(failure.position == (Nat)(strstr(source, "=> pickK k y) ys") + 3 - source) &&
+         same_text(failure.message, eBudget));
+
   /* Fallback: the token path gives the value. */
-  BothPaths keyword = body_at(environment, "mapK", "4 (cons 7 nil)", 1000, 1000);
-  assert(keyword.eval == 0 && keyword.parse == 1);
   BothPaths dependent = body_at(environment, "viaSame", "4 7", 1000, 1000);
   assert(dependent.eval == 0 && dependent.parse == 1);
+  BothPaths typed_partial = body_at(environment, "mapT", "4 (cons 7 (cons 8 nil))", 1000, 1000);
+  assert(typed_partial.eval == 0 && typed_partial.parse == 1);
+  BothPaths typed_fold = body_at(environment, "foldValueT", "4 (valueNat 9)", 1000, 1000);
+  assert(typed_fold.eval == 0 && typed_fold.parse == 1);
+
+  /* Budget 1 on a fold over 3 items (part B2): the first step spends it.
+     eval_term gives 0, and the token path gives eBudget at the first token
+     of the body of the inline fun. */
+  const Binding *folded = fun_named(environment, "foldF");
+  const Bindings *three_folded = call_scope(environment, folded, "4 (cons 1 (cons 2 (cons 3 nil)))");
+  assert(both_paths(three_folded, folded, 1000, 1).eval == 0);
+  assert(parse_term(1000, 1, 0, folded->type, three_folded, folded->body, &starved_value, &starved_rest,
+                    &starved_left, NULL, &failure) == 0);
+  assert(failure.position == (Nat)(strstr(source, "=> cons y a) nil ys") + 3 - source) &&
+         same_text(failure.message, eBudget));
+
+  /* FOLD_VALUE at fuel 8 (part B2): second_function gives 0, thus the
+     token path selects FOLD and fails at the first token of the second
+     function. eval_term gives 0. */
+  const Binding *valued = fun_named(environment, "foldValue");
+  const Bindings *nine = call_scope(environment, valued, "4 (valueNat 9)");
+  assert(both_paths(nine, valued, 8, 1000).eval == 0);
+  assert(parse_term(8, 1000, 0, valued->type, nine, valued->body, &starved_value, &starved_rest, &starved_left,
+                    NULL, &failure) == 0);
+  assert(failure.position == (Nat)(strstr(source, "(fun (b : Flag) => 1)") + 1 - source));
 
   /* Type arguments: eval 1 gives parse 1 on the grid, and the margin is
      term_text(APPLY).size + 2 at entry. */

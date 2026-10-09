@@ -390,6 +390,9 @@ typedef struct {
   const LType *result;
   Tokens body;
   const Bindings *scope;
+  /* The checked body term, or NULL. Only eval_term makes an op with a term
+     (D3-s3 part B); the token path keeps NULL. */
+  const struct Term *term;
 } Unary;
 
 Nat projection_index(Text name);
@@ -479,6 +482,8 @@ typedef struct {
   const LType *result;
   Tokens body;
   const Bindings *scope;
+  /* The checked body term, or NULL, as in Unary. */
+  const struct Term *term;
 } Stepper;
 
 typedef struct {
