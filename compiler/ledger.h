@@ -668,6 +668,94 @@ int unfold_seeds(Fuel fuel, Nat budget, Nat position, Stepper op, Nat keyed, Nat
 int compile_program(Text source, Text *output, Failure *failure);
 Text error_text(Nat position, Text message);
 
+/* A type as the source writes it inside a Term. A binder of fun keeps its
+   name; a type argument keeps an empty name. type is the resolved type and
+   source keeps the tokens of the type for the printer. A list of term
+   types; NULL is the end. */
+typedef struct {
+  Text name;
+  Nat position;
+  const LType *type;
+  Tokens source;
+} TermType;
+
+typedef struct TermTypes TermTypes;
+struct TermTypes {
+  TermType head;
+  const TermTypes *tail;
+};
+
+/* The syntax tree of a checked body (step D3 of docs/DEPENDENT-TYPES.md).
+   One tag for each form that parse_term accepts. */
+typedef enum {
+  TERM_NUMBER,
+  TERM_STRING,
+  TERM_GROUP,
+  TERM_VAR,
+  TERM_NAME,
+  TERM_APPLY,
+  TERM_PARTIAL,
+  TERM_FUN,
+  TERM_CONSTRUCT,
+  TERM_REFL,
+  TERM_FIRST,
+  TERM_SECOND,
+  TERM_SYMM,
+  TERM_TRANS,
+  TERM_EITHER,
+  TERM_PURE,
+  TERM_MAP,
+  TERM_BIND,
+  TERM_FILTER,
+  TERM_FOLD,
+  TERM_FOLD_VALUE,
+  TERM_UNFOLD,
+  TERM_UNFOLD_VALUE
+} TermTag;
+
+/* Each node keeps the source byte offset of its first token in position
+   and the work units of its evaluation in cost. TERM_NUMBER keeps number.
+   TERM_STRING keeps its text in name. TERM_VAR keeps the parameter name in
+   name and the parameter position in index. TERM_NAME keeps name.
+   TERM_APPLY, TERM_PARTIAL and TERM_CONSTRUCT keep name, the type
+   arguments in types and the value arguments in args. TERM_FUN keeps the
+   binders in types and the body as the one item of args. TERM_GROUP keeps
+   the inner term as the one item of args. TERM_REFL and the keyword forms
+   keep their arguments in args, in source order. A list of terms; NULL is
+   the end. */
+typedef struct Term Term;
+typedef struct Terms Terms;
+struct Term {
+  TermTag tag;
+  Nat position;
+  Nat cost;
+  Nat number;
+  Nat index;
+  Text name;
+  const TermTypes *types;
+  const Terms *args;
+};
+
+struct Terms {
+  const Term *head;
+  const Terms *tail;
+};
+
+/* term.c: constructors on the arena, structural equality and the printer.
+   same_term ignores the position, the cost and the names of parameters and
+   binders. term_text gives the tokens_text of the source of the term. */
+const Terms *terms_item(const Term *head, const Terms *tail);
+const TermTypes *term_types_item(TermType head, const TermTypes *tail);
+const Term *term_number(Nat position, Nat cost, Nat number);
+const Term *term_string(Nat position, Nat cost, Text text);
+const Term *term_var(Nat position, Nat cost, Text name, Nat index);
+const Term *term_named(TermTag tag, Nat position, Nat cost, Text name, const TermTypes *types, const Terms *args);
+const Term *term_fun(Nat position, Nat cost, const TermTypes *binders, const Term *body);
+const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args);
+Nat same_term(const Term *left, const Term *right);
+Nat same_terms(const Terms *left, const Terms *right);
+Text term_text(const Term *term);
+
 #include "literals.h"
 
 #endif
