@@ -1,4 +1,0 @@
--- Probe, negative: the recursive call keeps the same argument. The host must
--- refuse this definition. Load after core/schema.mech.
-
-def rec spin : Text -> Nat := fun (text : Text) => spin text

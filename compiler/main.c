@@ -49,7 +49,7 @@ static long read_source(FILE *file, unsigned char *bytes) {
   return ferror(file) ? -1 : (long)size;
 }
 
-/* Writes the output bytes, or a message for an output the bridge rejects. */
+/* Writes the output bytes, or a message for an output over OUTPUT_LIMIT. */
 static int write_output(Text output, const char *suffix) {
   if (output.size > OUTPUT_LIMIT) {
     fprintf(stderr, "compiler output exceeds %u bytes\n", (unsigned)OUTPUT_LIMIT);

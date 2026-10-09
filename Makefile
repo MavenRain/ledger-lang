@@ -10,7 +10,6 @@ C_OPS := core/ops.def
 build: build/ledgerc
 
 check: c-check
-	node bin/build.mjs --check
 
 test: build
 	node --test test/*.test.mjs

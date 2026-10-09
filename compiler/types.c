@@ -1,5 +1,5 @@
 /* Types: JSON null forms, canonical names, levels, constructor plans,
-   function types and reserved names (compiler/types.mech, no fuel). */
+   function types and reserved names (port of types.mech, no fuel). */
 #include "ledger.h"
 
 static const LType nat_type = {.tag = TY_NAT};

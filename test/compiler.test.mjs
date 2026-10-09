@@ -291,7 +291,6 @@ test('CLI emits JSON on success and only a diagnostic on failure', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ledger-lang-test-'));
   const path = join(directory, 'program.ledger');
   const launcher = fileURLToPath(new URL('../bin/ledgerc', import.meta.url));
-  const script = fileURLToPath(new URL('../bin/ledgerc.mjs', import.meta.url));
   const invoke = () => spawnSync('sh', [launcher, path], { encoding: 'utf8', timeout: 30_000 });
   try {
     await writeFile(path, 'def a : Nat := 7');
@@ -317,10 +316,9 @@ test('CLI emits JSON on success and only a diagnostic on failure', async () => {
     const prefix = 'def text : Text := "';
     const text = 'a'.repeat(sourceLimit - prefix.length - 1);
     await writeFile(path, prefix + text + '"');
-    for (const largest of [invoke(), spawnSync(process.execPath, [script, path], { encoding: 'utf8', timeout: 30_000 })]) {
-      assert.equal(largest.status, 0, largest.stderr);
-      assert.equal(JSON.parse(largest.stdout).instances[0].value, text);
-    }
+    const largest = invoke();
+    assert.equal(largest.status, 0, largest.stderr);
+    assert.equal(JSON.parse(largest.stdout).instances[0].value, text);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

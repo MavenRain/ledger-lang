@@ -9,12 +9,14 @@ data types are fixed. A program constructs instances of these types. The
 compiler checks the program and writes one JSON document: the final state of
 all instances that the program constructs.
 
-The compiler host is mechanism-lang. `core/schema.mech` and `core/ops.mech`
-are the user's definitions, verbatim. They are the only core data types.
+The compiler is a C program, `build/ledgerc`, built with TinyCC.
+`core/schema.def` and `core/ops.def` hold the user's core definitions as
+rows: families, constructors, fields and definitions, with types in mech
+surface syntax. They are the only core data types.
 
-The compiler is one mechanism-lang program on `Text` byte lists: a lexer, a
-parser, a checker, an evaluator and a JSON printer. A launcher only moves
-bytes between files and that program.
+The compiler works on `Text` byte lists: a lexer, a parser, a checker, an
+evaluator and a JSON printer. `bin/ledgerc` only runs `build/ledgerc` on a
+file.
 
 ## 2. Programs
 
@@ -32,7 +34,7 @@ recursion. Recursion comes only from `fold` and `unfold` (section 4).
 
 | Type former | Forms |
 |---|---|
-| Core types | Each family in `core/schema.mech` and `core/ops.mech`, and `Nat` |
+| Core types | Each family in `core/schema.def` and `core/ops.def`, and `Nat` |
 | Product | `Prod A B`, `pair`, `first`, `second` |
 | Coproduct | `Sum A B`, `inl`, `inr`, `either` |
 | Universal quantification | `(x : A) -> B`, `fun (x : A) => t`, application |

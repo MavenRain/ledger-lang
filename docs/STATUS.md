@@ -1,7 +1,7 @@
 # Compiler status
 
 M0 now implements construction, checking, and JSON encoding for every family
-in `core/schema.mech` and every `Type 0` family in `core/ops.mech`. It does
+in `core/schema.def` and every `Type 0` family in `core/ops.def`. It does
 not complete the M0 milestone in `SPEC.md`.
 
 ## Implemented
@@ -55,8 +55,9 @@ not complete the M0 milestone in `SPEC.md`.
 - Structural recursion or explicit fuel throughout. Serialization charges one
   fuel step per emitted byte and threads the remaining fuel through all
   instances. Name and key comparisons stop at the first different byte.
-- Wasm reactor build, byte transport, command-line launcher, values and CRM
-  examples, and integration tests against the reactor and CLI.
+- C compiler build (`build/ledgerc`, linked by TinyCC), command-line
+  launcher, values and CRM examples, and integration tests against
+  `build/ledgerc` and the CLI.
 - Monad `pure`, `map` and `bind` over `Option`, `List` and `Sum E`,
   Filterable `filter` over `Option` and `List`, and `either`. The function
   argument names a function with one parameter, including a function parameter.
@@ -69,13 +70,13 @@ not complete the M0 milestone in `SPEC.md`.
   `unfold` takes one function that gives the layer of a seed. It applies
   that function at most `n` times in depth-first order, and a seed that is
   left becomes `valueNull`. A layer of fields refuses duplicate keys.
-- Operation families of `core/ops.mech`: `Moment`, `Missing`, `Verdict`,
+- Operation families of `core/ops.def`: `Moment`, `Missing`, `Verdict`,
   `Command`, `Write`, `Outcome`, `Step`, `PipelineKey`, `Bucket`,
   `StageStat`, `Renewal` and `Account360`. Construction, checking and JSON
   encoding follow the schema rules. `Log` is an alias of `List Entry`, so
   the output shows `List (Entry)`. The compiler does not run the write path
   or the read path.
-- `Query T` is the indexed `Query` family of `core/ops.mech` as a `Type 1`
+- `Query T` is the indexed `Query` family of `core/ops.def` as a `Type 1`
   type. The compiler checks each of the 29 constructors against its answer
   type. A Query value is not an instance. A Query type is not an argument of
   a type former, a parameter type or a result type.
@@ -187,7 +188,7 @@ not complete the M0 milestone in `SPEC.md`.
   confidence percentage, do not add constraints beyond the declared types.
 - The compiler reserves all schema names and every form name of SPEC.md. It
   also reserves every family, constructor and definition name of
-  `core/ops.mech`, including `Query` and its constructors. Field names are
+  `core/ops.def`, including `Query` and its constructors. Field names are
   not reserved.
 - Each constructor argument costs one parsing fuel step. The host requires a
   structurally recursive definition to examine its recursive argument at the
@@ -222,20 +223,24 @@ original meaning.
 
 ## Internal boundaries
 
-`runtime.mech` holds compiler data types and common operations. `lexer.mech`
-turns Text into tokens. `schema.mech` describes schema constructors and fields;
-`operations.mech` describes the operation families in the same form;
-`types.mech` describes primitive and container forms. `parser.mech`,
-`checker.mech`, and `evaluate.mech` check and evaluate terms. `json.mech`
-serializes checked runtime values. `program.mech` compiles definitions and
-produces the success or error document.
+The compiler is `compiler/*.c`. `ledger.h` declares the shared types and
+functions. `runtime.c` holds compiler data types and common operations.
+`lexer.c` turns Text into tokens. `schema.c` describes schema constructors
+and fields from `core/schema.def`; `operations.c` describes the operation
+families in the same form from `core/ops.def`; `types.c` describes
+primitive and container forms. `literals.c` holds the literal texts.
+`parser.c`, `checker.c`, and `evaluate.c` check and evaluate terms.
+`json.c` serializes checked runtime values. `program.c` compiles
+definitions and produces the success or error document. `main.c` reads the
+source from a file or stdin and writes the document.
 
 `test/schema.test.mjs` derives conformance cases from the original schema,
 independently of compiler metadata. It checks every newly added constructor,
 field name, field order, argument type, and arity, plus indexed references.
-`test/operations.test.mjs` does the same from `core/ops.mech`.
+`test/operations.test.mjs` does the same from `core/ops.def`. Both read the
+core rows through `test/core.mjs`.
 
 Internal families such as Fuel, Token, LType, Result, Plan, and Binding cannot
-be used as ledger types. The only exported runtime boundary is Text and its
-byte accessors. Node contains no language parser, type checker, or evaluator
-in the compiler or launcher.
+be used as ledger types. The only boundary is bytes: `build/ledgerc` reads
+source bytes and writes the document bytes. Node contains no language
+parser, type checker, or evaluator.

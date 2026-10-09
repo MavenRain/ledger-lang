@@ -158,7 +158,7 @@ static Nat starts_param(Tokens tokens) {
     && mark_of(drop_token(drop_token(tokens))) == 58;
 }
 
-/* WritePath is the function type of core/ops.mech:
+/* WritePath is the function type of core/ops.def:
    (log : Log) -> (write : Write) -> Step. */
 static Signature write_path_signature(void) {
   const Params *params =

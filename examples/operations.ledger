@@ -1,4 +1,4 @@
--- Operation families from core/ops.mech. The compiler checks and encodes
+-- Operation families from core/ops.def. The compiler checks and encodes
 -- these values. It does not run the write path or the read path.
 def acme : Ref kindParty := refTo (hashOf "party-acme")
 def deal : Ref kindCommercial := refTo (hashOf "deal-1")

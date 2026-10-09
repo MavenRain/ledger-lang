@@ -267,7 +267,7 @@ Text text_of_cstring(const char *bytes) {
   return text_of_bytes((const unsigned char *)bytes, strlen(bytes));
 }
 
-/* Texts of schema.mech and operations.mech (see ledger.h). */
+/* Texts of the schema and operation modules (see ledger.h). */
 Text sHash(void) { return text_of_cstring("Hash"); }
 Text sRef(void) { return text_of_cstring("Ref"); }
 Text sHashOf(void) { return text_of_cstring("hashOf"); }

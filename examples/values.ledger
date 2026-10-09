@@ -1,4 +1,4 @@
--- All values in this example are checked and evaluated in mechanism-lang.
+-- All values in this example are checked and evaluated by the compiler.
 def company : Text := "Acme"
 def active : Flag := flagYes
 def count : Nat := 42

@@ -249,9 +249,10 @@ int ops_type(Text name, const LType **type);
 Nat ops_later_type(Text name);
 Nat ops_reserved_name(Text name);
 
-/* Texts of schema.mech and operations.mech. literals.h keeps the texts of
-   literals.mech as constants. Each other text is a function with the mech
-   name that returns text_of_cstring of its bytes (runtime.c). */
+/* Texts of the schema and operation modules. literals.h keeps the other
+   literal texts as constants (literals.c). Each text here is a function
+   with the name it had in the mech compiler that returns text_of_cstring
+   of its bytes (runtime.c). */
 Text sHash(void);
 Text sRef(void);
 Text sHashOf(void);

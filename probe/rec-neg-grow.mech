@@ -1,7 +1,0 @@
--- Probe, negative: the recursive call grows its argument. The host must
--- refuse this definition. Load after core/schema.mech.
-
-def rec grow : Text -> Nat := fun (text : Text) =>
-  case text as self in Text return Nat with
-  | textEnd => 0
-  | textByte byte rest => grow (textByte byte (textByte byte rest))

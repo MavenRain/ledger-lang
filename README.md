@@ -1,22 +1,20 @@
 # ledger-lang
 
 ledger-lang compiles business data definitions to one JSON document. The
-language has a fixed core schema. Its compiler runs in mechanism-lang and
-the Node launcher only transfers source and result bytes to a Wasm reactor.
+language has a fixed core schema. Its compiler is a C program,
+`build/ledgerc`, that TinyCC (`tcc`) builds from `compiler/*.c`.
+`core/schema.def` and `core/ops.def` define the core schema and the
+operation families. They are the source of truth: the compiler and the
+tests read them.
 
 This M0 slice supports construction of the complete core schema. See [SPEC.md](SPEC.md) for the full
 design and [docs/STATUS.md](docs/STATUS.md) for the implementation boundary.
 
 ## Build and run
 
-Use a mechanism-lang checkout with `_build/default/bin/mech.exe` already built and
-a Node runtime supporting Wasm GC. The reactor is tested on Node v23.10.0.
-The default host is the OCaml executable in the sibling `../mechanism-lang` checkout. Set
-`MECH_BIN` to use another installed host executable.
-
-Use the OCaml host for this slice. Current validation is recorded in
-[docs/VALIDATION.md](docs/VALIDATION.md). The Bend 2 Wasm build reached a
-ten-minute timeout during the initial probe.
+Use TinyCC (`tcc`) to build the compiler and Node to run the tests. Set
+`TCC` to use another `tcc` executable. Current validation is recorded in
+[docs/VALIDATION.md](docs/VALIDATION.md).
 
 ```sh
 make check
@@ -30,9 +28,14 @@ bin/ledgerc examples/structures.ledger > structures.json
 bin/ledgerc examples/algebra.ledger > algebra.json
 ```
 
-`make test` builds `build/ledgerc.wasm` and runs the integration suite.
-Rebuild with `make build` after editing compiler sources. Build artifacts
-are ignored by Git. No package installation is needed.
+`make build` links `build/ledgerc` with `tcc`. `make check` compiles each C
+source with `-Wall -Werror`. `make test` builds `build/ledgerc` and runs the
+integration suite with `node --test`. `make c-test` runs the C module and
+output tests. `bin/ledgerc` runs `build/ledgerc`. For the tests,
+`bin/bridge.mjs` exports `createCompiler`, which runs
+`build/ledgerc --stdin` for each source. Rebuild with `make build` after
+editing `compiler/*.c` or `core/*.def`. Build artifacts are ignored by Git.
+No package installation is needed.
 
 The C port is in progress. With TinyCC installed, `make c-build` compiles
 the available modules to `build/c/*.o`, and `make c-check` checks each source.
@@ -62,7 +65,7 @@ or a constructor with arguments needs parentheses: write `Option (Option Text)`
 and `cons "a" (cons "b" nil)`. `--` starts a comment that ends at a line feed
 or a carriage return. A name or keyword cannot start directly after a number.
 
-Implemented types are `Nat`, every family in `core/schema.mech`, `Prod A B`,
+Implemented types are `Nat`, every family in `core/schema.def`, `Prod A B`,
 and `Sum A B`. This includes all business records, enums, and variants, plus
 `Hash`, indexed `Ref k`, `Option A`, and `List A`. Constructors follow the
 schema, plus `pair`, `inl`, and `inr` from the specification. `first` and `second`
@@ -321,17 +324,16 @@ payload types, `some v` is `v`. Thus `some none` at `Option (Option Text)` and
 retain source order. Duplicate keys and duplicate definition names are errors.
 
 On an error, `bin/ledgerc` prints `FILE: byte N: message` to stderr, exits
-with status 1, and emits no partial JSON on stdout. Errors from the bridge or
+with status 1, and emits no partial JSON on stdout. Errors from a size limit or
 the file system have no byte and print as `FILE: message`. An error found
 while the output is written reports the first byte of that definition.
 
 ## Limits
 
-- Nat literals range from 0 through 1,073,741,823, matching the probed host
-  boundary. Leading zeroes are accepted and output uses ordinary decimal.
-- Source size is at most 65,536 bytes. The bridge accepts source bytes and
-  returns the decoded result string. The mechanism-lang compiler validates
-  UTF-8 source and emitted Text. Invalid UTF-8 is reported at the first bad
+- Nat literals range from 0 through 1,073,741,823, the range of the first
+  compiler host (mechanism-lang). Leading zeroes are accepted and output
+  uses ordinary decimal.
+- Source size is at most 65,536 bytes. The compiler validates UTF-8 source and emitted Text. Invalid UTF-8 is reported at the first bad
   byte, or at the lead byte of a truncated sequence.
 - Names use ASCII letters or `_`, followed by ASCII letters, digits, or `_`.
 - String literals support UTF-8 and `\"`, `\\`, `\/`, `\n`, `\r`, `\t`, `\b`,
@@ -360,16 +362,12 @@ while the output is written reports the first byte of that definition.
   across all instances. Each emitted byte costs one step. Thus the output is
   at most 32 bytes per source byte plus 128 bytes, also for shared values
   with a large expansion. When the budget runs out, the compiler reports
-  `output budget exceeded`. The bridge also caps the result at 4 MiB.
-- A 65,536-byte source needs more V8 stack than the Node default.
-  `bin/ledgerc` runs Node with `--stack-size=7000 --max-old-space-size=1024`,
-  and `node bin/ledgerc.mjs` starts Node again with these flags. A program
-  that imports `bin/bridge.mjs` must start Node with the same flags.
+  `output budget exceeded`. `build/ledgerc` also caps the result at 4 MiB.
 
 ## Operation families
 
 The compiler constructs, checks and encodes the `Type 0` families of
-`core/ops.mech`: `Moment`, `Missing`, `Verdict`, `Command`, `Write`,
+`core/ops.def`: `Moment`, `Missing`, `Verdict`, `Command`, `Write`,
 `Outcome`, `Step`, `PipelineKey`, `Bucket`, `StageStat`, `Renewal` and
 `Account360`. The encoding rules are the schema rules. `Log` is an alias of
 `List Entry`. See `examples/operations.ledger`.
@@ -407,5 +405,6 @@ def refuse : WritePath :=
 `ReadPath` is a reserved name. It has a type parameter, so it needs
 dependent function types. As a type, it stops the compiler with
 `this type belongs to a later milestone`. The compiler does not run the
-write path or the read path. The reactor loads `core/schema.mech` only. `compiler/operations.mech` holds the constructor
-and field data of `core/ops.mech`.
+write path or the read path. `compiler/schema.c` and
+`compiler/operations.c` take the constructor and field data from
+`core/schema.def` and `core/ops.def` when the compiler is built.

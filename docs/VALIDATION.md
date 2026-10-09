@@ -1,11 +1,14 @@
 # Validation
 
-Date: 2026-10-07. Node: v23.10.0. Build host: the installed mechanism-lang
-OCaml executable at `_build/default/bin/mech.exe`.
+Date: 2026-10-08. Node: v23.10.0. Build host: TinyCC (`tcc`).
+`build/ledgerc` is the only compiler.
 
-`make check` and `make test` pass: the host checks the complete compiler, builds the
-Wasm reactor, and runs 516 integration tests with zero failures. The test
-runner reported 5.60 seconds. Nineteen of the tests, in
+`make check` and `make test` pass: `tcc -Wall -Werror` compiles each C
+source, `make test` links `build/ledgerc` and runs 516 integration tests
+with zero failures, and `make c-test` passes the C module and output tests.
+The C compiler gives the same output as the earlier mechanism-lang
+compiler, which is kept outside this repository, on 3139 of 3139 programs:
+859 and 241 port cases, the 22 examples and 2017 corpus programs. Nineteen of the tests, in
 `test/dependent.test.mjs`, check steps D1, D2, D2b, D4a, D4b and D4c of `docs/DEPENDENT-TYPES.md`: an
 equality result can name a value parameter on both sides, two different
 parameters or a parameter and a constant are not equal, a side names a
@@ -32,8 +35,7 @@ scopes. Inline bodies refuse captures of proofs with neutral sides from an
 outer parameter scope, while closed proof captures still check and run.
 The regressions also cover neutral references from different function scopes, proof composition,
 `either`, partial applications, and preservation of whole-function references
-and closed equality applications. In the isolated checkout the host was selected with
-`MECH_BIN=/Users/oobi/Documents/mechanism-lang/_build/default/bin/mech.exe`.
+and closed equality applications.
 
 The partial application review adds eight cases in `test/partial.test.mjs`.
 They check leading data arguments, grouped and computed arguments, lexical
@@ -141,11 +143,11 @@ and duplicate names and keys. They exercise the 65,536-byte source boundary,
 parsing depth fuel, the byte output budget, and shared values. The fuel test
 reads the measured limits from README.md and checks that each stated count
 compiles and that one more form exhausts fuel. Error tests check source byte
-positions. CLI tests run both `sh bin/ledgerc` and `node bin/ledgerc.mjs`.
+positions. CLI tests run `sh bin/ledgerc`.
 
 The 95 schema tests add coverage for Hash, all eight Ref indices, and every
 constructor of the remaining 28 schema families. Conformance cases read
-`core/schema.mech`, independently of compiler metadata, and verify:
+`core/schema.def`, independently of compiler metadata, and verify:
 
 - All 87 record, enum, and variant constructors, including fieldless
   constructors in mixed families.
@@ -217,7 +219,7 @@ and resource-boundary regression tests were rerun as part of the full gate.
 Neither mechanism-lang compiler checkout was edited.
 
 The operation slice adds `test/operations.test.mjs`. It reads
-`core/ops.mech` and `core/schema.mech`, not the compiler metadata. For each
+`core/ops.def` and `core/schema.def`, not the compiler metadata. For each
 of the 48 constructors of the 12 `Type 0` operation families it checks the
 field names, field order, argument types and arity, and it rejects a surplus
 argument, a missing argument, a wrong argument type and a wrong `Ref` index.

@@ -1,5 +1,5 @@
 -- A type definition can name a function type. WritePath is the function
--- type of core/ops.mech: (log : Log) -> (write : Write) -> Step. The
+-- type of core/ops.def: (log : Log) -> (write : Write) -> Step. The
 -- compiler checks a function of this type. It does not run the write path.
 def acme : Ref kindParty := refTo (hashOf "party-acme")
 def deal : Ref kindCommercial := refTo (hashOf "deal-1")

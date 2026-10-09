@@ -1,3 +1,6 @@
+/* literals.c: the literal texts of the compiler as constant Nat byte
+   arrays (declared in literals.h). This file is the source; edit it by
+   hand. A tool first generated it from the mech compiler's literals.mech. */
 #include "ledger.h"
 
 /* "Nat" */
