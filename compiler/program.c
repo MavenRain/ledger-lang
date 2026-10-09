@@ -116,11 +116,11 @@ static int parse_eq_type(Nat position, Fuel fuel, Nat budget, const Bindings *en
   const Value *lhs;
   Tokens after_left;
   Nat spent;
-  if (!parse_term(fuel, budget, 1, a, environment, after_type, &lhs, &after_left, &spent, failure)) return 0;
+  if (!parse_term(fuel, budget, 1, a, environment, after_type, &lhs, &after_left, &spent, NULL, failure)) return 0;
   const Value *rhs;
   Tokens after_right;
   Nat remaining;
-  if (!parse_term(fuel, spent, 1, a, environment, after_left, &rhs, &after_right, &remaining, failure)) return 0;
+  if (!parse_term(fuel, spent, 1, a, environment, after_left, &rhs, &after_right, &remaining, NULL, failure)) return 0;
   *rest = after_right;
   return lift_parsed(remaining, eq_type_printed(position, fuel, a, lhs, rhs, type, failure), left);
 }
@@ -380,7 +380,7 @@ static int computed_side(Fuel fuel, const LType *a, const Bindings *environment,
   Tokens after;
   Nat remaining;
   if (!parse_term(fuel, 1, 1, a, binding_cons(check_marker(), marker_bindings(done, environment)), term, &value,
-                  &after, &remaining, failure))
+                  &after, &remaining, NULL, failure))
     return 0;
   *side = term_side(term);
   *rest = skip_atom(0, tokens);
@@ -401,7 +401,7 @@ static int eq_side(Fuel fuel, const LType *a, const Bindings *environment, const
   if (names_param(done, atom_of(0, tokens)) == 1)
     return computed_side(fuel, a, environment, done, tokens, side, rest, left, failure);
   const Value *value;
-  if (!parse_term(fuel, 1, 1, a, hide_params(done, environment), tokens, &value, rest, left, failure)) return 0;
+  if (!parse_term(fuel, 1, 1, a, hide_params(done, environment), tokens, &value, rest, left, NULL, failure)) return 0;
   Failure printing;
   Text text;
   if (!printed_text(fuel, value, &text, &printing)) return fail_at(failure, first_position(tokens), printing.message);
@@ -569,11 +569,13 @@ static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *envi
   const LType *result = subst_type(param_renames(found.params, binders, NULL), found.result);
   const Value *value;
   Nat left;
+  const Term *term = NULL;
   if (!parse_term(fuel, budget, 0, result,
                   binding_cons(body_marker(param_count(binders)), bind_params(binders, NULL, environment)), body,
-                  &value, rest, &left, failure))
+                  &value, rest, &left, &term, failure))
     return 0;
-  *item = (Binding){.kind = BIND_FUN, .name = name, .type = result, .params = binders, .body = body};
+  *item = (Binding){
+      .kind = BIND_FUN, .name = name, .type = result, .params = binders, .body = taken_tokens(body, *rest), .term = term};
   return 1;
 }
 
@@ -599,7 +601,7 @@ static int parse_definition(Fuel fuel, Nat budget, const Bindings *environment, 
   if (!expect_mark(61, after_type, &after_assign, failure)) return 0;
   if (is_term_type(type) == 1) {
     const Value *value;
-    if (!parse_term(fuel, spent, 0, type, environment, after_assign, &value, rest, left, failure)) return 0;
+    if (!parse_term(fuel, spent, 0, type, environment, after_assign, &value, rest, left, NULL, failure)) return 0;
     *item = (Binding){.kind = BIND_VALUE, .name = name, .type = type, .value = value};
     return 1;
   }
@@ -673,12 +675,13 @@ static const Located *reverse_located(const Located *done) {
 }
 
 static int parse_program(Fuel fuel, Nat budget, Fuel checking_fuel, const Bindings *environment, const Located *done,
-                         Tokens tokens, const Located **instances, Failure *failure) {
+                         Tokens tokens, const Located **instances, const Bindings **checked, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   if (tokens.size == 0) return fail_at(failure, 0, eDef);
   Token head = tokens.items[0];
   if (head.kind == TOKEN_PUNCTUATION && head.number == 0) {
     *instances = reverse_located(done);
+    *checked = environment;
     return 1;
   }
   if (head.kind != TOKEN_IDENTIFIER || same_text(head.text, sdef) != 1) return fail_at(failure, head.position, eDef);
@@ -687,7 +690,7 @@ static int parse_program(Fuel fuel, Nat budget, Fuel checking_fuel, const Bindin
   Nat left;
   if (!parse_definition(checking_fuel, budget, environment, drop_token(tokens), &item, &rest, &left, failure)) return 0;
   return parse_program(fuel - 1, left, checking_fuel, binding_cons(item, environment),
-                       record_instance(head.position, item, done), rest, instances, failure);
+                       record_instance(head.position, item, done), rest, instances, checked, failure);
 }
 
 /* A print error reports the first byte of the definition being printed. */
@@ -714,14 +717,25 @@ int compile_program(Text source, Text *output, Failure *failure) {
   Nat position;
   Tokens tokens;
   const Located *instances;
+  const Bindings *checked;
   if (utf8_error(source, &position)) return fail_at(failure, position, eUtf8);
   if (!lex(fuel_for(source), source, &tokens, failure)) return 0;
   if (!parse_program(fuel_for(source), work_budget_from(65, source), depth_fuel_from(0, 0, source), NULL, NULL,
-                     tokens, &instances, failure))
+                     tokens, &instances, &checked, failure))
     return 0;
   Printer printer = {output_fuel_from(0, source), builder_new()};
   if (!emit_text(&printer, jHeader, failure)) return 0;
   if (!print_instances(&printer, 1, instances, failure)) return 0;
   *output = builder_text(&printer.output);
   return 1;
+}
+
+int check_definitions(Text source, const Bindings **environment, Failure *failure) {
+  Nat position;
+  Tokens tokens;
+  const Located *instances;
+  if (utf8_error(source, &position)) return fail_at(failure, position, eUtf8);
+  if (!lex(fuel_for(source), source, &tokens, failure)) return 0;
+  return parse_program(fuel_for(source), work_budget_from(65, source), depth_fuel_from(0, 0, source), NULL, NULL,
+                       tokens, &instances, environment, failure);
 }

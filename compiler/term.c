@@ -39,6 +39,16 @@ const Term *term_named(TermTag tag, Nat position, Nat cost, Text name, const Ter
   return make_term((Term){.tag = tag, .position = position, .cost = cost, .name = name, .types = types, .args = args});
 }
 
+const Term *term_call(TermTag tag, Nat position, Nat cost, const Term *callee, const TermTypes *types, const Terms *args) {
+  return make_term((Term){.tag = tag,
+                          .position = position,
+                          .cost = cost,
+                          .name = callee->name,
+                          .callee = callee,
+                          .types = types,
+                          .args = args});
+}
+
 const Term *term_fun(Nat position, Nat cost, const TermTypes *binders, const Term *body) {
   return make_term(
       (Term){.tag = TERM_FUN, .position = position, .cost = cost, .types = binders, .args = terms_item(body, NULL)});
@@ -52,7 +62,9 @@ const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args) {
 /* A binder or a type argument compares by its resolved type. */
 static Nat same_term_types(const TermTypes *left, const TermTypes *right) {
   for (; left != NULL && right != NULL; left = left->tail, right = right->tail)
-    if (!same_type(left->head.type, right->head.type)) return 0;
+    if (!same_type(left->head.identity != NULL ? left->head.identity : left->head.type,
+                   right->head.identity != NULL ? right->head.identity : right->head.type))
+      return 0;
   return left == NULL && right == NULL;
 }
 
@@ -60,6 +72,13 @@ Nat same_terms(const Terms *left, const Terms *right) {
   for (; left != NULL && right != NULL; left = left->tail, right = right->tail)
     if (!same_term(left->head, right->head)) return 0;
   return left == NULL && right == NULL;
+}
+
+static Nat same_callee(const Term *left, const Term *right) {
+  if (left->callee != NULL && right->callee != NULL) return same_term(left->callee, right->callee);
+  if (left->callee != NULL && left->callee->tag != TERM_NAME) return 0;
+  if (right->callee != NULL && right->callee->tag != TERM_NAME) return 0;
+  return same_text(left->name, right->name);
 }
 
 /* A variable compares by its parameter position, so the name of the
@@ -71,11 +90,12 @@ Nat same_term(const Term *left, const Term *right) {
     case TERM_STRING: return same_text(left->name, right->name);
     case TERM_VAR: return left->index == right->index;
     case TERM_NAME:
-    case TERM_APPLY:
-    case TERM_PARTIAL:
     case TERM_CONSTRUCT:
       return same_text(left->name, right->name) && same_term_types(left->types, right->types) &&
              same_terms(left->args, right->args);
+    case TERM_APPLY:
+    case TERM_PARTIAL:
+      return same_callee(left, right) && same_term_types(left->types, right->types) && same_terms(left->args, right->args);
     case TERM_FUN: return same_term_types(left->types, right->types) && same_terms(left->args, right->args);
     case TERM_GROUP:
     case TERM_REFL:

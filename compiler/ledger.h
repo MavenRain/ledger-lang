@@ -281,9 +281,13 @@ struct Params {
 /* A name of the environment. BIND_VALUE keeps type and value. BIND_TYPE
    keeps the universe in type and the type it stands for in defined.
    BIND_ARROW keeps params and the result in type. BIND_FUN keeps params,
-   the result in type and the checked body. BIND_CLOSURE also keeps the
+   the result in type, the checked body and its term (NULL if not built). BIND_CLOSURE also keeps the
    scope of its function argument. A list of bindings (also a Scope); NULL
    is the end, and the head is the latest binding. */
+struct Term;
+struct Terms;
+struct TermTypes;
+
 typedef enum { BIND_VALUE, BIND_TYPE, BIND_ARROW, BIND_FUN, BIND_CLOSURE } BindingKind;
 
 typedef struct Bindings Bindings;
@@ -296,6 +300,7 @@ typedef struct {
   const LType *defined;
   const Params *params;
   Tokens body;
+  const struct Term *term;
   const Bindings *scope;
 } Binding;
 
@@ -413,7 +418,7 @@ const LType *type_argument(Text name, const Bindings *chosen);
 const LType *subst_type(const Bindings *chosen, const LType *ty);
 const Params *value_params(const Bindings *chosen, const Params *params);
 int type_arguments(Fuel fuel, const Params *params, const Bindings *environment, const Bindings *chosen,
-                   Tokens tokens, const Bindings **result, Tokens *rest, Failure *failure);
+                   Tokens tokens, const Bindings **result, Tokens *rest, const struct TermTypes **types, Failure *failure);
 const Bindings *definition_scope(Text name, const Bindings *environment);
 Binding opaque_closure(Text name, const LType *ty);
 Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings *caller);
@@ -589,22 +594,22 @@ const Bindings *argument_bindings(Nat index, const Params *params, const Values 
    0 for none; close_result takes its Option argument as resolved (0 = none)
    and result. */
 int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tokens tokens, Typed *typed, Tokens *rest,
-               Nat *left, Failure *failure);
+               Nat *left, const struct Term **term, Failure *failure);
 int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bindings *environment, Tokens tokens,
-               const Value **value, Tokens *rest, Nat *left, Failure *failure);
+               const Value **value, Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int partial_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
                      const Params *params, const LType *result, const Bindings *environment, Tokens tokens,
-                     const Value **value, Tokens *rest, Nat *left, Failure *failure);
+                     const Value **value, Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
                     const Params *params, const Params *formal, const LType *result, const Bindings *environment,
-                    Tokens tokens, Tokens after_types, const Value **value, Tokens *rest, Nat *left, Failure *failure);
+                    Tokens tokens, Tokens after_types, const Value **value, Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int inline_argument(Fuel fuel, Nat budget, Nat position, const LType *expected, const Bindings *environment,
-                    Tokens tokens, const Value **value, Tokens *rest, Nat *left, Failure *failure);
+                    Tokens tokens, const Value **value, Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int parse_arguments(Fuel fuel, Nat budget, Nat atom, const LTypes *types, const Bindings *environment, Tokens tokens,
-                    const Values **values, Tokens *rest, Nat *left, Failure *failure);
+                    const Values **values, Tokens *rest, Nat *left, const struct Terms **terms, Failure *failure);
 int dependent_arguments(Fuel fuel, Nat budget, const Bindings *chosen, const Bindings *environment,
                         const Params *params, const Params *remaining, const Values *seen, Tokens start,
-                        Tokens tokens, const Values **values, Tokens *rest, Nat *left, Failure *failure);
+                        Tokens tokens, const Values **values, Tokens *rest, Nat *left, const struct Terms **terms, Failure *failure);
 int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *closed);
 int close_body_side(Fuel fuel, const Bindings *environment, const LType *a, Val side, Val *closed);
 int close_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, int resolved,
@@ -666,6 +671,9 @@ int unfold_seeds(Fuel fuel, Nat budget, Nat position, Stepper op, Nat keyed, Nat
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
 int compile_program(Text source, Text *output, Failure *failure);
+/* check_definitions checks a program as compile_program does and gives
+   the bindings of its definitions, the latest first (the C test). */
+int check_definitions(Text source, const Bindings **environment, Failure *failure);
 Text error_text(Nat position, Text message);
 
 /* A type as the source writes it inside a Term. A binder of fun keeps its
@@ -677,6 +685,8 @@ typedef struct {
   Nat position;
   const LType *type;
   Tokens source;
+  /* Structural comparison uses binder positions for local type names. */
+  const LType *identity;
 } TermType;
 
 typedef struct TermTypes TermTypes;
@@ -718,7 +728,10 @@ typedef enum {
    TERM_STRING keeps its text in name. TERM_VAR keeps the parameter name in
    name and the parameter position in index. TERM_NAME keeps name.
    TERM_APPLY, TERM_PARTIAL and TERM_CONSTRUCT keep name, the type
-   arguments in types and the value arguments in args. TERM_FUN keeps the
+   arguments in types and the value arguments in args. TERM_APPLY and
+   TERM_PARTIAL also keep their callee, a TERM_VAR for a binder or a
+   TERM_NAME for a definition; NULL denotes a definition named by name.
+   TERM_FUN keeps the
    binders in types and the body as the one item of args. TERM_GROUP keeps
    the inner term as the one item of args. TERM_REFL and the keyword forms
    keep their arguments in args, in source order. A list of terms; NULL is
@@ -732,6 +745,7 @@ struct Term {
   Nat number;
   Nat index;
   Text name;
+  const Term *callee;
   const TermTypes *types;
   const Terms *args;
 };
@@ -750,11 +764,14 @@ const Term *term_number(Nat position, Nat cost, Nat number);
 const Term *term_string(Nat position, Nat cost, Text text);
 const Term *term_var(Nat position, Nat cost, Text name, Nat index);
 const Term *term_named(TermTag tag, Nat position, Nat cost, Text name, const TermTypes *types, const Terms *args);
+const Term *term_call(TermTag tag, Nat position, Nat cost, const Term *callee, const TermTypes *types, const Terms *args);
 const Term *term_fun(Nat position, Nat cost, const TermTypes *binders, const Term *body);
 const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args);
 Nat same_term(const Term *left, const Term *right);
 Nat same_terms(const Terms *left, const Terms *right);
 Text term_text(const Term *term);
+/* checker.c: the body tokens before rest. */
+Tokens taken_tokens(Tokens body, Tokens rest);
 
 #include "literals.h"
 

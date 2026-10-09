@@ -203,11 +203,161 @@ static void test_term(void) {
   assert(same_text(term_text(proofs), tokens_text(proof)));
 }
 
+/* The term of the function name in the bindings, or NULL. */
+static const Term *body_term(const Bindings *environment, const char *name) {
+  for (; environment != NULL; environment = environment->tail)
+    if (environment->head.kind == BIND_FUN && same_text(environment->head.name, text(name)))
+      return environment->head.term;
+  return NULL;
+}
+
+/* The body of nested in test_definitions, with the given indexes of w and z:
+   useTwo (fun (y : Nat) (w : Nat) => useOne (fun (z : Nat) => pickK k (pickK w z))) */
+static const Term *nested_body(const LType *nat, Tokens nat_source, Nat w, Nat z) {
+  const TermTypes *yw = term_types_item((TermType){text("y"), 0, nat, nat_source},
+                                        term_types_item((TermType){text("w"), 0, nat, nat_source}, NULL));
+  const TermTypes *zs = term_types_item((TermType){text("z"), 0, nat, nat_source}, NULL);
+  const Term *inner_pick = term_named(TERM_APPLY, 0, 0, text("pickK"), NULL,
+                                      terms_item(term_var(0, 0, text("w"), w), one(term_var(0, 0, text("z"), z))));
+  const Term *outer_pick =
+      term_named(TERM_APPLY, 0, 0, text("pickK"), NULL,
+                 terms_item(term_var(0, 0, text("k"), 0), one(term_form(TERM_GROUP, 0, 0, one(inner_pick)))));
+  const Term *inner_fun = term_form(TERM_GROUP, 0, 0, one(term_fun(0, 0, zs, outer_pick)));
+  const Term *outer_fun = term_form(
+      TERM_GROUP, 0, 0, one(term_fun(0, 0, yw, term_named(TERM_APPLY, 0, 0, text("useOne"), NULL, one(inner_fun)))));
+  return term_named(TERM_APPLY, 0, 0, text("useTwo"), NULL, one(outer_fun));
+}
+
+/* check_definitions gives a term for each function body. The text of the
+   term is the text of the body tokens. The binders of an inline fun
+   continue after the function parameters, and a fun inside it continues
+   after its binders. */
+static void test_definitions(void) {
+  const char *source =
+      "def xs : List Nat := cons 4 (cons 7 nil)\n"
+      "def One : Type 0 := (n : Nat) -> Nat\n"
+      "def Two : Type 0 := (k : Nat) -> (n : Nat) -> Nat\n"
+      "def pickK : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => k\n"
+      "def twoList : (a : Nat) -> (b : Nat) -> List Nat := fun (a : Nat) (b : Nat) => cons a (cons (pickK b 5) nil)\n"
+      "def useOne : (g : One) -> Nat := fun (g : One) => g 3\n"
+      "def useTwo : (h : Two) -> Nat := fun (h : Two) => h 1 2\n"
+      "def viaName : (k : Nat) -> Nat := fun (k : Nat) => useTwo pickK\n"
+      "def viaPartial : (k : Nat) -> Nat := fun (k : Nat) => useOne (pickK k)\n"
+      "def nested : (k : Nat) -> (j : Nat) -> Nat := fun (k : Nat) (j : Nat) => useTwo (fun (y : Nat) (w : Nat) => "
+      "useOne (fun (z : Nat) => pickK k (pickK w z)))\n"
+      "def r1 : List Nat := twoList 1 2\n"
+      "def r4 : Nat := nested 6 0\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure) == 1);
+  Nat checked = 0;
+  for (const Bindings *item = environment; item != NULL; item = item->tail) {
+    if (item->head.kind != BIND_FUN) continue;
+    assert(item->head.term != NULL);
+    assert(same_text(term_text(item->head.term), tokens_text(item->head.body)));
+    checked++;
+  }
+  assert(checked == 7);
+
+  assert(body_term(environment, "twoList")->tag == TERM_CONSTRUCT);
+  const Term *k = term_var(0, 0, text("k"), 0);
+  const Term *by_name =
+      term_named(TERM_APPLY, 0, 0, text("useTwo"), NULL, one(term_named(TERM_NAME, 0, 0, text("pickK"), NULL, NULL)));
+  assert(same_term(body_term(environment, "viaName"), by_name));
+  const Term *by_partial =
+      term_named(TERM_APPLY, 0, 0, text("useOne"), NULL,
+                 one(term_form(TERM_GROUP, 0, 0, one(term_named(TERM_PARTIAL, 0, 0, text("pickK"), NULL, one(k))))));
+  assert(same_term(body_term(environment, "viaPartial"), by_partial));
+
+  /* nested: k and j are 0 and 1, y and w are 2 and 3, z is 4. A fun that
+     starts its binders at 0 again gives a different term. */
+  LType nat = {.tag = TY_NAT};
+  Tokens nat_source = lexed("Nat");
+  assert(same_term(body_term(environment, "nested"), nested_body(&nat, nat_source, 3, 4)));
+  assert(!same_term(body_term(environment, "nested"), nested_body(&nat, nat_source, 1, 0)));
+}
+
+/* Function parameters keep their binder positions when called, partially
+   applied, or passed as arguments. Renaming a binder preserves the term;
+   choosing another binder changes it, even when its source name matches. */
+static void test_function_references(void) {
+  const char *source =
+      "def One : Type 0 := (n : Nat) -> Nat\n"
+      "def Two : Type 0 := (k : Nat) -> (n : Nat) -> Nat\n"
+      "def use : (g : One) -> Nat := fun (g : One) => g 3\n"
+      "def runG : (g : One) -> Nat := fun (g : One) => g 3\n"
+      "def runH : (h : One) -> Nat := fun (h : One) => h 3\n"
+      "def passG : (g : One) -> Nat := fun (g : One) => use g\n"
+      "def passH : (h : One) -> Nat := fun (h : One) => use h\n"
+      "def firstOf : (g : One) -> (h : One) -> Nat := fun (g : One) (h : One) => g 3\n"
+      "def secondOf : (h : One) -> (g : One) -> Nat := fun (h : One) (g : One) => g 3\n"
+      "def partialG : (g : Two) -> Nat := fun (g : Two) => use (g 1)\n"
+      "def partialH : (h : Two) -> Nat := fun (h : Two) => use (h 1)\n"
+      "def partialFirst : (g : Two) -> (h : Two) -> Nat := fun (g : Two) (h : Two) => use (g 1)\n"
+      "def partialSecond : (h : Two) -> (g : Two) -> Nat := fun (h : Two) (g : Two) => use (g 1)\n"
+      "def nestedG : (g : One) -> Nat := fun (g : One) => use (fun (n : Nat) => g n)\n"
+      "def nestedH : (h : One) -> Nat := fun (h : One) => use (fun (m : Nat) => h m)\n"
+      "def innerG : (n : Nat) -> Nat := fun (n : Nat) => use (fun (g : Nat) => runG (fun (h : Nat) => g))\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure) == 1);
+  assert(same_term(body_term(environment, "runG"), body_term(environment, "runH")));
+  assert(same_term(body_term(environment, "passG"), body_term(environment, "passH")));
+  assert(!same_term(body_term(environment, "firstOf"), body_term(environment, "secondOf")));
+  assert(same_term(body_term(environment, "partialG"), body_term(environment, "partialH")));
+  assert(!same_term(body_term(environment, "partialFirst"), body_term(environment, "partialSecond")));
+  assert(same_term(body_term(environment, "nestedG"), body_term(environment, "nestedH")));
+  const Term *call = body_term(environment, "runG");
+  assert(call->callee != NULL && call->callee->tag == TERM_VAR && call->callee->index == 0);
+  assert(!same_term(call, term_named(TERM_APPLY, 0, 0, text("g"), NULL, call->args)));
+  const Term *passed = body_term(environment, "passG");
+  assert(passed->args->head->tag == TERM_VAR && passed->args->head->index == 0);
+  for (const Bindings *item = environment; item != NULL; item = item->tail)
+    if (item->head.kind == BIND_FUN)
+      assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(item->head.body)));
+}
+
+static void test_type_references(void) {
+  const char *source =
+      "def id : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => x\n"
+      "def viaA : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => id A x\n"
+      "def viaB : (B : Type 0) -> (y : B) -> B := fun (B : Type 0) (y : B) => id B y\n"
+      "def viaFirst : (A : Type 0) -> (B : Type 0) -> (x : A) -> A := "
+      "fun (A : Type 0) (B : Type 0) (x : A) => id A x\n"
+      "def viaSecond : (B : Type 0) -> (A : Type 0) -> (x : A) -> A := "
+      "fun (B : Type 0) (A : Type 0) (x : A) => id A x\n"
+      "def listA : (A : Type 0) -> (xs : List (Option A)) -> List (Option A) := "
+      "fun (A : Type 0) (xs : List (Option A)) => id (List (Option A)) xs\n"
+      "def listB : (B : Type 0) -> (ys : List (Option B)) -> List (Option B) := "
+      "fun (B : Type 0) (ys : List (Option B)) => id (List (Option B)) ys\n"
+      "def One : Type 0 := (n : Nat) -> Nat\n"
+      "def keep : (A : Type 0) -> (x : A) -> (n : Nat) -> Nat := "
+      "fun (A : Type 0) (x : A) (n : Nat) => n\n"
+      "def useNat : (g : One) -> Nat := fun (g : One) => g 1\n"
+      "def partialA : (A : Type 0) -> (x : A) -> Nat := "
+      "fun (A : Type 0) (x : A) => useNat (keep A x)\n"
+      "def partialB : (B : Type 0) -> (y : B) -> Nat := "
+      "fun (B : Type 0) (y : B) => useNat (keep B y)\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure) == 1);
+  assert(same_term(body_term(environment, "viaA"), body_term(environment, "viaB")));
+  assert(!same_term(body_term(environment, "viaFirst"), body_term(environment, "viaSecond")));
+  assert(same_term(body_term(environment, "listA"), body_term(environment, "listB")));
+  assert(same_term(body_term(environment, "partialA"), body_term(environment, "partialB")));
+  for (const Bindings *item = environment; item != NULL; item = item->tail)
+    if (item->head.kind == BIND_FUN)
+      assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(item->head.body)));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
   test_json();
   test_term();
+  test_definitions();
+  test_function_references();
+  test_type_references();
   puts("C module tests passed");
   return 0;
 }
