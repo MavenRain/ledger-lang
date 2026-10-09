@@ -1547,12 +1547,16 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         if (checking_body(environment) == 1)
           return with_term(worked_typed((Typed){item->type, &null_value}, after, spent, typed, rest, left), term,
                            applied_term);
+        const Bindings *scope = bind_arguments(environment, item->params, values, item->scope);
         const Value *value;
         Tokens ignored;
         Nat used;
-        if (!parse_term(more, nat_sub(spent, 1), 0, item->type,
-                        bind_arguments(environment, item->params, values, item->scope), item->body, &value, &ignored,
-                        &used, NULL, failure))
+        if (item->term != NULL && eval_term(more, nat_sub(spent, 1), item->type, scope, item->term, &value, &used))
+          return with_term(worked_typed((Typed){item->type, value}, after, used, typed, rest, left), term,
+                           applied_term);
+        /* The evaluator gave 0: the token path gives the value or the failure. */
+        if (!parse_term(more, nat_sub(spent, 1), 0, item->type, scope, item->body, &value, &ignored, &used, NULL,
+                        failure))
           return 0;
         return with_term(worked_typed((Typed){item->type, value}, after, used, typed, rest, left), term,
                          applied_term);
@@ -1838,13 +1842,16 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
     Nat spent;
     if (!eval_arguments(fuel, budget, param_types(item->params), environment, term->args, &values, &spent)) return 0;
     if (checking_body(environment) == 1) return eval_typed((Typed){item->type, &null_value}, spent, typed, left);
-    /* D3-s4 moves the closure body to a term. The tokens exist. */
+    const Bindings *scope = bind_arguments(environment, item->params, values, item->scope);
     const Value *value;
-    Tokens ignored;
     Nat used;
+    /* The closure body term first. A 0 there runs the body tokens here, as the
+       application site does (Q-S4-3). */
+    if (item->term != NULL && eval_term(fuel, nat_sub(spent, 1), item->type, scope, item->term, &value, &used))
+      return eval_typed((Typed){item->type, value}, used, typed, left);
+    Tokens ignored;
     Failure failure;
-    if (!parse_term(fuel, nat_sub(spent, 1), 0, item->type, bind_arguments(environment, item->params, values, item->scope),
-                    item->body, &value, &ignored, &used, NULL, &failure))
+    if (!parse_term(fuel, nat_sub(spent, 1), 0, item->type, scope, item->body, &value, &ignored, &used, NULL, &failure))
       return 0;
     return eval_typed((Typed){item->type, value}, used, typed, left);
   }
@@ -1861,8 +1868,8 @@ static const Term *third_arg(const Term *term) {
              : NULL;
 }
 
-/* unary_argument on a name term. A function gives its body term. A closure
-   keeps the body tokens (D3-s4). */
+/* unary_argument on a name term. A function or a closure gives its body term
+   (D3-s4). A closure with dependent params keeps the body tokens. */
 static int eval_unary_argument(const Bindings *environment, const Term *term, Unary *op) {
   const Binding *item;
   if (term == NULL || !lookup(term->name, environment, &item)) return 0;
@@ -1874,7 +1881,9 @@ static int eval_unary_argument(const Bindings *environment, const Term *term, Un
   case BIND_FUN:
     op->term = item->term;
     return dependent_params(item->params) == 0;
-  case BIND_CLOSURE: return 1;
+  case BIND_CLOSURE:
+    op->term = dependent_params(item->params) == 0 ? item->term : NULL;
+    return 1;
   }
   return 0;
 }
@@ -1966,7 +1975,7 @@ static int eval_bound_unary(Fuel fuel, Nat budget, const Bindings *environment, 
       term->name, arrow_type(drop_params(params_length(front), formal), subst_type(NULL, item->type)), term->name,
       values, environment);
   if (!unary_of(environment, &closure, op)) return 0;
-  op->term = item->kind == BIND_FUN ? closure.term : NULL;
+  op->term = closure.term;
   *left = spent;
   return 1;
 }
@@ -2087,7 +2096,8 @@ static const Term *nth_term(const Terms *terms, Nat index) {
 }
 
 /* stepper_argument on a VAR or NAME head. A function gives its body term (0
-   for dependent params); a closure keeps the body tokens. */
+   for dependent params); a closure gives its body term (the body tokens for
+   dependent params). */
 static int eval_stepper_argument(const Bindings *environment, const Term *term, Stepper *op) {
   const Binding *item;
   if (term == NULL || !lookup(term->name, environment, &item)) return 0;
@@ -2099,7 +2109,10 @@ static int eval_stepper_argument(const Bindings *environment, const Term *term, 
     if (has_type_param(item->params) == 1 || dependent_params(item->params) == 1) return 0;
     *op = (Stepper){item->params, item->type, item->body, definition_scope(item->name, environment), item->term};
     return 1;
-  case BIND_CLOSURE: *op = (Stepper){item->params, item->type, item->body, item->scope, NULL}; return 1;
+  case BIND_CLOSURE:
+    *op = (Stepper){item->params, item->type, item->body, item->scope,
+                    dependent_params(item->params) == 0 ? item->term : NULL};
+    return 1;
   }
   return 0;
 }
@@ -2199,8 +2212,8 @@ static int eval_bound_arguments(Fuel fuel, Nat budget, const Params *params, con
 }
 
 /* bound_stepper on a PARTIAL term. A callee with type params gives 0
-   (finding b). A function callee gives its body term in the closure scope; a
-   closure callee keeps the body tokens. */
+   (finding b). A function or a closure callee gives its body term in the
+   closure scope (D3-s4). */
 static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Stepper *op,
                               Nat *left) {
   const Binding *item;
@@ -2216,7 +2229,7 @@ static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment
   Binding made = partial_closure(
       term->name, arrow_type(drop_params(params_length(front), formal), subst_type(NULL, item->type)), term->name,
       values, environment);
-  const Term *body = item->kind == BIND_FUN ? made.term : NULL;
+  const Term *body = made.term;
   switch (made.kind) {
   case BIND_VALUE:
   case BIND_TYPE:

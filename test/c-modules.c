@@ -688,7 +688,14 @@ static void test_term_evaluator(void) {
       "(fun (fs : List (Prod Text Nat)) => 4) 0 v\n"
       "def grow : (s : Text) -> Option (Sum Nat (Sum Flag (Sum Text (Sum (List Text) (List (Prod Text Text)))))) := "
       "fun (s : Text) => some (inr (inr (inr (inr (cons (pair \"left\" s) nil)))))\n"
-      "def unfoldValue : (k : Nat) -> (s : Text) -> Value := fun (k : Nat) (s : Text) => unfold grow k s\n";
+      "def unfoldValue : (k : Nat) -> (s : Text) -> Value := fun (k : Nat) (s : Text) => unfold grow k s\n"
+      "def twice : (f : One) -> (n : Nat) -> Nat := fun (f : One) (n : Nat) => f (f n)\n"
+      "def Two : Type 0 := (k : Nat) -> (n : Nat) -> Nat\n"
+      "def PushK : Type 0 := (k : Nat) -> (y : Nat) -> (acc : List Nat) -> List Nat\n"
+      "def mapC : (g : Two) -> (k : Nat) -> (ys : List Nat) -> List Nat := "
+      "fun (g : Two) (k : Nat) (ys : List Nat) => map (g k) ys\n"
+      "def foldC : (g : PushK) -> (k : Nat) -> (ys : List Nat) -> List Nat := "
+      "fun (g : PushK) (k : Nat) (ys : List Nat) => fold (g k) nil ys\n";
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
@@ -792,6 +799,44 @@ static void test_term_evaluator(void) {
     BothPaths full = body_at(environment, keyword[i].name, keyword[i].args, 1000, 1000);
     assert(full.eval == 1 && same_text(full.value, text(keyword[i].value)));
   }
+
+  /* D3-s4 part B: closures by term. A closure param applied in the body
+     (twice), a VAR head bound to a closure (mapV, foldV) and a PARTIAL head
+     over a closure param (mapC, foldC). The args text gives the closure: a
+     name or a partial gives the body term of the function. An inline fun
+     gives a Value with no term (the run-time path), thus its closure has a
+     TERM_BODY with a NULL callee and its body runs by tokens (the fallback
+     rows). Each row gives the same answer at each point of the grid. */
+  const struct {
+    const char *name;
+    const char *args;
+    const char *value;
+  } closures[] = {
+      {"twice", "size 4", "4"},
+      {"twice", "(pickK 3) 4", "3"},
+      {"twice", "(fun (y : Nat) => pickK 5 y) 4", "5"},
+      {"mapV", "(pickK 3) (cons 7 (cons 8 nil))", "[3,3]"},
+      {"mapV", "(fun (y : Nat) => pickK 5 y) (cons 7 (cons 8 nil))", "[5,5]"},
+      {"foldV", "(pushK 4) (cons 7 (cons 8 nil))", "[4,7,4,8]"},
+      {"foldV", "(fun (y : Nat) (a : List Nat) => cons y a) (cons 7 (cons 8 nil))", "[7,8]"},
+      {"mapC", "pickK 4 (cons 7 (cons 8 nil))", "[4,4]"},
+      {"mapC", "(fun (a : Nat) (b : Nat) => a) 4 (cons 7 (cons 8 nil))", "[4,4]"},
+      {"foldC", "pushK 4 (cons 7 (cons 8 nil))", "[4,7,4,8]"},
+  };
+  for (Nat i = 0; i < sizeof closures / sizeof closures[0]; i++) {
+    GridCount count = body_grid(environment, closures[i].name, closures[i].args);
+    assert(count.worked > 0 && count.differ == 0);
+    BothPaths full = body_at(environment, closures[i].name, closures[i].args, 1000, 1000);
+    assert(full.eval == 1 && same_text(full.value, text(closures[i].value)));
+  }
+  /* The closure of f (the second binding of the call scope): a name gives the
+     body term of size; an inline fun gives a TERM_BODY with a NULL callee. */
+  const Binding *twice_item = fun_named(environment, "twice");
+  const Bindings *name_scope = call_scope(environment, twice_item, "size 4");
+  assert(name_scope->tail->head.kind == BIND_CLOSURE && name_scope->tail->head.term->callee != NULL);
+  const Bindings *fun_scope = call_scope(environment, twice_item, "(fun (y : Nat) => pickK 5 y) 4");
+  assert(fun_scope->tail->head.kind == BIND_CLOSURE && fun_scope->tail->head.term->tag == TERM_BODY);
+  assert(fun_scope->tail->head.term->callee == NULL);
 
   /* Budget 1 on a map over 3 items: the first item spends it. eval_term
      gives 0, and the token path gives eBudget at the first token of the
