@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createCompiler } from '../bin/bridge.mjs';
+import { readCore } from './core.mjs';
 
 const compile = await createCompiler();
 const encoder = new TextEncoder();
@@ -18,9 +19,9 @@ const reject = source => {
 };
 
 // Read the core files, never the compiler metadata. A change of a family,
-// constructor, field name, field order or type in core/ops.mech changes the
+// constructor, field name, field order or type in core/ops.def changes the
 // cases below.
-const load = async path => (await readFile(new URL(path, import.meta.url), 'utf8')).replace(/--[^\n]*/g, '');
+const load = path => readCore(new URL(path, import.meta.url));
 const families = new Map();
 function readFamilies(source) {
   const found = [];
@@ -46,8 +47,8 @@ function readFamilies(source) {
   }
   return found;
 }
-readFamilies(await load('../core/schema.mech'));
-const operations = readFamilies(await load('../core/ops.mech'));
+readFamilies(await load('../core/schema.def'));
+const operations = readFamilies(await load('../core/ops.def'));
 const dataFamilies = operations.filter(family => family !== 'Query');
 const kinds = families.get('Kind').map(constructor => constructor.name);
 
@@ -135,7 +136,7 @@ for (const family of dataFamilies) {
   }
 }
 
-test('core/ops.mech has the expected operation families', () => {
+test('core/ops.def has the expected operation families', () => {
   assert.deepEqual(operations, ['Moment', 'Missing', 'Verdict', 'Command', 'Write', 'Outcome', 'Step',
     'PipelineKey', 'Bucket', 'StageStat', 'Renewal', 'Account360', 'Query']);
   assert.equal(families.get('Command').length, 28);

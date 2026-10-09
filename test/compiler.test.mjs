@@ -144,7 +144,7 @@ test('EOF diagnostics carry the source byte position', () => {
   assert.equal(reject(source).byte, encoder.encode(source).length);
 });
 
-test('invalid source UTF-8 is diagnosed in the reactor at the first bad byte', () => {
+test('invalid source UTF-8 is diagnosed in the compiler at the first bad byte', () => {
   for (const [bytes, byte] of [[[0xc0, 0x80], 0], [[0xed, 0xa0, 0x80], 1], [[0xf4, 0x90, 0x80, 0x80], 1], [[0xc3], 0]]) {
     const result = JSON.parse(compile(Uint8Array.from(bytes)));
     assert.match(result.error.message, /invalid UTF-8/);

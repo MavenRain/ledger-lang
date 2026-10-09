@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createCompiler } from '../bin/bridge.mjs';
+import { readCore } from './core.mjs';
 
 const compile = await createCompiler();
 const encoder = new TextEncoder();
@@ -22,8 +22,7 @@ const reject = source => {
 // Read the language's source of truth, never the compiler metadata. This small
 // test-only signature reader makes schema additions and field changes visible
 // to the executable conformance checks below.
-const schemaSource = (await readFile(new URL('../core/schema.mech', import.meta.url), 'utf8'))
-  .replace(/--[^\n]*/g, '');
+const schemaSource = await readCore(new URL('../core/schema.def', import.meta.url));
 const families = new Map();
 for (const block of schemaSource.split(/^(?:mu|and) /m).slice(1)) {
   const [header, ...declarations] = block.split(/^\| /m);
@@ -252,7 +251,7 @@ test('CRM example compiles through the public CLI', () => {
   const output = JSON.parse(result.stdout);
   assert.equal(output['ledger-lang'], 1);
   // Expected values are written from examples/crm.ledger and the field order
-  // in core/schema.mech, never taken from compiler output.
+  // in core/schema.def, never taken from compiler output.
   const ref = (kind, hash) => ({ kind, hash });
   const org = ref('kindParty', 'org-entry');
   const person = ref('kindParty', 'person-entry');

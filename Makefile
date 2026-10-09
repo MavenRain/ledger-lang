@@ -7,14 +7,13 @@ C_HEADERS := $(wildcard compiler/*.h)
 C_SCHEMA := core/schema.def
 C_OPS := core/ops.def
 
-build:
-	node bin/build.mjs
+build: build/ledgerc
 
-check:
+check: c-check
 	node bin/build.mjs --check
 
 test: build
-	node --stack-size=7000 --max-old-space-size=1024 --test test/*.test.mjs
+	node --test test/*.test.mjs
 
 c-check:
 	@mkdir -p build
