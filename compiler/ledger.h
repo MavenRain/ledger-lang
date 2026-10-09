@@ -779,6 +779,16 @@ Text term_text(const Term *term);
 /* checker.c: the body tokens before rest. */
 Tokens taken_tokens(Tokens body, Tokens rest);
 
+/* eval_term evaluates a checked body term at run time (D3-s3). It follows
+   parse_term with atom 0 on the tokens of the term: the same expected type,
+   the same fuel steps and the same work charges in the same order. A
+   Worked answer is int 1 with the value and the remaining budget written,
+   or 0. On 0 the caller runs the token path. eval_synth follows
+   synth_term and writes the type and the value. */
+int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
+              const Value **value, Nat *left);
+int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left);
+
 #include "literals.h"
 
 #endif

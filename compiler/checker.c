@@ -1521,6 +1521,9 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         const Value *value;
         Tokens ignored;
         Nat used;
+        if (item->term != NULL && eval_term(more, nat_sub(spent, 1), applied, scope, item->term, &value, &used))
+          return with_term(worked_typed((Typed){applied, value}, after, used, typed, rest, left), term, applied_term);
+        /* The evaluator gave 0: the token path gives the value or the failure. */
         if (!parse_term(more, nat_sub(spent, 1), 0, applied, scope, item->body, &value, &ignored, &used, NULL, failure))
           return 0;
         return with_term(worked_typed((Typed){applied, value}, after, used, typed, rest, left), term, applied_term);
@@ -1692,6 +1695,265 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
       return with_term(worked_value(&null_value, after, spent, value, rest, left), term, built);
     return fail_at(failure, head.position, refused.message);
   }
+  }
+  return 0;
+}
+
+/* D3-s3 part A: the evaluator of a checked body term. It is parse_term and
+   synth_term with a Term in place of the tokens: the same helpers, the same
+   fuel steps and the same work charges in the same order. It reports no
+   failure. It gives 0 (the caller replays the tokens) when the budget is 0
+   at the entry of a node, for an arrow expected type (Q-S3-4), for a
+   dependent callee, at the fuel margin of the type arguments (Q-S3-3) and
+   for the keyword forms (part B). */
+static const Tokens no_tokens = {NULL, 0};
+
+static int eval_worked(const Value *found, Nat budget, const Value **value, Nat *left) {
+  *value = found;
+  *left = budget;
+  return 1;
+}
+
+static int eval_typed(Typed found, Nat budget, Typed *typed, Nat *left) {
+  *typed = found;
+  *left = budget;
+  return 1;
+}
+
+static const Term *first_arg(const Term *term) { return term->args != NULL ? term->args->head : NULL; }
+
+static const Term *second_arg(const Term *term) {
+  return term->args != NULL && term->args->tail != NULL ? term->args->tail->head : NULL;
+}
+
+/* parse_arguments on the argument terms. */
+static int eval_arguments(Fuel fuel, Nat budget, const LTypes *types, const Bindings *environment, const Terms *args,
+                          const Values **values, Nat *left) {
+  const Values *done = NULL;
+  for (;; types = types->tail, args = args->tail) {
+    if (fuel == 0) return 0;
+    fuel = fuel - 1;
+    if (types == NULL) {
+      if (args != NULL) return 0;
+      *values = reverse_values_onto(NULL, done);
+      *left = budget;
+      return 1;
+    }
+    if (args == NULL) return 0;
+    const Value *value;
+    if (!eval_term(fuel, budget, types->head, environment, args->head, &value, &budget)) return 0;
+    done = values_item(value, done);
+  }
+}
+
+/* dependent_arguments on the argument terms. The callee is not dependent,
+   thus instantiate_result reads no argument token. */
+static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const Bindings *environment,
+                          const Params *params, const Params *remaining, const Values *seen, const Terms *args,
+                          const Values **values, Nat *left) {
+  for (;; remaining = remaining->tail) {
+    if (fuel == 0) return 0;
+    fuel = fuel - 1;
+    if (remaining == NULL) {
+      if (args != NULL) return 0;
+      *values = reverse_values_onto(NULL, seen);
+      *left = budget;
+      return 1;
+    }
+    Param head = remaining->head;
+    if (is_type_param(head) == 1) continue;
+    if (args == NULL) return 0;
+    const Values *earlier = reverse_values_onto(NULL, seen);
+    const LType *instantiated = NULL;
+    int resolved =
+        instantiate_result(fuel, environment, params, earlier, no_tokens, subst_type(chosen, head.type), &instantiated);
+    const LType *expected;
+    if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected)) return 0;
+    const Value *value;
+    if (!eval_term(fuel, budget, expected, environment, args->head, &value, &budget)) return 0;
+    seen = values_item(value, seen);
+    args = args->tail;
+  }
+}
+
+/* Q-S3-3: type_arguments without the type tokens. Each type argument is the
+   checked type with the type bindings of the run-time scope. */
+static int eval_type_arguments(const Params *params, const Bindings *environment, const TermTypes *types,
+                               const Bindings **result) {
+  const Bindings *chosen = NULL;
+  for (; params != NULL && is_type_param(params->head) == 1; params = params->tail, types = types->tail) {
+    if (types == NULL) return 0;
+    const LType *given = subst_type(environment, types->head.type);
+    if (type_level(given) != 0) return 0;
+    chosen = bindings_item(type_binding(params->head.name, params->head.type, given), chosen);
+  }
+  if (types != NULL) return 0;
+  *result = chosen;
+  return 1;
+}
+
+/* synth_term on an application: fuel is the fuel of the callee step. */
+static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left) {
+  const Binding *item;
+  if (!lookup(term->name, environment, &item)) return 0;
+  if (dependent_result(item->type) == 1 || dependent_params(item->params) == 1) return 0;
+  switch (item->kind) {
+  case BIND_VALUE:
+  case BIND_TYPE:
+  case BIND_ARROW: return 0;
+  case BIND_FUN: {
+    /* The margin bounds the parse_type depth that the evaluator skips. */
+    if (term->types != NULL && fuel <= term_text(term).size + 1) return 0;
+    const Bindings *chosen;
+    if (!eval_type_arguments(item->params, environment, term->types, &chosen)) return 0;
+    const Values *values;
+    Nat spent;
+    if (!eval_dependent(fuel, budget, chosen, environment, item->params, item->params, NULL, term->args, &values,
+                        &spent))
+      return 0;
+    const LType *instantiated = NULL;
+    int resolved = instantiate_result(fuel, environment, item->params, values, no_tokens,
+                                      subst_type(chosen, item->type), &instantiated);
+    const LType *applied;
+    if (!close_result(fuel, environment, item->params, values, resolved, instantiated, &applied)) return 0;
+    if (checking_body(environment) == 1) return eval_typed((Typed){applied, &null_value}, spent, typed, left);
+    if (item->term == NULL) return 0;
+    const Params *closed =
+        close_params(fuel, environment, item->params, values,
+                     instantiate_params(fuel, environment, item->params, values, no_tokens, item->params));
+    const Bindings *scope = bind_arguments(environment, value_params(chosen, closed), values,
+                                           reverse_bindings_onto(definition_scope(item->name, environment), chosen));
+    const Value *value;
+    Nat used;
+    if (!eval_term(fuel, nat_sub(spent, 1), applied, scope, item->term, &value, &used)) return 0;
+    return eval_typed((Typed){applied, value}, used, typed, left);
+  }
+  case BIND_CLOSURE: {
+    const Values *values;
+    Nat spent;
+    if (!eval_arguments(fuel, budget, param_types(item->params), environment, term->args, &values, &spent)) return 0;
+    if (checking_body(environment) == 1) return eval_typed((Typed){item->type, &null_value}, spent, typed, left);
+    /* D3-s4 moves the closure body to a term. The tokens exist. */
+    const Value *value;
+    Tokens ignored;
+    Nat used;
+    Failure failure;
+    if (!parse_term(fuel, nat_sub(spent, 1), 0, item->type, bind_arguments(environment, item->params, values, item->scope),
+                    item->body, &value, &ignored, &used, NULL, &failure))
+      return 0;
+    return eval_typed((Typed){item->type, value}, used, typed, left);
+  }
+  }
+  return 0;
+}
+
+int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left) {
+  if (term == NULL || fuel == 0 || budget == 0) return 0;
+  Fuel more = fuel - 1;
+  Typed found;
+  Nat spent;
+  Tokens rest;
+  Failure failure;
+  switch (term->tag) {
+  case TERM_GROUP: return eval_synth(more, budget, environment, first_arg(term), typed, left);
+  case TERM_VAR:
+  case TERM_NAME: {
+    const Binding *item;
+    if (!lookup(term->name, environment, &item) || item->kind != BIND_VALUE) return 0;
+    if (!proof_in_scope(item->name, item->type, environment)) return 0;
+    return eval_typed((Typed){item->type, item->value}, budget, typed, left);
+  }
+  case TERM_APPLY: return eval_apply(more, budget, environment, term, typed, left);
+  case TERM_FIRST:
+  case TERM_SECOND:
+    if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent)) return 0;
+    return lift_parsed(spent,
+                       project(term->position, term->tag == TERM_FIRST ? 1 : 2, found, no_tokens, typed, &rest,
+                               &failure),
+                       left);
+  case TERM_SYMM:
+    if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent)) return 0;
+    return lift_parsed(spent, symm_proof(term->position, found, no_tokens, typed, &rest, &failure), left);
+  case TERM_TRANS: {
+    if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent)) return 0;
+    Typed other;
+    Nat used;
+    if (!eval_synth(more, spent, environment, second_arg(term), &other, &used)) return 0;
+    return lift_parsed(used, trans_proof(term->position, found, other, no_tokens, typed, &rest, &failure), left);
+  }
+  case TERM_NUMBER:
+  case TERM_STRING:
+  case TERM_PARTIAL:
+  case TERM_FUN:
+  case TERM_CONSTRUCT:
+  case TERM_REFL:
+  case TERM_EITHER:
+  case TERM_PURE:
+  case TERM_MAP:
+  case TERM_BIND:
+  case TERM_FILTER:
+  case TERM_FOLD:
+  case TERM_FOLD_VALUE:
+  case TERM_UNFOLD:
+  case TERM_UNFOLD_VALUE: return 0;
+  }
+  return 0;
+}
+
+int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
+              const Value **value, Nat *left) {
+  if (term == NULL || fuel == 0 || budget == 0 || is_arrow_type(expected) == 1) return 0;
+  Fuel more = fuel - 1;
+  Tokens rest;
+  Failure failure;
+  switch (term->tag) {
+  case TERM_NUMBER:
+    return same_type(expected, &nat_type) == 1 && eval_worked(nat_value(term->number), budget, value, left);
+  case TERM_STRING:
+    return same_type(expected, &text_type) == 1 && eval_worked(text_value(term->name), budget, value, left);
+  case TERM_GROUP: return eval_term(more, budget, expected, environment, first_arg(term), value, left);
+  case TERM_VAR:
+  case TERM_NAME: {
+    const Binding *item;
+    if (!lookup(term->name, environment, &item) || item->kind != BIND_VALUE) return 0;
+    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
+    return eval_worked(item->value, budget, value, left);
+  }
+  case TERM_CONSTRUCT: {
+    const Binding *item;
+    Plan selected;
+    if (lookup(term->name, environment, &item) || !constructor_plan(expected, term->name, &selected)) return 0;
+    const Values *values;
+    Nat spent;
+    if (!eval_arguments(more, budget, plan_arguments(&selected), environment, term->args, &values, &spent)) return 0;
+    const Value *made;
+    if (evaluate_plan(&selected, values, &made, &failure)) return eval_worked(made, spent, value, left);
+    return checking_body(environment) == 1 && eval_worked(&null_value, spent, value, left);
+  }
+  case TERM_REFL:
+    return lift_parsed(budget, refl_check(term->position, expected, no_tokens, value, &rest, &failure), left);
+  case TERM_APPLY:
+  case TERM_FIRST:
+  case TERM_SECOND:
+  case TERM_SYMM:
+  case TERM_TRANS: {
+    /* checked_synth: synth_term at fuel - 1, then the check of the type. */
+    Typed found;
+    Nat spent;
+    if (!eval_synth(more, budget, environment, term, &found, &spent)) return 0;
+    return check_worked(term->position, expected, found, no_tokens, spent, value, &rest, left, &failure);
+  }
+  case TERM_PARTIAL:
+  case TERM_FUN:
+  case TERM_EITHER:
+  case TERM_PURE:
+  case TERM_MAP:
+  case TERM_BIND:
+  case TERM_FILTER:
+  case TERM_FOLD:
+  case TERM_FOLD_VALUE:
+  case TERM_UNFOLD:
+  case TERM_UNFOLD_VALUE: return 0;
   }
   return 0;
 }

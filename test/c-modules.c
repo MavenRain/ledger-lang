@@ -499,6 +499,138 @@ static void test_type_references(void) {
       assert(item->head.term != NULL && same_text(term_text(item->head.term), tokens_text(item->head.body)));
 }
 
+/* The binding of the function name, or NULL. */
+static const Binding *fun_named(const Bindings *environment, const char *name) {
+  for (; environment != NULL; environment = environment->tail)
+    if (environment->head.kind == BIND_FUN && same_text(environment->head.name, text(name))) return &environment->head;
+  return NULL;
+}
+
+/* The print_value text of the value. */
+static Text printed(const Value *value) {
+  Printer printer = {1000, builder_new()};
+  Failure failure;
+  assert(print_value(&printer, value, &failure));
+  return builder_text(&printer.output);
+}
+
+/* The scope of the body of the function item, called with the arguments in
+   args (the run-time call site of synth_term). */
+static const Bindings *call_scope(const Bindings *environment, const Binding *item, const char *args) {
+  const Values *values;
+  Tokens rest;
+  Nat left;
+  Failure failure;
+  assert(parse_arguments(1000, 1000, 1, param_types(item->params), environment, lexed(args), &values, &rest, &left,
+                         NULL, &failure));
+  assert(rest.size == 0);
+  return bind_arguments(environment, item->params, values, definition_scope(item->name, environment));
+}
+
+typedef struct {
+  int eval;
+  int parse;
+  Text value;
+} BothPaths;
+
+/* eval_term and parse_term on the body of item at one fuel and budget. When
+   eval_term gives 1, parse_term gives 1 with the same value text and the
+   same remaining budget. */
+static BothPaths both_paths(const Bindings *scope, const Binding *item, Fuel fuel, Nat budget) {
+  const Value *eval_value = NULL;
+  Nat eval_left = 0;
+  int eval = eval_term(fuel, budget, item->type, scope, item->term, &eval_value, &eval_left);
+  const Value *parse_value = NULL;
+  Tokens rest;
+  Nat parse_left = 0;
+  Failure failure;
+  int parse = parse_term(fuel, budget, 0, item->type, scope, item->body, &parse_value, &rest, &parse_left, NULL, &failure);
+  if (eval == 1) {
+    assert(parse == 1 && eval_left == parse_left);
+    assert(same_text(printed(eval_value), printed(parse_value)));
+  }
+  return (BothPaths){eval, parse, eval == 1 ? printed(eval_value) : text("")};
+}
+
+typedef struct {
+  Nat worked;
+  Nat differ;
+} GridCount;
+
+/* both_paths on each fuel below 64 and each budget below 16. worked counts
+   the points where eval_term gives 1; differ counts the points where the
+   two answers differ. */
+static GridCount body_grid(const Bindings *environment, const char *name, const char *args) {
+  const Binding *item = fun_named(environment, name);
+  assert(item != NULL && item->term != NULL);
+  const Bindings *scope = call_scope(environment, item, args);
+  GridCount count = {0, 0};
+  for (Fuel fuel = 0; fuel < 64; fuel++)
+    for (Nat budget = 0; budget < 16; budget++) {
+      BothPaths paths = both_paths(scope, item, fuel, budget);
+      count.worked += paths.eval == 1;
+      count.differ += paths.eval != paths.parse;
+    }
+  return count;
+}
+
+/* both_paths on the body of the function name at one fuel and budget. */
+static BothPaths body_at(const Bindings *environment, const char *name, const char *args, Fuel fuel, Nat budget) {
+  const Binding *item = fun_named(environment, name);
+  assert(item != NULL && item->term != NULL);
+  return both_paths(call_scope(environment, item, args), item, fuel, budget);
+}
+
+/* eval_term gives the value, the remaining budget and the answer of
+   parse_term on the body tokens, or 0 (D3-s3 part A). A body with no type
+   arguments gives the same answer on both paths. A keyword form and a
+   dependent callee give 0 from eval_term. A body with type arguments gives 0
+   at the fuel margin. */
+static void test_term_evaluator(void) {
+  const char *source =
+      "def pickK : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => k\n"
+      "def twoList : (a : Nat) -> (b : Nat) -> List Nat := fun (a : Nat) (b : Nat) => cons a (cons (pickK b 5) nil)\n"
+      "def label : (a : Nat) -> (b : Nat) -> Text := fun (a : Nat) (b : Nat) => \"hi\"\n"
+      "def grouped : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => (pickK b a)\n"
+      "def deep : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => pickK (pickK a b) 9\n"
+      "def mapK : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "map (fun (y : Nat) => pickK k y) ys\n"
+      "def sameNat : (n : Nat) -> (p : Eq Nat n n) -> Nat := fun (n : Nat) (p : Eq Nat n n) => n\n"
+      "def viaSame : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => sameNat a refl\n"
+      "def id : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => x\n"
+      "def viaA : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => id A x\n"
+      "def viaNat : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => viaA Nat b\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure) == 1);
+
+  const char *exact[] = {"pickK", "twoList", "label", "grouped", "deep"};
+  for (Nat i = 0; i < sizeof exact / sizeof exact[0]; i++) {
+    GridCount count = body_grid(environment, exact[i], "4 7");
+    assert(count.worked > 0 && count.differ == 0);
+  }
+  assert(same_text(body_at(environment, "twoList", "4 7", 1000, 1000).value, text("[4,7]")));
+  assert(same_text(body_at(environment, "label", "4 7", 1000, 1000).value, text("\"hi\"")));
+  assert(same_text(body_at(environment, "deep", "4 7", 1000, 1000).value, text("4")));
+
+  /* Budget 1: the inner call spends it, and the outer body has none left. */
+  BothPaths starved = body_at(environment, "deep", "4 7", 1000, 1);
+  assert(starved.eval == 0 && starved.parse == 0);
+
+  /* Fallback: the token path gives the value. */
+  BothPaths keyword = body_at(environment, "mapK", "4 (cons 7 nil)", 1000, 1000);
+  assert(keyword.eval == 0 && keyword.parse == 1);
+  BothPaths dependent = body_at(environment, "viaSame", "4 7", 1000, 1000);
+  assert(dependent.eval == 0 && dependent.parse == 1);
+
+  /* Type arguments: eval 1 gives parse 1 on the grid, and the margin is
+     term_text(APPLY).size + 2 at entry. */
+  assert(body_grid(environment, "viaNat", "4 7").worked > 0);
+  assert(same_text(body_at(environment, "viaNat", "4 7", 1000, 1000).value, text("7")));
+  Fuel margin = term_text(fun_named(environment, "viaNat")->term).size + 2;
+  assert(body_at(environment, "viaNat", "4 7", margin, 1000).eval == 0);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -509,6 +641,7 @@ int main(void) {
   test_keyword_definitions();
   test_keyword_positions();
   test_type_references();
+  test_term_evaluator();
   puts("C module tests passed");
   return 0;
 }
