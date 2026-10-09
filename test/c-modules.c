@@ -131,12 +131,24 @@ static void test_term(void) {
                        term_form(TERM_UNFOLD, 0, 1, terms_item(n, one(n))),
                        term_form(TERM_UNFOLD_VALUE, 0, 1, terms_item(n, one(n)))};
   Nat count = sizeof(all) / sizeof(all[0]);
-  assert(count == TERM_UNFOLD_VALUE + 1);
+  /* TERM_BODY is the last tag and is not in the array: it has no text and
+     compares as its callee. */
+  assert(count == TERM_BODY);
   for (Nat i = 0; i < count; i++) {
     assert(all[i]->tag == i);
     assert(text_size(term_text(all[i])) > 0);
     for (Nat j = 0; j < count; j++) assert(same_term(all[i], all[j]) == (i == j));
   }
+  const Term *carried = term_body(nat_source, n);
+  assert(carried->tag == TERM_BODY);
+  assert(same_term(carried, n) && same_term(n, carried));
+  assert(same_text(term_text(carried), term_text(n)));
+  assert(term_tokens(carried).items == nat_source.items && term_tokens(carried).size == nat_source.size);
+  assert(term_tokens(NULL).size == 0 && term_tokens(n).size == 0);
+  const Term *bare = term_body(nat_source, NULL);
+  assert(text_size(term_text(bare)) == 0);
+  assert(same_term(bare, term_body(txt_source, NULL)));
+  assert(!same_term(bare, n) && !same_term(n, bare));
   /* Equal pairs: the position, the cost and the parameter names do not
      count. Unequal pairs: a field, a type or the number of arguments. */
   assert(same_term(term_number(3, 1, 7), term_number(9, 5, 7)));
@@ -203,11 +215,20 @@ static void test_term(void) {
   assert(same_text(term_text(proofs), tokens_text(proof)));
 }
 
-/* The term of the function name in the bindings, or NULL. */
+/* The term of the function name in the bindings, or NULL. The binding term
+   is a TERM_BODY (D3-s4), thus this gives its callee. */
 static const Term *body_term(const Bindings *environment, const char *name) {
   for (; environment != NULL; environment = environment->tail)
     if (environment->head.kind == BIND_FUN && same_text(environment->head.name, text(name)))
-      return environment->head.term;
+      return environment->head.term->callee;
+  return NULL;
+}
+
+/* The checked type of the first parameter of the function name, or NULL. */
+static const LType *first_param_type(const Bindings *environment, const char *name) {
+  for (; environment != NULL; environment = environment->tail)
+    if (environment->head.kind == BIND_FUN && same_text(environment->head.name, text(name)))
+      return environment->head.params->head.type;
   return NULL;
 }
 
@@ -671,6 +692,40 @@ static void test_term_evaluator(void) {
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
+
+  /* D3-s4 part A: the term of a BIND_FUN is the TERM_BODY of its body span. */
+  for (const Bindings *item = environment; item != NULL; item = item->tail) {
+    if (item->head.kind != BIND_FUN) continue;
+    const Term *carrier = item->head.term;
+    assert(carrier->tag == TERM_BODY);
+    assert(term_tokens(carrier).items == item->head.body.items && term_tokens(carrier).size == item->head.body.size);
+    if (carrier->callee != NULL) assert(same_text(term_text(carrier), tokens_text(item->head.body)));
+  }
+  /* An inline argument Value at check time keeps the TERM_BODY of the FUN
+     node, and its closure keeps the same pointer. The argument tokens start
+     after fun, as at the call in parse_term. The type is One (the g of mapV). */
+  const LType *one_type = first_param_type(environment, "mapV");
+  assert(one_type != NULL && is_arrow_type(one_type));
+  Text fun_source = text("fun (y : Nat) => size y");
+  Tokens fun_tokens;
+  assert(lex(fuel_for(fun_source), fun_source, &fun_tokens, &failure));
+  const Value *argument;
+  Tokens after_fun;
+  Nat fun_left;
+  const Term *made = NULL;
+  assert(inline_argument(1000, 1000, 0, one_type, environment, slice(fun_tokens, 1, fun_tokens.size), &argument,
+                         &after_fun, &fun_left, &made, &failure));
+  assert(made != NULL && made->tag == TERM_FUN);
+  assert(argument->term != NULL && argument->term == made->args->head);
+  Binding closure = bound_binding(argument, text("g"), one_type, environment);
+  assert(closure.kind == BIND_CLOSURE && closure.term == argument->term);
+  assert(closure.body.items == term_tokens(argument->term).items);
+  assert(closure.body.size == term_tokens(argument->term).size);
+  Value replayed = *argument;
+  replayed.term = NULL;
+  Binding decoded = bound_binding(&replayed, text("g"), one_type, environment);
+  assert(decoded.kind == BIND_CLOSURE && decoded.term->tag == TERM_BODY && decoded.term->callee == NULL);
+  assert(decoded.body.size == closure.body.size);
 
   const char *exact[] = {"pickK", "twoList", "label", "grouped", "deep"};
   for (Nat i = 0; i < sizeof exact / sizeof exact[0]; i++) {

@@ -385,8 +385,10 @@ const Values *inline_names(const Params *params) {
   return values_item(text_value(params->head.name), inline_names(params->tail));
 }
 
-const Value *inline_value(const Params *params, Tokens body) {
-  return items_value(values_item(items_value(inline_names(params)), inline_token_values(body)));
+const Value *inline_value(const Params *params, Tokens body, const Term *carrier) {
+  return make_value((Value){.kind = VALUE_ITEMS,
+                            .items = values_item(items_value(inline_names(params)), inline_token_values(body)),
+                            .term = carrier});
 }
 
 Nat inline_nat(const Value *value) {
@@ -430,10 +432,13 @@ const Params *inline_params(const Values *names, const Params *params) {
   return params_item((Param){inline_text(names->head), params->head.type}, inline_params(names->tail, params->tail));
 }
 
-/* An inline argument keeps the scope of the application. */
-Binding inline_closure(Text name, const LType *ty, const Value *names, const Values *body, const Bindings *caller) {
-  return closure_binding(name, inline_params(inline_parts(names), arrow_params(ty)), arrow_result(ty),
-                         inline_tokens(body), NULL, caller);
+/* An inline argument keeps the scope of the application. The closure term is
+   the TERM_BODY of the argument Value. The run-time path builds no term, thus
+   a Value with no term gives a TERM_BODY of the decoded tokens. */
+Binding inline_closure(Text name, const LType *ty, const Value *value, const Bindings *caller) {
+  const Term *term = value->term != NULL ? value->term : term_body(inline_tokens(value->items->tail), NULL);
+  return closure_binding(name, inline_params(inline_parts(value->items->head), arrow_params(ty)), arrow_result(ty),
+                         term_tokens(term), term, caller);
 }
 
 Fuel type_fuel(Tokens tokens) { return (Fuel)tokens.size + 1; }
@@ -463,7 +468,7 @@ Binding bound_binding(const Value *value, Text name, const LType *ty, const Bind
   if (value->kind != VALUE_ITEMS || value->items == NULL) return opaque_closure(name, ty);
   const Value *head = value->items->head;
   const Values *rest = value->items->tail;
-  if (!as_text(head, &target)) return inline_closure(name, ty, head, rest, caller);
+  if (!as_text(head, &target)) return inline_closure(name, ty, value, caller);
   if (!lookup(target, caller, &item)) return opaque_closure(name, ty);
   switch (item->kind) {
   case BIND_VALUE:
@@ -1908,7 +1913,8 @@ static int eval_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings
   case TERM_FOLD:
   case TERM_FOLD_VALUE:
   case TERM_UNFOLD:
-  case TERM_UNFOLD_VALUE: return 0;
+  case TERM_UNFOLD_VALUE:
+  case TERM_BODY: return 0;
   }
   return 0;
 }
@@ -1993,7 +1999,8 @@ static int eval_partial_unary(Fuel fuel, Nat budget, const LType *wanted, const 
   case TERM_FOLD:
   case TERM_FOLD_VALUE:
   case TERM_UNFOLD:
-  case TERM_UNFOLD_VALUE: return 0;
+  case TERM_UNFOLD_VALUE:
+  case TERM_BODY: return 0;
   }
   return 0;
 }
@@ -2131,7 +2138,8 @@ static int eval_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, 
   case TERM_FOLD:
   case TERM_FOLD_VALUE:
   case TERM_UNFOLD:
-  case TERM_UNFOLD_VALUE: return 0;
+  case TERM_UNFOLD_VALUE:
+  case TERM_BODY: return 0;
   }
   return 0;
 }
@@ -2250,7 +2258,8 @@ static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *ex
   case TERM_FOLD:
   case TERM_FOLD_VALUE:
   case TERM_UNFOLD:
-  case TERM_UNFOLD_VALUE: return 0;
+  case TERM_UNFOLD_VALUE:
+  case TERM_BODY: return 0;
   }
   return 0;
 }
@@ -2463,6 +2472,8 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   case TERM_UNFOLD:
   case TERM_UNFOLD_VALUE: return 0;
   case TERM_EITHER: return eval_either(more, budget, environment, term, typed, left);
+  /* A TERM_BODY takes no fuel step and no charge (the token path has no node for it). */
+  case TERM_BODY: return eval_synth(fuel, budget, environment, term->callee, typed, left);
   }
   return 0;
 }
@@ -2521,6 +2532,8 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_UNFOLD_VALUE: return eval_unfold_value(more, budget, expected, environment, term, value, left);
   case TERM_PARTIAL:
   case TERM_FUN: return 0;
+  /* A TERM_BODY takes no fuel step and no charge (the token path has no node for it). */
+  case TERM_BODY: return eval_term(fuel, budget, expected, environment, term->callee, value, left);
   }
   return 0;
 }
@@ -2592,10 +2605,13 @@ int inline_argument(Fuel fuel, Nat budget, Nat position, const LType *expected, 
                   bind_params(params, NULL, bindings_item(check_marker(), environment)), body, &checked, &after,
                   &spent, want_term(term, &inner), failure))
     return 0;
-  const Term *made =
-      inner != NULL ? term_fun(position, 0, binder_types(params, taken_tokens(tokens, body), environment), inner) : NULL;
-  return with_term(worked_value(inline_value(params, taken_tokens(body, after)), after, spent, value, rest, left), term,
-                   made);
+  /* The FUN node, the argument Value and its closure share one TERM_BODY. */
+  const Term *carrier = term != NULL ? term_body(taken_tokens(body, after), inner) : NULL;
+  const Term *made = inner != NULL
+                         ? term_fun(position, 0, binder_types(params, taken_tokens(tokens, body), environment), carrier)
+                         : NULL;
+  return with_term(
+      worked_value(inline_value(params, taken_tokens(body, after), carrier), after, spent, value, rest, left), term, made);
 }
 
 /* Each step takes one unit of fuel, as each recursive call of the mech def. */
@@ -3051,7 +3067,9 @@ int bound_arguments(Fuel fuel, Nat budget, const Params *params, const Bindings 
    0, and the application site runs the token path again. */
 static int apply_body(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, Tokens body,
                       const Term *term, const Value **value, Tokens *rest, Nat *left, Failure *failure) {
-  if (term == NULL) return parse_term(fuel, budget, 0, expected, environment, body, value, rest, left, NULL, failure);
+  /* A TERM_BODY with no callee takes the token path, as a NULL term. */
+  if (term == NULL || (term->tag == TERM_BODY && term->callee == NULL))
+    return parse_term(fuel, budget, 0, expected, environment, body, value, rest, left, NULL, failure);
   *rest = (Tokens){0};
   return eval_term(fuel, budget, expected, environment, term, value, left);
 }

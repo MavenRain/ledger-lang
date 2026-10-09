@@ -59,6 +59,18 @@ const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args) {
   return make_term((Term){.tag = tag, .position = position, .cost = cost, .args = args});
 }
 
+/* TERM_BODY: the span of a body and its term (NULL when parse_term built
+   none). The cost is the cost of the callee. */
+const Term *term_body(Tokens tokens, const Term *callee) {
+  return make_term((Term){.tag = TERM_BODY,
+                          .position = first_position(tokens),
+                          .cost = callee != NULL ? callee->cost : 0,
+                          .callee = callee,
+                          .tokens = tokens});
+}
+
+Tokens term_tokens(const Term *term) { return term != NULL && term->tag == TERM_BODY ? term->tokens : (Tokens){0}; }
+
 /* A binder or a type argument compares by its resolved type. */
 static Nat same_term_types(const TermTypes *left, const TermTypes *right) {
   for (; left != NULL && right != NULL; left = left->tail, right = right->tail)
@@ -82,8 +94,11 @@ static Nat same_callee(const Term *left, const Term *right) {
 }
 
 /* A variable compares by its parameter position, so the name of the
-   parameter does not count. The position and the cost do not count. */
+   parameter does not count. The position and the cost do not count. A
+   TERM_BODY with a callee compares as its callee (the span does not count). */
 Nat same_term(const Term *left, const Term *right) {
+  if (left->tag == TERM_BODY && left->callee != NULL) return same_term(left->callee, right);
+  if (right->tag == TERM_BODY && right->callee != NULL) return same_term(left, right->callee);
   if (left->tag != right->tag) return 0;
   switch (left->tag) {
     case TERM_NUMBER: return left->number == right->number;
@@ -112,6 +127,7 @@ Nat same_term(const Term *left, const Term *right) {
     case TERM_FOLD_VALUE:
     case TERM_UNFOLD:
     case TERM_UNFOLD_VALUE: return same_terms(left->args, right->args);
+    case TERM_BODY: return 1;
   }
   return 0;
 }
@@ -126,7 +142,8 @@ static Text term_keyword(TermTag tag) {
     case TERM_NAME:
     case TERM_APPLY:
     case TERM_PARTIAL:
-    case TERM_CONSTRUCT: return text_end();
+    case TERM_CONSTRUCT:
+    case TERM_BODY: return text_end();
     case TERM_FUN: return sfun;
     case TERM_REFL: return srefl;
     case TERM_FIRST: return sfirst;
@@ -190,6 +207,9 @@ static void emit_term(TextBuilder *builder, const Term *term) {
       emit_token(builder, TOKEN_IDENTIFIER, 0, term->name);
       emit_types(builder, term->types);
       emit_terms(builder, term->args);
+      return;
+    case TERM_BODY:
+      if (term->callee != NULL) emit_term(builder, term->callee);
       return;
     case TERM_FUN:
       emit_token(builder, TOKEN_IDENTIFIER, 0, term_keyword(term->tag));

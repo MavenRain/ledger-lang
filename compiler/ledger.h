@@ -204,6 +204,10 @@ struct Attrs {
   const Attrs *rest;
 };
 
+struct Term;
+
+/* term is the TERM_BODY of an inline argument (D3-s4), else NULL. same_value
+   and the printer do not read it. */
 struct Value {
   ValueKind kind;
   Flag flag;
@@ -211,6 +215,7 @@ struct Value {
   Text text;
   const Values *items;
   const Attrs *attrs;
+  const struct Term *term;
 };
 
 Nat has_field(Text key, const Attrs *attrs);
@@ -281,7 +286,8 @@ struct Params {
 /* A name of the environment. BIND_VALUE keeps type and value. BIND_TYPE
    keeps the universe in type and the type it stands for in defined.
    BIND_ARROW keeps params and the result in type. BIND_FUN keeps params,
-   the result in type, the checked body and its term (NULL if not built). BIND_CLOSURE also keeps the
+   the result in type, the checked body and its TERM_BODY term (the callee
+   is NULL if parse_term built no term). BIND_CLOSURE also keeps the
    scope of its function argument. A list of bindings (also a Scope); NULL
    is the end, and the head is the latest binding. */
 struct Term;
@@ -429,7 +435,7 @@ const Value *inline_item(Nat kind, Nat position, const Value *payload);
 const Value *inline_token_value(Token token);
 const Values *inline_token_values(Tokens tokens);
 const Values *inline_names(const Params *params);
-const Value *inline_value(const Params *params, Tokens body);
+const Value *inline_value(const Params *params, Tokens body, const struct Term *carrier);
 Nat inline_nat(const Value *value);
 Text inline_text(const Value *value);
 Token inline_token(Nat kind, Nat position, const Value *payload);
@@ -437,7 +443,7 @@ const Values *inline_parts(const Value *value);
 Token inline_token_of(const Values *parts);
 Tokens inline_tokens(const Values *items);
 const Params *inline_params(const Values *names, const Params *params);
-Binding inline_closure(Text name, const LType *ty, const Value *names, const Values *body, const Bindings *caller);
+Binding inline_closure(Text name, const LType *ty, const Value *value, const Bindings *caller);
 Fuel type_fuel(Tokens tokens);
 Tokens type_tokens_of(const Value *types);
 const Values *typed_bound(const Params *params, Tokens tokens, Tokens rest, const Values *values);
@@ -731,7 +737,8 @@ typedef enum {
   TERM_FOLD,
   TERM_FOLD_VALUE,
   TERM_UNFOLD,
-  TERM_UNFOLD_VALUE
+  TERM_UNFOLD_VALUE,
+  TERM_BODY
 } TermTag;
 
 /* Each node keeps the source byte offset of its first token in position
@@ -745,8 +752,10 @@ typedef enum {
    TERM_FUN keeps the
    binders in types and the body as the one item of args. TERM_GROUP keeps
    the inner term as the one item of args. TERM_REFL and the keyword forms
-   keep their arguments in args, in source order. A list of terms; NULL is
-   the end. */
+   keep their arguments in args, in source order. TERM_BODY keeps the
+   source span of a body in tokens (a view into the token array of the
+   lexer) and the body term in callee (NULL when parse_term built no term);
+   its position is the first body token. A list of terms; NULL is the end. */
 typedef struct Term Term;
 typedef struct Terms Terms;
 struct Term {
@@ -759,6 +768,7 @@ struct Term {
   const Term *callee;
   const TermTypes *types;
   const Terms *args;
+  Tokens tokens;
 };
 
 struct Terms {
@@ -768,7 +778,10 @@ struct Terms {
 
 /* term.c: constructors on the arena, structural equality and the printer.
    same_term ignores the position, the cost and the names of parameters and
-   binders. term_text gives the tokens_text of the source of the term. */
+   binders. term_text gives the tokens_text of the source of the term.
+   term_body makes the TERM_BODY of a body span: its cost and term_text are
+   those of the callee (empty text for NULL), and same_term compares it as
+   its callee. term_tokens gives the span of a TERM_BODY, else no tokens. */
 const Terms *terms_item(const Term *head, const Terms *tail);
 const TermTypes *term_types_item(TermType head, const TermTypes *tail);
 const Term *term_number(Nat position, Nat cost, Nat number);
@@ -781,6 +794,8 @@ const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args);
 Nat same_term(const Term *left, const Term *right);
 Nat same_terms(const Terms *left, const Terms *right);
 Text term_text(const Term *term);
+const Term *term_body(Tokens tokens, const Term *callee);
+Tokens term_tokens(const Term *term);
 /* checker.c: the body tokens before rest. */
 Tokens taken_tokens(Tokens body, Tokens rest);
 
