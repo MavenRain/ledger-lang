@@ -647,21 +647,34 @@ typedef struct {
    unknown counts the answers 0 with no code (a replay); differ counts the
    points where the two answers differ. both_paths compares each failed
    answer with the token path (the rule E5). The fuel step after the last
-   argument gives unknown, not a failure at Term.end (D3-s5 part E). */
-static GridCount body_grid(const Bindings *environment, const char *name, const char *args) {
-  const Binding *item = fun_named(environment, name);
-  assert(item != NULL && item->term != NULL);
-  const Bindings *scope = call_scope(environment, item, args);
+   argument gives unknown, not a failure at Term.end (D3-s5 part E). The
+   term body takes the place of the body of item in scope (D3-s6 part A). */
+static GridCount term_grid(const Bindings *scope, const Binding *item, const Term *body) {
+  Binding copy = *item;
+  copy.term = body;
   GridCount count = {0, 0, 0, 0};
   for (Fuel fuel = 0; fuel < 64; fuel++)
     for (Nat budget = 0; budget < 16; budget++) {
-      BothPaths paths = both_paths(scope, item, fuel, budget);
+      BothPaths paths = both_paths(scope, &copy, fuel, budget);
       count.worked += paths.eval == 1;
       count.failed += paths.eval == 0 && paths.failure.message.size != 0;
       count.unknown += paths.eval == 0 && paths.failure.message.size == 0;
       count.differ += paths.eval != paths.parse;
     }
   return count;
+}
+
+/* term_grid on the body of the function name, called with args. */
+static GridCount body_grid(const Bindings *environment, const char *name, const char *args) {
+  const Binding *item = fun_named(environment, name);
+  assert(item != NULL && item->term != NULL);
+  return term_grid(call_scope(environment, item, args), item, item->term);
+}
+
+/* 1 when the two counts are the same in each field. */
+static int same_grid(GridCount left, GridCount right) {
+  return left.worked == right.worked && left.failed == right.failed && left.unknown == right.unknown &&
+         left.differ == right.differ;
 }
 
 /* The grid rows with no unknown answer (D3-s5 part E). The other rows give
@@ -675,6 +688,85 @@ static BothPaths body_at(const Bindings *environment, const char *name, const ch
   const Binding *item = fun_named(environment, name);
   assert(item != NULL && item->term != NULL);
   return both_paths(call_scope(environment, item, args), item, fuel, budget);
+}
+
+/* node with the tag TERM_CONSTRUCT, callee NULL and the arguments args
+   (D3-s6 part A). */
+static const Term *as_construct(const Term *node, const Terms *args) {
+  return term_call(TERM_CONSTRUCT, node->position, node->cost, node->tokens, node->end, node->name, NULL, node->types,
+                   args);
+}
+
+/* A TERM_BODY on the tokens of bytes with a TERM_CONSTRUCT node of name at
+   position 0 and the arguments args, built by hand (D3-s6 part A). */
+static const Term *construct_body(const char *bytes, const char *name, const Terms *args) {
+  Tokens tokens = lexed(bytes);
+  return term_body(tokens, term_call(TERM_CONSTRUCT, 0, 0, tokens, text(bytes).size, text(name), NULL, NULL, args));
+}
+
+/* A checked constructor can resolve to a function in the run-time scope.
+   In argument position the token path still requires parentheses, even
+   for a function with no parameters. Check both binding kinds and both
+   argument loops, plus the direct argument of a structure form. */
+static void test_construct_argument_lookup(void) {
+  const LType *flag;
+  Tokens rest;
+  Failure failure = {0, {NULL, 0}};
+  assert(parse_type(1000, 0, NULL, lexed("Flag"), &flag, &rest, &failure) && rest.size == 0);
+  Params param = {{text("x"), flag}, NULL};
+  Bindings identity = {{.kind = BIND_FUN, .name = text("idFlag"), .type = flag, .params = &param,
+                        .term = term_body(lexed("x"), term_var(0, 0, text("x"), 0))}, NULL};
+  const Value *value;
+  Nat left;
+  const Term *truth = NULL;
+  Tokens truth_tokens = lexed("flagYes");
+  assert(parse_term(1000, 1000, 0, flag, &identity, truth_tokens, &value, &rest, &left, &truth, &failure));
+  const LType *universe;
+  assert(parse_type(1000, 0, NULL, lexed("Type 0"), &universe, &rest, &failure) && rest.size == 0);
+  Params type_param = {{text("A"), universe}, NULL};
+  LType equality = {.tag = TY_EQ, .left = flag, .lhs = {.kind = VAL_VAR}, .rhs = {.kind = VAL_VAR}};
+  Params proof_param = {{text("proof"), &equality}, NULL};
+  const struct {
+    const char *type;
+    const char *body;
+    int works;
+  } rows[] = {{"Prod Flag Flag", "pair flagNo flagYes", 0},
+              {"Option Flag", "some flagNo", 0},
+              {"Flag", "idFlag flagNo", 0},
+              {"Option Flag", "pure flagNo", 0},
+              {"Prod Flag Flag", "pair (flagNo) flagYes", 1},
+              {"Flag", "idFlag (flagNo)", 1},
+              {"Option Flag", "pure (flagNo)", 1},
+              {"Flag", "flagNo", 1}};
+  for (Nat row = 0; row < sizeof rows / sizeof rows[0]; row++) {
+    const LType *expected;
+    assert(parse_type(1000, 0, &identity, lexed(rows[row].type), &expected, &rest, &failure) && rest.size == 0);
+    Tokens tokens = lexed(rows[row].body);
+    const Term *node = NULL;
+    assert(parse_term(1000, 1000, 0, expected, &identity, tokens, &value, &rest, &left, &node, &failure) &&
+           rest.size == 0 && node != NULL);
+    Binding body = {.type = expected, .term = term_body(tokens, node)};
+    for (Nat closure = 0; closure < 2; closure++)
+      for (Nat parameter = 0; parameter < 2; parameter++) {
+        /* A missing type argument can fail at the closing parenthesis,
+           which an empty constructor span omits. A dependent closure
+           gives eTerm before the parentheses check. */
+        const Params *params = parameter ? (closure ? &proof_param : &type_param) : NULL;
+        Bindings shadow = {{.kind = closure ? BIND_CLOSURE : BIND_FUN, .name = text("flagNo"), .type = flag,
+                            .params = params, .term = term_body(truth_tokens, truth), .scope = &identity}, &identity};
+        GridCount count = term_grid(&shadow, &body, body.term);
+        int works = rows[row].works && parameter == 0;
+        assert(count.failed > 0 && count.differ == 0);
+        assert(works ? count.worked > 0 : count.worked == 0);
+        BothPaths paths = both_paths(&shadow, &body, 1000, 1000);
+        if (works)
+          assert(paths.eval == 1 && paths.parse == 1);
+        else {
+          assert(paths.eval == 0 && paths.parse == 0);
+          if (parameter == 0) assert(same_text(paths.failure.message, eParen));
+        }
+      }
+  }
 }
 
 /* eval_term gives the value, the remaining budget and the answer of
@@ -1017,6 +1109,45 @@ static void test_term_evaluator(void) {
   BothPaths at_margin = body_at(environment, "viaNat", "4 7", margin, 1000);
   assert(at_margin.eval == 1 && at_margin.parse == 1);
 
+  /* CONSTRUCT by lookup (D3-s6 part A): a CONSTRUCT node in a scope that
+     binds its name. eval_term takes the name branch of the token path, one
+     row for each Binding kind. The token path builds no such node (A1: 0
+     hits over all gates), thus the rows build the node by hand or retag the
+     APPLY node of a body. */
+  const Binding *lookup_hit;
+  const Binding *size_fun = fun_named(environment, "size");
+  const Bindings *size_at = call_scope(environment, size_fun, "4");
+  /* BIND_VALUE with no arguments: the TERM_VAR arm. */
+  GridCount value_name = term_grid(size_at, size_fun, construct_body("n", "n", NULL));
+  assert(value_name.worked > 0 && value_name.unknown == 0 && value_name.differ == 0);
+  /* BIND_VALUE with arguments: unknown after the fuel 0 and budget 0
+     failures. The token path takes the value and leaves the arguments in
+     rest. */
+  GridCount value_args = term_grid(size_at, size_fun, construct_body("n 5", "n", one(term_number(2, 1, 5))));
+  assert(value_args.worked == 0 && value_args.unknown == 63 * 15);
+  /* BIND_ARROW: eTerm at the node position, the Failure of parse_term at
+     each point. BIND_TYPE shares the case label in both paths; call_scope
+     cannot build a scope with a type name. */
+  const Binding *twice_fun = fun_named(environment, "twice");
+  const Bindings *twice_at = call_scope(environment, twice_fun, "size 4");
+  assert(lookup(text("One"), twice_at, &lookup_hit) && lookup_hit->kind == BIND_ARROW);
+  GridCount arrow_name = term_grid(twice_at, twice_fun, construct_body("One", "One", NULL));
+  assert(arrow_name.failed == 64 * 16 && arrow_name.differ == 0);
+  /* BIND_FUN and BIND_CLOSURE: the APPLY view at the same fuel, thus the
+     same count as the grid of the body. */
+  const Binding *deep_fun = fun_named(environment, "deep");
+  const Bindings *deep_at = call_scope(environment, deep_fun, "4 7");
+  const Term *deep_apply = deep_fun->term->callee;
+  assert(deep_apply->tag == TERM_APPLY);
+  assert(lookup(deep_apply->name, deep_at, &lookup_hit) && lookup_hit->kind == BIND_FUN);
+  const Term *deep_body = term_body(term_tokens(deep_fun->term), as_construct(deep_apply, deep_apply->args));
+  assert(same_grid(term_grid(deep_at, deep_fun, deep_body), body_grid(environment, "deep", "4 7")));
+  const Term *twice_apply = twice_fun->term->callee;
+  assert(twice_apply->tag == TERM_APPLY);
+  assert(lookup(twice_apply->name, twice_at, &lookup_hit) && lookup_hit->kind == BIND_CLOSURE);
+  const Term *twice_body = term_body(term_tokens(twice_fun->term), as_construct(twice_apply, twice_apply->args));
+  assert(same_grid(term_grid(twice_at, twice_fun, twice_body), body_grid(environment, "twice", "size 4")));
+
   /* D3-s4 part C: a FUN or a PARTIAL argument at an arrow expected type in
      the body (the checked tree). Each row gives the value at fuel 1000 by
      eval_term, thus the replay count is 0. Each row gives the same answer at
@@ -1086,6 +1217,7 @@ int main(void) {
   test_keyword_positions();
   test_type_references();
   test_term_evaluator();
+  test_construct_argument_lookup();
   puts("C module tests passed");
   return 0;
 }

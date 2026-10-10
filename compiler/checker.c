@@ -1711,8 +1711,8 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
     if (!parse_arguments(more, budget, 1, plan_arguments(&selected), environment, tail, &values, &after, &spent,
                          want_terms(term, &args), failure))
       return 0;
-    const Term *built = term != NULL ? named_term(TERM_CONSTRUCT, head.position, head.text, NULL, args, (Tokens){0},
-                                                  first_position(after), environment)
+    const Term *built = term != NULL ? named_term(TERM_CONSTRUCT, head.position, head.text, NULL, args,
+                                                  taken_tokens(tail, after), first_position(after), environment)
                                      : NULL;
     const Value *made;
     Failure refused;
@@ -1777,6 +1777,25 @@ static int fuel_at_next(Failure *failure, const Terms *args, const Term *next) {
   return at != NULL ? fail_at(failure, at->position, eFuel) : 0;
 }
 
+/* parse_term with atom 1. A constructor name that now resolves to a
+   function takes checked_synth and must be parenthesized. Keep the entry
+   fuel and budget failures, including synth_term at fuel 0, in eval_term.
+   A GROUP evaluates its inner term with atom 0. Arrow arguments retain
+   the partial_argument path and the evaluator's existing replay rule. */
+static int eval_argument(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
+                         const Term *term, const Value **value, Nat *left, Failure *failure) {
+  const Binding *item;
+  if (term != NULL && fuel > 1 && budget > 0 && term->tag == TERM_CONSTRUCT &&
+      is_arrow_type(expected) != 1 && lookup(term->name, environment, &item) &&
+      (item->kind == BIND_FUN || item->kind == BIND_CLOSURE)) {
+    if (item->kind == BIND_CLOSURE &&
+        (dependent_result(item->type) == 1 || dependent_params(item->params) == 1))
+      return fail_at(failure, term->position, eTerm);
+    return fail_at(failure, term->position, eParen);
+  }
+  return eval_term(fuel, budget, expected, environment, term, value, left, failure);
+}
+
 /* parse_arguments on the argument terms. */
 static int eval_arguments(Fuel fuel, Nat budget, const LTypes *types, const Bindings *environment, const Terms *args,
                           const Values **values, Nat *left, const Term *next, Failure *failure) {
@@ -1794,7 +1813,7 @@ static int eval_arguments(Fuel fuel, Nat budget, const LTypes *types, const Bind
     }
     if (args == NULL) return 0;
     const Value *value;
-    if (!eval_term(fuel, budget, types->head, environment, args->head, &value, &budget, failure)) return 0;
+    if (!eval_argument(fuel, budget, types->head, environment, args->head, &value, &budget, failure)) return 0;
     done = values_item(value, done);
   }
 }
@@ -1826,7 +1845,7 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
     const LType *expected;
     if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected)) return 0;
     const Value *value;
-    if (!eval_term(fuel, budget, expected, environment, args->head, &value, &budget, failure)) return 0;
+    if (!eval_argument(fuel, budget, expected, environment, args->head, &value, &budget, failure)) return 0;
     seen = values_item(value, seen);
     args = args->tail;
   }
@@ -2071,7 +2090,7 @@ static int eval_structure(Fuel fuel, Nat budget, Nat form, const LType *expected
   if (form == 1) {
     const Value *lifted;
     Nat spent;
-    if (!eval_term(more, budget, shape_element(expected), environment, first_arg(term), &lifted, &spent, failure)) return 0;
+    if (!eval_argument(more, budget, shape_element(expected), environment, first_arg(term), &lifted, &spent, failure)) return 0;
     return eval_worked(pure_value(expected, lifted), spent, value, left);
   }
   Unary op;
@@ -2081,7 +2100,7 @@ static int eval_structure(Fuel fuel, Nat budget, Nat form, const LType *expected
   if (structure_fits(form, expected, op) != 1) return 0;
   const Value *source;
   Nat used;
-  if (!eval_term(more, spent, structure_source(form, expected, op), environment, second_arg(term), &source, &used, failure))
+  if (!eval_argument(more, spent, structure_source(form, expected, op), environment, second_arg(term), &source, &used, failure))
     return 0;
   if (checking_body(environment) == 1) return eval_worked(&null_value, used, value, left);
   Tokens ignored;
@@ -2120,7 +2139,7 @@ static int eval_either(Fuel fuel, Nat budget, const Bindings *environment, const
   if (!(dependent_result(result) == 0 && same_type(result, unary_result(on_right)) == 1)) return 0;
   const Value *source;
   Nat spent;
-  if (!eval_term(more, budget, type_two(TY_SUM, unary_param(on_left), unary_param(on_right)), environment,
+  if (!eval_argument(more, budget, type_two(TY_SUM, unary_param(on_left), unary_param(on_right)), environment,
                  third_arg(term), &source, &spent, failure))
     return 0;
   if (checking_body(environment) == 1) return eval_typed((Typed){result, &null_value}, spent, typed, left);
@@ -2340,7 +2359,7 @@ static int eval_fold(Fuel fuel, Nat budget, const LType *expected, const Binding
   if (!eval_stepper(more, budget, 0, expected, environment, first_arg(term), &op, &spent, failure)) return 0;
   const Value *start;
   Nat used;
-  if (!eval_term(more, spent, expected, environment, second_arg(term), &start, &used, failure)) return 0;
+  if (!eval_argument(more, spent, expected, environment, second_arg(term), &start, &used, failure)) return 0;
   Typed found;
   Nat found_left;
   if (!eval_synth(more, used, environment, third_arg(term), &found, &found_left, failure)) return 0;
@@ -2416,7 +2435,7 @@ static int eval_fold_value(Fuel fuel, Nat budget, const LType *expected, const B
     return 0;
   const Value *start;
   Nat used;
-  if (!eval_term(inner, functions_left, expected, environment, nth_term(term->args, 5), &start, &used, failure)) return 0;
+  if (!eval_argument(inner, functions_left, expected, environment, nth_term(term->args, 5), &start, &used, failure)) return 0;
   Typed found;
   Nat found_left;
   if (!eval_synth(inner, used, environment, nth_term(term->args, 6), &found, &found_left, failure)) return 0;
@@ -2443,10 +2462,10 @@ static int eval_unfold(Fuel fuel, Nat budget, const LType *expected, const Bindi
   if (unfold_fits(expected, op) != 1) return 0;
   const Value *limit;
   Nat limit_left;
-  if (!eval_term(more, spent, &nat_type, environment, second_arg(term), &limit, &limit_left, failure)) return 0;
+  if (!eval_argument(more, spent, &nat_type, environment, second_arg(term), &limit, &limit_left, failure)) return 0;
   const Value *seed;
   Nat seed_left;
-  if (!eval_term(more, limit_left, unfold_seed(op), environment, third_arg(term), &seed, &seed_left, failure)) return 0;
+  if (!eval_argument(more, limit_left, unfold_seed(op), environment, third_arg(term), &seed, &seed_left, failure)) return 0;
   if (checking_body(environment) == 1) return eval_worked(&null_value, seed_left, value, left);
   const Values *items;
   Tokens ignored;
@@ -2472,10 +2491,10 @@ static int eval_unfold_value(Fuel fuel, Nat budget, const LType *expected, const
   if (unfold_value_fits(op) != 1) return 0;
   const Value *limit;
   Nat limit_left;
-  if (!eval_term(more, spent, &nat_type, environment, second_arg(term), &limit, &limit_left, failure)) return 0;
+  if (!eval_argument(more, spent, &nat_type, environment, second_arg(term), &limit, &limit_left, failure)) return 0;
   const Value *seed;
   Nat seed_left;
-  if (!eval_term(more, limit_left, unfold_seed(op), environment, third_arg(term), &seed, &seed_left, failure)) return 0;
+  if (!eval_argument(more, limit_left, unfold_seed(op), environment, third_arg(term), &seed, &seed_left, failure)) return 0;
   if (checking_body(environment) == 1) return eval_worked(&null_value, seed_left, value, left);
   Grown node;
   Tokens ignored;
@@ -2669,6 +2688,40 @@ static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, cons
   return 0;
 }
 
+/* TERM_CONSTRUCT when lookup finds the name in the run-time scope: the
+   mirror of the name branch of the token path (D3-s6 part A). BIND_VALUE
+   with no arguments is the TERM_VAR arm. BIND_VALUE with arguments is
+   unknown: the token path takes the value and leaves the arguments in rest,
+   and the term has no node for that state. BIND_FUN and BIND_CLOSURE give
+   the TERM_APPLY arm on an APPLY view of the node, at the same fuel. There
+   is no PARTIAL view: eval_term gives 0 for TERM_CONSTRUCT at an arrow type
+   before the switch. */
+static int eval_construct_name(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
+                               const Term *term, const Binding *item, const Value **value, Nat *left,
+                               Failure *failure) {
+  switch (item->kind) {
+  case BIND_VALUE:
+    if (term->args != NULL) return 0;
+    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
+    return eval_worked(item->value, budget, value, left);
+  case BIND_TYPE:
+  case BIND_ARROW: return fail_at(failure, term->position, eTerm);
+  case BIND_FUN:
+  case BIND_CLOSURE: {
+    /* An empty constructor argument span omits the following token. A
+       missing type argument must replay to locate its error there. */
+    if (item->kind == BIND_FUN && item->params != NULL && is_type_param(item->params->head) == 1 &&
+        term->tokens.size == 0)
+      return 0;
+    /* An arena node, not a stack copy: a closure Value borrows its term. */
+    const Term *view = term_call(TERM_APPLY, term->position, term->cost, term->tokens, term->end, term->name, NULL,
+                                 term->types, term->args);
+    return eval_term(fuel, budget, expected, environment, view, value, left, failure);
+  }
+  }
+  return 0;
+}
+
 int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
               const Value **value, Nat *left, Failure *failure) {
   /* fuel 0 and budget 0: the failures of the parse_term entry (D3-s5 part E). */
@@ -2696,7 +2749,10 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_CONSTRUCT: {
     const Binding *item;
     Plan selected;
-    if (lookup(term->name, environment, &item) || !constructor_plan(expected, term->name, &selected)) return 0;
+    /* A name of the run-time scope takes the name branch (D3-s6 part A). */
+    if (lookup(term->name, environment, &item))
+      return eval_construct_name(fuel, budget, expected, environment, term, item, value, left, failure);
+    if (!constructor_plan(expected, term->name, &selected)) return 0;
     const Values *values;
     Nat spent;
     if (!eval_arguments(more, budget, plan_arguments(&selected), environment, term->args, &values, &spent, NULL, failure)) return 0;
