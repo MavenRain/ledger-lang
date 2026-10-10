@@ -1713,12 +1713,16 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
 }
 
 /* D3-s3 part A: the evaluator of a checked body term. It is parse_term and
-   synth_term with a Term in place of the tokens: the same helpers, the same
-   fuel steps and the same work charges in the same order. It reports no
-   failure. It gives 0 (the caller replays the tokens) when the budget is 0
-   at the entry of a node, for an arrow expected type other than a FUN or
-   PARTIAL argument (Q-S4-4), for a dependent callee, at the fuel margin of
-   the type arguments (Q-S3-3) and for the keyword forms (part B). */
+   synth_term with a Term in place of the tokens. It uses the same helpers,
+   the same fuel steps and the same work charges in the same order. It
+   reports no failure. It gives 0 and the caller replays the tokens when:
+   - the fuel or the budget is 0 at the entry of a node;
+   - the expected type is an arrow and the argument is not a FUN or a
+     PARTIAL (Q-S4-4);
+   - the callee is dependent;
+   - FOLD_VALUE or UNFOLD_VALUE has low fuel (D3-s3 part B2).
+   Type arguments and a PARTIAL of a callee with type params do not give 0
+   (D3-s5 part B). */
 static const Tokens no_tokens = {NULL, 0};
 
 static int eval_worked(const Value *found, Nat budget, const Value **value, Nat *left) {
@@ -1789,22 +1793,6 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
   }
 }
 
-/* Q-S3-3: type_arguments without the type tokens. Each type argument is the
-   checked type with the type bindings of the run-time scope. */
-static int eval_type_arguments(const Params *params, const Bindings *environment, const TermTypes *types,
-                               const Bindings **result) {
-  const Bindings *chosen = NULL;
-  for (; params != NULL && is_type_param(params->head) == 1; params = params->tail, types = types->tail) {
-    if (types == NULL) return 0;
-    const LType *given = subst_type(environment, types->head.type);
-    if (type_level(given) != 0) return 0;
-    chosen = bindings_item(type_binding(params->head.name, params->head.type, given), chosen);
-  }
-  if (types != NULL) return 0;
-  *result = chosen;
-  return 1;
-}
-
 /* synth_term on an application: fuel is the fuel of the callee step. */
 static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left) {
   const Binding *item;
@@ -1815,10 +1803,13 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
   case BIND_TYPE:
   case BIND_ARROW: return 0;
   case BIND_FUN: {
-    /* The margin bounds the parse_type depth that the evaluator skips. */
-    if (term->types != NULL && fuel <= term_text(term).size + 1) return 0;
+    /* type_arguments on the argument span with the fuel of the token path
+       (D3-s5 part B). An empty span gives 0 for a callee with type params. */
     const Bindings *chosen;
-    if (!eval_type_arguments(item->params, environment, term->types, &chosen)) return 0;
+    Tokens after_types;
+    Failure refused;
+    if (!type_arguments(fuel, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, &refused))
+      return 0;
     const Values *values;
     Nat spent;
     if (!eval_dependent(fuel, budget, chosen, environment, item->params, item->params, NULL, term->args, &values,
@@ -1933,18 +1924,27 @@ static int eval_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings
   return 0;
 }
 
-/* inline_unary on a FUN term. The token path checks the body here in check
-   mode with no charge. The evaluator does not, thus it gives 0 at budget 0
-   and at fuel at or below the margin (finding a, Q-S3-3). */
+/* inline_unary on a FUN term (D3-s5 part B). inline_binders reads the one
+   binder on the binder span, thus parse_type gets fuel - 1, as on the token
+   path. Then the body walk in check mode at fuel - 1. The walk makes no
+   charge, thus its budget answer is not used. */
 static int eval_inline_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment,
                              const Term *term, Unary *op, Nat *left) {
-  if (fuel == 0 || budget == 0 || term->types == NULL || term->types->tail != NULL || first_arg(term) == NULL)
+  const Params *params;
+  Tokens body;
+  Failure refused;
+  if (fuel == 0 || budget == 0 || first_arg(term) == NULL ||
+      !inline_binders(fuel, environment, NULL, term->tokens, &params, &body, &refused) || params->tail != NULL)
     return 0;
-  if (fuel <= term_text(term).size + 2) return 0;
-  TermType binder = term->types->head;
-  const LType *ty = subst_type(environment, binder.type);
-  if (type_level(ty) != 0) return 0;
-  *op = (Unary){binder.name, ty, wanted, (Tokens){0}, environment, first_arg(term)};
+  Param binder = params->head;
+  const Value *checked;
+  Nat spent;
+  if (!eval_term(fuel - 1, budget, wanted,
+                 bindings_item(value_binding(binder.name, binder.type, &null_value),
+                               bindings_item(check_marker(), environment)),
+                 first_arg(term), &checked, &spent))
+    return 0;
+  *op = (Unary){binder.name, binder.type, wanted, (Tokens){0}, environment, first_arg(term)};
   *left = budget;
   return 1;
 }
@@ -1961,24 +1961,31 @@ static Nat partial_callee(const Binding *item) {
   return 0;
 }
 
-/* bound_unary on a PARTIAL term. A callee with type params gives 0, because
-   typed_bound keeps the type tokens (finding b). A function callee gives its
-   body term in the closure scope; a closure callee keeps the body tokens. */
+/* bound_unary on a PARTIAL term. type_arguments on the argument span gives
+   the type arguments, and typed_bound keeps their tokens, as on the token
+   path (D3-s5 part B). A function callee gives its body term in the closure
+   scope; a closure callee keeps the body tokens. */
 static int eval_bound_unary(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Unary *op,
                             Nat *left) {
   const Binding *item;
   if (fuel == 0 || !lookup(term->name, environment, &item) || partial_callee(item) == 0) return 0;
-  if (has_type_param(item->params) == 1) return 0;
   Fuel more = fuel - 1;
-  const Params *formal = value_params(NULL, item->params);
+  const Bindings *chosen;
+  Tokens after_types;
+  Failure refused;
+  if (!type_arguments(more, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, &refused))
+    return 0;
+  const Params *formal = value_params(chosen, item->params);
   const Params *front = front_params(formal);
   const Values *values;
   Nat spent;
   if (!eval_arguments(more, budget, param_types(front), environment, term->args, &values, &spent)) return 0;
   if (bound_functions(front, values) == 0) return 0;
-  Binding closure = partial_closure(
-      term->name, arrow_type(drop_params(params_length(front), formal), subst_type(NULL, item->type)), term->name,
-      values, environment);
+  /* Use locals, not a nested call. With the nested call, tcc on arm64 makes
+     code that causes an invalid memory access. */
+  const Values *bound = typed_bound(item->params, term->tokens, after_types, values);
+  const LType *ty = arrow_type(drop_params(params_length(front), formal), subst_type(chosen, item->type));
+  Binding closure = partial_closure(term->name, ty, term->name, bound, environment);
   if (!unary_of(environment, &closure, op)) return 0;
   op->term = closure.term;
   *left = spent;
@@ -2163,30 +2170,24 @@ static int eval_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, 
   return 0;
 }
 
-/* The params of an inline fun from its binder types, or 0 when a binder type
-   is not a type of level 0. */
-static int binder_params(const Bindings *environment, const TermTypes *types, const Params **params) {
-  if (types == NULL) {
-    *params = NULL;
-    return 1;
-  }
-  const LType *ty = subst_type(environment, types->head.type);
-  const Params *later;
-  if (type_level(ty) != 0 || !binder_params(environment, types->tail, &later)) return 0;
-  *params = params_item((Param){types->head.name, ty}, later);
-  return 1;
-}
-
-/* inline_stepper on a FUN term, with the margin rule of eval_inline_unary
-   (finding a): 0 at budget 0 and at fuel at or below the margin. */
+/* inline_stepper on a FUN term (D3-s5 part B): inline_binders on the binder
+   span and the body walk in check mode, both at fuel - 1, as on the token
+   path. The walk makes no charge, thus its budget answer is not used. */
 static int eval_inline_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
                                const Term *term, Stepper *op, Nat *left) {
-  if (fuel == 0 || budget == 0 || term->types == NULL || first_arg(term) == NULL) return 0;
-  if (fuel <= term_text(term).size + 2) return 0;
   const Params *params;
-  if (!binder_params(environment, term->types, &params)) return 0;
+  Tokens body;
+  Failure refused;
+  if (fuel == 0 || budget == 0 || first_arg(term) == NULL ||
+      !inline_binders(fuel - 1, environment, NULL, term->tokens, &params, &body, &refused))
+    return 0;
   const LType *result = inline_result(mode, expected, params);
-  if (result == NULL) return 0;
+  const Value *checked;
+  Nat spent;
+  if (result == NULL ||
+      !eval_term(fuel - 1, budget, result, bind_params(params, NULL, bindings_item(check_marker(), environment)),
+                 first_arg(term), &checked, &spent))
+    return 0;
   *op = (Stepper){params, result, (Tokens){0}, environment, first_arg(term)};
   *left = budget;
   return 1;
@@ -2217,24 +2218,29 @@ static int eval_bound_arguments(Fuel fuel, Nat budget, const Params *params, con
   return 1;
 }
 
-/* bound_stepper on a PARTIAL term. A callee with type params gives 0
-   (finding b). A function or a closure callee gives its body term in the
-   closure scope (D3-s4). */
+/* bound_stepper on a PARTIAL term. type_arguments on the argument span and
+   typed_bound, as on the token path (D3-s5 part B). A function or a closure
+   callee gives its body term in the closure scope (D3-s4). */
 static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Stepper *op,
                               Nat *left) {
   const Binding *item;
   if (fuel == 0 || !lookup(term->name, environment, &item) || partial_callee(item) == 0) return 0;
-  if (has_type_param(item->params) == 1) return 0;
   Fuel more = fuel - 1;
-  const Params *formal = value_params(NULL, item->params);
+  const Bindings *chosen;
+  Tokens after_types;
+  Failure refused;
+  if (!type_arguments(more, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, &refused))
+    return 0;
+  const Params *formal = value_params(chosen, item->params);
   const Params *front = take_params(terms_count(term->args), formal);
   const Values *values;
   Nat spent;
   if (!eval_bound_arguments(more, budget, front, environment, term->args, &values, &spent)) return 0;
   if (bound_functions(front, values) == 0) return 0;
-  Binding made = partial_closure(
-      term->name, arrow_type(drop_params(params_length(front), formal), subst_type(NULL, item->type)), term->name,
-      values, environment);
+  /* Use locals, not a nested call, as in eval_bound_unary (tcc on arm64). */
+  const Values *bound = typed_bound(item->params, term->tokens, after_types, values);
+  const LType *ty = arrow_type(drop_params(params_length(front), formal), subst_type(chosen, item->type));
+  Binding made = partial_closure(term->name, ty, term->name, bound, environment);
   const Term *body = made.term;
   switch (made.kind) {
   case BIND_VALUE:
@@ -2530,16 +2536,20 @@ static Nat arrow_tag(const Term *term) {
   return 0;
 }
 
-/* inline_argument on a FUN term. The token path reads the binder tokens with
-   fuel, thus the margin rule of eval_inline_unary. The body walk is in check
+/* inline_argument on a FUN term: inline_binders on the binder span at
+   fuel - 1, as on the token path (D3-s5 part B). The body walk is in check
    mode with its charge. The Value keeps the TERM_BODY of the FUN node. */
 static int eval_inline_argument(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
                                 const Term *term, const Value **value, Nat *left) {
-  if (fuel == 0 || fuel <= term_text(term).size + 2) return 0;
+  if (fuel == 0) return 0;
   Fuel more = fuel - 1;
   const Term *body = first_arg(term);
   const Params *params;
-  if (body == NULL || body->tag != TERM_BODY || !binder_params(environment, term->types, &params)) return 0;
+  Tokens binder_rest;
+  Failure refused;
+  if (body == NULL || body->tag != TERM_BODY ||
+      !inline_binders(more, environment, NULL, term->tokens, &params, &binder_rest, &refused))
+    return 0;
   if (same_type(expected, arrow_type(params, arrow_result(expected))) != 1) return 0;
   const Value *checked;
   Nat spent;
@@ -2556,17 +2566,27 @@ static int eval_partial_argument(Fuel fuel, Nat budget, const LType *expected, c
   const Binding *item;
   if (fuel <= 1 || !lookup(term->name, environment, &item) || partial_callee(item) == 0) return 0;
   const Params *params = item->params;
-  const LType *result = item->type;
-  if (same_type(expected, arrow_type(params, result)) == 1 || dependent_result(result) == 1 ||
-      dependent_params(params) == 1 || has_type_param(params) == 1)
+  if (same_type(expected, arrow_type(params, item->type)) == 1 || dependent_result(item->type) == 1 ||
+      dependent_params(params) == 1)
     return 0;
-  const Params *bound = bound_params(params, arrow_params(expected));
-  if (same_type(expected, arrow_type(drop_params(params_length(bound), params), result)) != 1) return 0;
+  /* A type-param callee: type_arguments on the argument span at fuel - 1,
+     then typed_bound, as partial_argument does (D3-s5 part B). */
+  const Bindings *chosen;
+  Tokens after_types;
+  Failure refused;
+  if (!type_arguments(fuel - 1, params, environment, NULL, term->tokens, &chosen, &after_types, NULL, &refused))
+    return 0;
+  Nat typed = has_type_param(params);
+  const Params *formal = typed == 1 ? value_params(chosen, params) : params;
+  const LType *result = typed == 1 ? subst_type(chosen, item->type) : item->type;
+  const Params *bound = bound_params(formal, arrow_params(expected));
+  if (same_type(expected, arrow_type(drop_params(params_length(bound), formal), result)) != 1) return 0;
   const Values *values;
   Nat spent;
   if (!eval_arguments(fuel - 2, budget, param_types(bound), environment, term->args, &values, &spent)) return 0;
   if (bound_functions(bound, values) == 0) return 0;
-  return eval_worked(make_value((Value){.kind = VALUE_ITEMS, .items = values_item(text_value(term->name), values)}),
+  const Values *kept = typed_bound(params, term->tokens, after_types, values);
+  return eval_worked(make_value((Value){.kind = VALUE_ITEMS, .items = values_item(text_value(term->name), kept)}),
                      spent, value, left);
 }
 

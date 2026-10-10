@@ -724,6 +724,10 @@ static void test_term_evaluator(void) {
       "fold push (cons k nil) ys\n"
       "def foldP : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
       "fold (pushK k) nil ys\n"
+      "def pushA : (A : Type 0) -> (k : Nat) -> (y : Nat) -> (acc : List Nat) -> List Nat := "
+      "fun (A : Type 0) (k : Nat) (y : Nat) (acc : List Nat) => cons k (cons y acc)\n"
+      "def foldT : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "fold (pushA Nat k) nil ys\n"
       "def foldG : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
       "fold ((pushK k)) nil ys\n"
       "def foldF : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
@@ -811,30 +815,33 @@ static void test_term_evaluator(void) {
 
   /* Keyword forms (part B1: pure, map, bind, filter and either; part B2:
      fold and unfold, also over Value): eval 1 gives parse 1 on the grid, and eval 1
-     at fuel 1000 (no replay). Heads: VAR, NAME, GROUP, FUN and PARTIAL. A
-     FUN head gives 0 at or below its fuel margin, thus only the other heads
-     give the same answer at each point (exact 1). */
+     at fuel 1000 (no replay). Heads: VAR, NAME, GROUP, FUN and PARTIAL, also
+     a PARTIAL of a callee with type params (mapT, foldT). A FUN head walks its
+     body in check mode with no fuel margin (D3-s5 part B4), thus each head
+     gives the same answer at each point (exact 1). The FOLD_VALUE rows stay
+     exact 0 (D3-s3 part B2, see the fuel 8 test below). */
   const struct {
     const char *name;
     const char *args;
     const char *value;
     int exact;
   } keyword[] = {
-      {"mapK", "4 (cons 7 (cons 8 nil))", "[4,4]", 0},
+      {"mapK", "4 (cons 7 (cons 8 nil))", "[4,4]", 1},
       {"pureL", "4 (cons 7 (cons 8 nil))", "[4]", 1},
       {"mapP", "4 (cons 7 (cons 8 nil))", "[4,4]", 1},
+      {"mapT", "4 (cons 7 (cons 8 nil))", "[4,4]", 1},
       {"mapN", "4 (cons 7 (cons 8 nil))", "[7,8]", 1},
       {"mapGP", "4 (cons 7 (cons 8 nil))", "[4,4]", 1},
-      {"mapGF", "4 (cons 7 (cons 8 nil))", "[7,8]", 0},
+      {"mapGF", "4 (cons 7 (cons 8 nil))", "[7,8]", 1},
       {"mapV", "size (cons 7 (cons 8 nil))", "[7,8]", 1},
-      {"bindF", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 0},
+      {"bindF", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
       {"bindP", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
-      {"filterF", "flagYes (cons 7 (cons 8 nil))", "[7,8]", 0},
+      {"filterF", "flagYes (cons 7 (cons 8 nil))", "[7,8]", 1},
       {"filterP", "flagNo (cons 7 (cons 8 nil))", "[]", 1},
       {"pureO", "4 (some 7)", "4", 1},
       {"mapO", "4 (some 7)", "4", 1},
       {"mapO", "4 none", "null", 1},
-      {"mapOF", "4 (some 7)", "7", 0},
+      {"mapOF", "4 (some 7)", "7", 1},
       {"bindO", "4 (some 7)", "4", 1},
       {"bindOV", "half (some 7)", "7", 1},
       {"filterON", "4 (some 7)", "7", 1},
@@ -843,16 +850,18 @@ static void test_term_evaluator(void) {
       {"settleV", "size size (inr 9)", "9", 1},
       {"foldN", "4 (cons 7 (cons 8 nil))", "[7,8,4]", 1},
       {"foldP", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
+      {"foldT", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
       {"foldG", "4 (cons 7 (cons 8 nil))", "[4,7,4,8]", 1},
-      {"foldF", "4 (cons 7 (cons 8 nil))", "[7,8]", 0},
+      {"foldF", "4 (cons 7 (cons 8 nil))", "[7,8]", 1},
       {"foldV", "push (cons 7 (cons 8 nil))", "[7,8]", 1},
       {"unfoldN", "3 7", "3", 1},
       {"unfoldP", "3 7", "3", 1},
       {"unfoldG", "3 7", "3", 1},
-      {"unfoldF", "3 7", "3", 0},
+      {"unfoldF", "3 7", "3", 1},
       {"unfoldV", "half 7", "3", 1},
       {"foldValue", "4 (valueNat 9)", "4", 0},
       {"foldValue", "4 (valueText \"a\")", "2", 0},
+      {"foldValueT", "4 (valueNat 9)", "4", 0},
       {"unfoldValue", "2 \"s\"", "{\"left\":{\"left\":null}}", 1},
   };
   for (Nat i = 0; i < sizeof keyword / sizeof keyword[0]; i++) {
@@ -914,13 +923,11 @@ static void test_term_evaluator(void) {
   assert(failure.position == (Nat)(strstr(source, "=> pickK k y) ys") + 3 - source) &&
          same_text(failure.message, eBudget));
 
-  /* Fallback: the token path gives the value. */
+  /* Fallback: a dependent callee (part C). The token path gives the value.
+     A PARTIAL of a callee with type params is now a keyword row (mapT,
+     foldT, foldValueT). */
   BothPaths dependent = body_at(environment, "viaSame", "4 7", 1000, 1000);
   assert(dependent.eval == 0 && dependent.parse == 1);
-  BothPaths typed_partial = body_at(environment, "mapT", "4 (cons 7 (cons 8 nil))", 1000, 1000);
-  assert(typed_partial.eval == 0 && typed_partial.parse == 1);
-  BothPaths typed_fold = body_at(environment, "foldValueT", "4 (valueNat 9)", 1000, 1000);
-  assert(typed_fold.eval == 0 && typed_fold.parse == 1);
 
   /* Budget 1 on a fold over 3 items (part B2): the first step spends it.
      eval_term gives 0, and the token path gives eBudget at the first token
@@ -943,22 +950,27 @@ static void test_term_evaluator(void) {
                     &starved_left, NULL, &failure) == 0);
   assert(failure.position == (Nat)(strstr(source, "(fun (b : Flag) => 1)") + 1 - source));
 
-  /* Type arguments: eval 1 gives parse 1 on the grid, and the margin is
-     term_text(APPLY).size + 2 at entry. */
-  assert(body_grid(environment, "viaNat", "4 7").worked > 0);
+  /* Type arguments: eval_apply reads them with type_arguments, as the token
+     path does (D3-s5 part B), thus the two paths give the same answer at each
+     point of the grid. At the old margin term_text(APPLY).size + 2, eval 1
+     and parse 1. */
+  GridCount via = body_grid(environment, "viaNat", "4 7");
+  assert(via.worked > 0 && via.differ == 0);
   assert(same_text(body_at(environment, "viaNat", "4 7", 1000, 1000).value, text("7")));
   Fuel margin = term_text(fun_named(environment, "viaNat")->term).size + 2;
-  assert(body_at(environment, "viaNat", "4 7", margin, 1000).eval == 0);
+  BothPaths at_margin = body_at(environment, "viaNat", "4 7", margin, 1000);
+  assert(at_margin.eval == 1 && at_margin.parse == 1);
 
   /* D3-s4 part C: a FUN or a PARTIAL argument at an arrow expected type in
      the body (the checked tree). Each row gives the value at fuel 1000 by
-     eval_term, thus the replay count is 0. twiceP gives the same answer at
-     each point of the grid. twiceF can differ near the margin of the inline
-     fun: the token path reads the binder tokens with fuel. */
+     eval_term, thus the replay count is 0. Each row gives the same answer at
+     each point of the grid: the inline fun reads its binders with
+     inline_binders, as the token path does, and a PARTIAL of a callee with
+     type params (twiceT) keeps its type arguments (D3-s5 part B). */
   const struct {
     const char *name;
     Nat exact;
-  } arrow_rows[] = {{"twiceF", 0}, {"twiceP", 1}};
+  } arrow_rows[] = {{"twiceF", 1}, {"twiceP", 1}, {"twiceT", 1}};
   Nat replays = 0;
   for (Nat i = 0; i < sizeof arrow_rows / sizeof arrow_rows[0]; i++) {
     GridCount count = body_grid(environment, arrow_rows[i].name, "4 7");
@@ -989,13 +1001,8 @@ static void test_term_evaluator(void) {
   assert(arrow_value->kind == VALUE_ITEMS && arrow_value->items->head->kind == VALUE_TEXT);
   assert(same_text(arrow_value->items->head->text, text("pickK")));
 
-  /* Fallback: at the margin of the inline fun, a typed partial and a NAME
-     argument (Q-S4-4), eval_term gives 0 and the token path gives the value. */
-  BothPaths fun_margin = body_at(environment, "twiceF", "4 7", term_text(fun_node).size + 2, 1000);
-  assert(fun_margin.eval == 0);
-  assert(fun_margin.parse == 1);
-  BothPaths typed_arrow = body_at(environment, "twiceT", "4 7", 1000, 1000);
-  assert(typed_arrow.eval == 0 && typed_arrow.parse == 1);
+  /* Fallback: for a NAME argument (Q-S4-4, part D), eval_term gives 0 and
+     the token path gives the value. */
   BothPaths name_arrow = body_at(environment, "twiceN", "4 7", 1000, 1000);
   assert(name_arrow.eval == 0 && name_arrow.parse == 1);
 }
