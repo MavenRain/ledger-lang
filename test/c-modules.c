@@ -1016,11 +1016,12 @@ static void test_term_evaluator(void) {
   }
 
   /* D3-s6 part B: the grid counts of the FOLD_VALUE and UNFOLD_VALUE rows,
-     and the rows at fuel 0 to 4 with budget 1000. Each FOLD_VALUE row has 60
-     unknown points: fuel 9 to 12, at each budget above 0. At fuel 9 to 12,
-     eval_inline_stepper on f2 does not keep the failure of inline_binders. At
-     these points the token path gives eFuel. This site is a shared stepper
-     site (delta (9) of D3-s5 part E), thus part B keeps it as a known row.
+     and the rows at fuel 0 to 4 with budget 1000. D3-s7 part B: each
+     FOLD_VALUE row had 60 unknown points, fuel 9 to 12 at each budget above
+     0, where eval_inline_stepper on f2 gave 0 with no code. Now
+     eval_inline_stepper gives the failure of the token path at these points.
+     Thus the 60 points are failed answers, and no FOLD_VALUE row gives
+     unknown.
      D3-s7 part A: at fuel 3, eval_stepper on f1 (a GROUP) calls
      eval_partial_stepper at fuel 0, which gives eFuel at the PARTIAL, the
      same failure as the token path. Thus the 15 points of fuel 3 at budget 1
@@ -1031,9 +1032,9 @@ static void test_term_evaluator(void) {
     GridCount count;
     int fold;
   } valued_rows[] = {
-      {"foldValue", "4 (valueNat 9)", {714, 250, 60, 0}, 1},
-      {"foldValue", "4 (valueText \"a\")", {714, 250, 60, 0}, 1},
-      {"foldValueT", "4 (valueNat 9)", {714, 250, 60, 0}, 1},
+      {"foldValue", "4 (valueNat 9)", {714, 310, 0, 0}, 1},
+      {"foldValue", "4 (valueText \"a\")", {714, 310, 0, 0}, 1},
+      {"foldValueT", "4 (valueNat 9)", {714, 310, 0, 0}, 1},
       {"unfoldValue", "2 \"s\"", {468, 556, 0, 0}, 0},
   };
   for (Nat i = 0; i < sizeof valued_rows / sizeof valued_rows[0]; i++) {
@@ -1075,6 +1076,55 @@ static void test_term_evaluator(void) {
   for (Nat i = 0; i < sizeof entry_rows / sizeof entry_rows[0]; i++) {
     BothPaths entry = body_at(environment, entry_rows[i].name, entry_rows[i].args, entry_rows[i].fuel, 1000);
     assert(entry.eval == 0 && entry.parse == 0 && entry.failure.message.size != 0);
+  }
+
+  /* D3-s7 part B: eval_inline_stepper on the inline stepper of two binders
+     of foldF. eval_term at fuel F calls eval_inline_stepper at fuel F - 4.
+     F 4 gives fuel 0: eFuel at the first token of the binder span (the `(`
+     after `fun`). F 5 to 8 give a refusal of inline_binders in the binder
+     span: F 5 eFuel at the same token, F 6 eFuel at the type of y, F 7 and 8
+     eFuel in the type of a (parse_type). F 0 to 3 fail before the stepper.
+     Each answer below F 9 is a failed answer, and both_paths compares it
+     with the token path. F 9 and above give the value. The grid has no
+     unknown point. */
+  const char *stepper_at = strstr(source, "fun (y : Nat) (a : List Nat) => cons y a");
+  const struct {
+    Fuel fuel;
+    Nat offset;
+  } inline_rows[] = {
+      {4, 4}, {5, 4}, {6, 9}, {7, 19}, {8, 24},
+  };
+  assert(same_grid(body_grid(environment, "foldF", "4 (cons 7 (cons 8 nil))"), (GridCount){715, 309, 0, 0}));
+  for (Fuel fuel = 0; fuel < 13; fuel++) {
+    BothPaths inline_at = body_at(environment, "foldF", "4 (cons 7 (cons 8 nil))", fuel, 1000);
+    assert(fuel < 9 ? inline_at.eval == 0 && inline_at.failure.message.size != 0 : inline_at.eval == 1);
+  }
+  for (Nat i = 0; i < sizeof inline_rows / sizeof inline_rows[0]; i++) {
+    BothPaths refusal = body_at(environment, "foldF", "4 (cons 7 (cons 8 nil))", inline_rows[i].fuel, 1000);
+    assert(refusal.failure.position == (Nat)(stepper_at - source) + inline_rows[i].offset &&
+           same_text(refusal.failure.message, eFuel));
+  }
+
+  /* D3-s7 part B: a FUN node with an empty binder span. At F 4, the first
+     binder position is unavailable; at F 5 and 6, inline_binders refuses at
+     position 0, the end of the span. Thus eval_inline_stepper gives 0 with
+     no code (unknown, a replay). Keep the body tokens for the token path. */
+  const Term *fold_f = body_term(environment, "foldF");
+  const Term *group_f = fold_f->args->head;
+  Term bare_fun = *group_f->args->head;
+  assert(group_f->tag == TERM_GROUP && bare_fun.tag == TERM_FUN && bare_fun.tokens.size != 0);
+  bare_fun.tokens = (Tokens){0};
+  Term bare_group = *group_f;
+  bare_group.args = terms_item(&bare_fun, NULL);
+  Term bare_fold = *fold_f;
+  bare_fold.args = terms_item(&bare_group, fold_f->args->tail);
+  const Binding *fold_f_item = fun_named(environment, "foldF");
+  Binding bare_item = *fold_f_item;
+  bare_item.term = term_body(term_tokens(fold_f_item->term), &bare_fold);
+  const Bindings *fold_f_scope = call_scope(environment, fold_f_item, "4 (cons 7 (cons 8 nil))");
+  for (Fuel fuel = 4; fuel < 7; fuel++) {
+    BothPaths bare_paths = both_paths(fold_f_scope, &bare_item, fuel, 1000);
+    assert(bare_paths.eval == 0 && bare_paths.failure.message.size == 0);
   }
 
   /* D3-s7 part A: a TERM_FOLD node with a NULL stepper. At fuel 2,

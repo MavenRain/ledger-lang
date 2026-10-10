@@ -2250,15 +2250,24 @@ static int eval_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, 
 
 /* inline_stepper on a FUN term (D3-s5 part B): inline_binders on the binder
    span and the body walk in check mode, both at fuel - 1, as on the token
-   path. The walk makes no charge, thus its budget answer is not used. */
+   path. The walk makes no charge, thus its budget answer is not used.
+   Fuel 0 gives eFuel at the first token of the binder span, the token after
+   `fun`, as on the token path (D3-s7 part B). There is no budget test: the
+   token path has none, and eval_term on the body gives eBudget. The binder
+   span stops at the body, and the token path does not. Thus a refusal at
+   position 0 is at the end of the span, and it stays unknown. A refusal at a
+   different position is in the span: it is the token path failure. A missing
+   binder span at fuel 0 stays unknown: its first token is unavailable. */
 static int eval_inline_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
                                const Term *term, Stepper *op, Nat *left, Failure *failure) {
+  if (fuel == 0)
+    return term->tokens.size == 0 ? 0 : fail_at(failure, first_position(term->tokens), eFuel);
   const Params *params;
   Tokens body;
   Failure refused;
-  if (fuel == 0 || budget == 0 || first_arg(term) == NULL ||
-      !inline_binders(fuel - 1, environment, NULL, term->tokens, &params, &body, &refused))
-    return 0;
+  if (first_arg(term) == NULL) return 0;
+  if (!inline_binders(fuel - 1, environment, NULL, term->tokens, &params, &body, &refused))
+    return refused.position == 0 ? 0 : fail_at(failure, refused.position, refused.message);
   const LType *result = inline_result(mode, expected, params);
   const Value *checked;
   Nat spent;
