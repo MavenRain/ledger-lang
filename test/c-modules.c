@@ -225,6 +225,15 @@ static const Term *body_term(const Bindings *environment, const char *name) {
   return NULL;
 }
 
+/* The count of BIND_FUN bindings whose TERM_BODY has no callee. Each checked
+   body gives a node, thus a checked program gives 0 (D3-s6 part D). */
+static Nat bare_bodies(const Bindings *environment) {
+  Nat count = 0;
+  for (; environment != NULL; environment = environment->tail)
+    count += environment->head.kind == BIND_FUN && environment->head.term->callee == NULL;
+  return count;
+}
+
 /* The checked type of the first parameter of the function name, or NULL. */
 static const LType *first_param_type(const Bindings *environment, const char *name) {
   for (; environment != NULL; environment = environment->tail)
@@ -273,6 +282,7 @@ static void test_definitions(void) {
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
+  assert(bare_bodies(environment) == 0);
   Nat checked = 0;
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
@@ -324,6 +334,7 @@ static void test_function_references(void) {
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
+  assert(bare_bodies(environment) == 0);
   assert(same_term(body_term(environment, "runG"), body_term(environment, "runH")));
   assert(same_term(body_term(environment, "passG"), body_term(environment, "passH")));
   assert(!same_term(body_term(environment, "firstOf"), body_term(environment, "secondOf")));
@@ -404,6 +415,7 @@ static void test_keyword_definitions(void) {
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
+  assert(bare_bodies(environment) == 0);
   Nat checked = 0;
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
@@ -531,6 +543,7 @@ static void test_keyword_positions(void) {
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure));
+  assert(bare_bodies(environment) == 0);
   Nat count = 0;
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
@@ -565,6 +578,7 @@ static void test_type_references(void) {
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
+  assert(bare_bodies(environment) == 0);
   assert(same_term(body_term(environment, "viaA"), body_term(environment, "viaB")));
   assert(!same_term(body_term(environment, "viaFirst"), body_term(environment, "viaSecond")));
   assert(same_term(body_term(environment, "listA"), body_term(environment, "listB")));
@@ -881,6 +895,7 @@ static void test_term_evaluator(void) {
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
+  assert(bare_bodies(environment) == 0);
 
   /* D3-s4 part A: the term of a BIND_FUN is the TERM_BODY of its body span.
      D3-s5 part A: the spans and end of the nodes of each body. */
@@ -888,8 +903,7 @@ static void test_term_evaluator(void) {
   for (const Bindings *item = environment; item != NULL; item = item->tail) {
     if (item->head.kind != BIND_FUN) continue;
     const Term *carrier = item->head.term;
-    assert(carrier->tag == TERM_BODY);
-    if (carrier->callee == NULL) continue;
+    assert(carrier->tag == TERM_BODY && carrier->callee != NULL);
     assert(same_text(term_text(carrier), tokens_text(term_tokens(item->head.term))));
     spans = add_spans(spans, check_spans(carrier->callee, term_tokens(carrier)));
   }
@@ -927,6 +941,14 @@ static void test_term_evaluator(void) {
   assert(same_text(body_at(environment, "twoList", "4 7", 1000, 1000).value, text("[4,7]")));
   assert(same_text(body_at(environment, "label", "4 7", 1000, 1000).value, text("\"hi\"")));
   assert(same_text(body_at(environment, "deep", "4 7", 1000, 1000).value, text("4")));
+  /* D3-s6 part D: a BIND_FUN with term_body(span, NULL) as its term gives
+     unknown, and the token path gives the value. */
+  const Binding *deep_item = fun_named(environment, "deep");
+  assert(deep_item != NULL);
+  Binding bare_deep = *deep_item;
+  bare_deep.term = term_body(term_tokens(deep_item->term), NULL);
+  BothPaths bare_paths = both_paths(call_scope(environment, deep_item, "4 7"), &bare_deep, 1000, 1000);
+  assert(bare_paths.eval == 0 && bare_paths.failure.message.size == 0 && bare_paths.parse == 1);
 
   /* Budget 1: the inner call spends it, and the outer body has none left. */
   BothPaths starved = body_at(environment, "deep", "4 7", 1000, 1);

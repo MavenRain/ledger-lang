@@ -1561,7 +1561,7 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         Tokens ignored;
         Nat used;
         Failure evaluated = {0, {NULL, 0}};
-        if (item->term != NULL && eval_term(more, nat_sub(spent, 1), applied, scope, item->term, &value, &used, &evaluated))
+        if (eval_term(more, nat_sub(spent, 1), applied, scope, item->term, &value, &used, &evaluated))
           return with_term(worked_typed((Typed){applied, value}, after, used, typed, rest, left), term, applied_term);
         /* A failed answer gives its failure. An unknown answer runs the token path. */
         if (evaluated.message.size != 0) return fail_at(failure, evaluated.position, evaluated.message);
@@ -1901,7 +1901,6 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
     const LType *applied;
     if (!close_result(fuel, environment, item->params, values, resolved, instantiated, &applied)) return 0;
     if (checking_body(environment) == 1) return eval_typed((Typed){applied, &null_value}, spent, typed, left);
-    if (item->term == NULL) return 0;
     const Params *closed =
         close_params(fuel, environment, item->params, values,
                      instantiate_params(fuel, environment, item->params, values, after_types, item->params));
