@@ -1844,7 +1844,9 @@ static int eval_arguments(Fuel fuel, Nat budget, const LTypes *types, const Bind
 
 /* dependent_arguments on the argument terms. start is the argument span
    after the type arguments. instantiate_result reads the argument tokens
-   on it with skip_atom, as on the token path (D3-s5 part C). */
+   on it with skip_atom, as on the token path (D3-s5 part C). If close_result
+   gives 0, the answer is eTerm at the current argument, as on the token
+   path (D3-s7 part D). */
 static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const Bindings *environment,
                           const Params *params, const Params *remaining, const Values *seen, Tokens start,
                           const Terms *args, const Values **values, Nat *left, Failure *failure) {
@@ -1867,7 +1869,8 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
     int resolved =
         instantiate_result(fuel, environment, params, earlier, start, subst_type(chosen, head.type), &instantiated);
     const LType *expected;
-    if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected)) return 0;
+    if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected))
+      return fail_at(failure, args->head->position, eTerm);
     const Value *value;
     if (!eval_argument(fuel, budget, expected, environment, args->head, &value, &budget, failure)) return 0;
     seen = values_item(value, seen);
@@ -1875,7 +1878,9 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
   }
 }
 
-/* synth_term on an application: fuel is the fuel of the callee step. */
+/* synth_term on an application: fuel is the fuel of the callee step. If
+   close_result gives 0, the answer is eTerm at the APPLY position, as in
+   synth_term (D3-s7 part D). */
 static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left, Failure *failure) {
   const Binding *item;
   if (!lookup(term->name, environment, &item)) return 0;
@@ -1899,7 +1904,8 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
     int resolved = instantiate_result(fuel, environment, item->params, values, after_types,
                                       subst_type(chosen, item->type), &instantiated);
     const LType *applied;
-    if (!close_result(fuel, environment, item->params, values, resolved, instantiated, &applied)) return 0;
+    if (!close_result(fuel, environment, item->params, values, resolved, instantiated, &applied))
+      return fail_at(failure, term->position, eTerm);
     if (checking_body(environment) == 1) return eval_typed((Typed){applied, &null_value}, spent, typed, left);
     const Params *closed =
         close_params(fuel, environment, item->params, values,

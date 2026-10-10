@@ -691,10 +691,13 @@ static int same_grid(GridCount left, GridCount right) {
          left.differ == right.differ;
 }
 
-/* The grid rows with no unknown answer (D3-s5 part E). The other rows give
-   unknown at the sites of delta (9) in TERM-DESIGN D3-s5 part E. */
+/* The grid rows with no unknown answer (D3-s5 part E). D3-s7 part D adds
+   twoList, grouped and deep: the close_result sites give eTerm. Other rows
+   can give unknown at the sites that stay unknown (TERM-DESIGN D3-s7, Out
+   of scope). */
 static int no_unknown(const char *name) {
-  return strcmp(name, "pickK") == 0 || strcmp(name, "label") == 0 || strcmp(name, "twice") == 0;
+  return strcmp(name, "pickK") == 0 || strcmp(name, "label") == 0 || strcmp(name, "twice") == 0 ||
+         strcmp(name, "twoList") == 0 || strcmp(name, "grouped") == 0 || strcmp(name, "deep") == 0;
 }
 
 /* both_paths on the body of the function name at one fuel and budget. */
@@ -944,6 +947,20 @@ static void test_term_evaluator(void) {
   assert(same_text(body_at(environment, "twoList", "4 7", 1000, 1000).value, text("[4,7]")));
   assert(same_text(body_at(environment, "label", "4 7", 1000, 1000).value, text("\"hi\"")));
   assert(same_text(body_at(environment, "deep", "4 7", 1000, 1000).value, text("4")));
+  /* D3-s7 part D: close_result at fuel 0 in eval_dependent gives eTerm at
+     the current argument, as on the token path. Fuel 3 stops at the first
+     argument of the outer pickK, fuel 8 at the second argument of the inner
+     pickK. */
+  const char *deep_source = strstr(source, "pickK (pickK a b) 9");
+  const struct {
+    Fuel fuel;
+    Nat offset;
+  } close_points[] = {{3, 6}, {8, 15}};
+  for (Nat i = 0; i < sizeof close_points / sizeof close_points[0]; i++) {
+    BothPaths closed = body_at(environment, "deep", "4 7", close_points[i].fuel, 1000);
+    assert(closed.eval == 0 && closed.parse == 0 && same_text(closed.failure.message, eTerm) &&
+           closed.failure.position == (Nat)(deep_source - source) + close_points[i].offset);
+  }
   /* D3-s6 part D: a BIND_FUN with term_body(span, NULL) as its term gives
      unknown, and the token path gives the value. */
   const Binding *deep_item = fun_named(environment, "deep");
