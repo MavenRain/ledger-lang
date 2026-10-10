@@ -76,6 +76,21 @@ static Binding closure_binding(Text name, const Params *params, const LType *res
   return (Binding){.kind = BIND_CLOSURE, .name = name, .type = result, .params = params, .term = term, .scope = scope};
 }
 
+/* The slot of the first binder of the scope, or 0 (D3-s6 part C). */
+static Nat frame_slot(const Bindings *environment) {
+  for (; environment != NULL; environment = environment->tail)
+    if (environment->head.slot != 0) return environment->head.slot;
+  return 0;
+}
+
+/* A new binder takes the slot after the first binder of its scope: the
+   parameters of a body 1 to n, an inline binder n + 1 plus the count of the
+   inline binders below it (`### The index of a binder`). */
+static const Bindings *slotted_item(Binding head, const Bindings *tail) {
+  head.slot = frame_slot(tail) + 1;
+  return bindings_item(head, tail);
+}
+
 static Nat params_length(const Params *params) {
   Nat count = 0;
   for (; params != NULL; params = params->tail) count++;
@@ -110,6 +125,15 @@ static const Params *reverse_params_onto(const Params *onto, const Params *items
 static const Bindings *reverse_bindings_onto(const Bindings *onto, const Bindings *items) {
   for (; items != NULL; items = items->tail) onto = bindings_item(items->head, onto);
   return onto;
+}
+
+/* The type arguments of an application on its definition scope. chosen
+   holds the last type parameter first, thus the first one is deepest and
+   each one takes the slot of its type parameter, as bind_params gives at
+   check time. */
+static const Bindings *type_frame(const Bindings *scope, const Bindings *chosen) {
+  if (chosen == NULL) return scope;
+  return slotted_item(chosen->head, type_frame(scope, chosen->tail));
 }
 
 Nat projection_index(Text name) {
@@ -491,9 +515,9 @@ const Bindings *bind_bound(const Values *values, const Params *params, const Bin
   for (; values != NULL && params != NULL; values = values->tail, params = params->tail) {
     Param head = params->head;
     if (!is_arrow_type(head.type))
-      scope = bindings_item(value_binding(head.name, head.type, values->head), scope);
+      scope = slotted_item(value_binding(head.name, head.type, values->head), scope);
     else
-      scope = bindings_item(bound_binding(values->head, head.name, head.type, caller), scope);
+      scope = slotted_item(bound_binding(values->head, head.name, head.type, caller), scope);
   }
   return scope;
 }
@@ -513,7 +537,7 @@ static Binding typed_closure(const Values *rest, Text name, const LType *ty, Tex
   const Params *formal = value_params(chosen, params);
   return closure_binding(name, drop_params(values_length(values), formal), subst_type(chosen, result), term,
                          bind_bound(values, formal, caller,
-                                    reverse_bindings_onto(definition_scope(other, caller), chosen)));
+                                    type_frame(definition_scope(other, caller), chosen)));
 }
 
 Binding partial_closure(Text name, const LType *ty, Text target, const Values *bound, const Bindings *caller) {
@@ -532,7 +556,7 @@ const Bindings *bind_arguments(const Bindings *caller, const Params *params, con
                                const Bindings *environment) {
   for (; params != NULL; params = params->tail, values = argument_tail(values))
     environment =
-        bindings_item(bind_param(params->head.name, params->head.type, argument_head(values), caller), environment);
+        slotted_item(bind_param(params->head.name, params->head.type, argument_head(values), caller), environment);
   return environment;
 }
 
@@ -573,7 +597,7 @@ const Params *bound_params(const Params *params, const Params *expected) {
 const LType *unary_param(Unary op) { return op.type; }
 const LType *unary_result(Unary op) { return op.result; }
 const Bindings *unary_environment(Unary op, const Value *value) {
-  return bindings_item(value_binding(op.name, op.type, value), op.scope);
+  return slotted_item(value_binding(op.name, op.type, value), op.scope);
 }
 
 int unary_from(const Bindings *scope, const Params *params, const LType *result, const Term *term, Unary *op) {
@@ -1532,7 +1556,7 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
             close_params(more, environment, item->params, values,
                          instantiate_params(more, environment, item->params, values, after_types, item->params));
         const Bindings *scope = bind_arguments(environment, value_params(chosen, closed), values,
-                                               reverse_bindings_onto(definition_scope(item->name, environment), chosen));
+                                               type_frame(definition_scope(item->name, environment), chosen));
         const Value *value;
         Tokens ignored;
         Nat used;
@@ -1882,7 +1906,7 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
         close_params(fuel, environment, item->params, values,
                      instantiate_params(fuel, environment, item->params, values, after_types, item->params));
     const Bindings *scope = bind_arguments(environment, value_params(chosen, closed), values,
-                                           reverse_bindings_onto(definition_scope(item->name, environment), chosen));
+                                           type_frame(definition_scope(item->name, environment), chosen));
     const Value *value;
     Nat used;
     if (!eval_term(fuel, nat_sub(spent, 1), applied, scope, item->term, &value, &used, failure)) return 0;
@@ -1989,8 +2013,8 @@ static int eval_inline_unary(Fuel fuel, Nat budget, const LType *wanted, const B
   const Value *checked;
   Nat spent;
   if (!eval_term(fuel - 1, budget, wanted,
-                 bindings_item(value_binding(binder.name, binder.type, &null_value),
-                               bindings_item(check_marker(), environment)),
+                 slotted_item(value_binding(binder.name, binder.type, &null_value),
+                              bindings_item(check_marker(), environment)),
                  first_arg(term), &checked, &spent, failure))
     return 0;
   *op = (Unary){binder.name, binder.type, wanted, environment, first_arg(term)};
@@ -2738,6 +2762,24 @@ static int eval_construct_name(Fuel fuel, Nat budget, const LType *expected, con
   return 0;
 }
 
+static Nat slot_misses = 0;
+
+Nat slot_mismatches(void) { return slot_misses; }
+
+/* TERM_VAR by slot (D3-s6 part C): the first item with the slot index + 1,
+   then one name compare. No such item, or a different name, looks the name
+   up (the local fallback) and counts a mismatch. The C test asserts 0. */
+static int var_binding(const Term *term, const Bindings *environment, const Binding **found) {
+  for (const Bindings *at = environment; at != NULL; at = at->tail)
+    if (at->head.slot == term->index + 1) {
+      if (same_text(term->name, at->head.name) != 1) break;
+      *found = &at->head;
+      return 1;
+    }
+  slot_misses = slot_misses + 1;
+  return lookup(term->name, environment, found);
+}
+
 int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
               const Value **value, Nat *left, Failure *failure) {
   /* fuel 0 and budget 0: the failures of the parse_term entry (D3-s5 part E). */
@@ -2758,7 +2800,8 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_NAME: {
     if (is_arrow_type(expected) == 1) return eval_name_argument(more, budget, expected, environment, term, value, left, failure);
     const Binding *item;
-    if (!lookup(term->name, environment, &item) || item->kind != BIND_VALUE) return 0;
+    int found = term->tag == TERM_VAR ? var_binding(term, environment, &item) : lookup(term->name, environment, &item);
+    if (!found || item->kind != BIND_VALUE) return 0;
     if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
     return eval_worked(item->value, budget, value, left);
   }
@@ -3119,7 +3162,7 @@ int inline_unary(Fuel fuel, Nat budget, Nat position, const LType *wanted, const
     Nat spent;
     const Term *inner = NULL;
     if (!parse_term(more, budget, 0, wanted,
-                    bindings_item(value_binding(head.text, ty, &null_value), bindings_item(check_marker(), environment)),
+                    slotted_item(value_binding(head.text, ty, &null_value), bindings_item(check_marker(), environment)),
                     body, &value, &after, &spent, want_term(term, &inner), failure))
       return 0;
     *op = (Unary){head.text, ty, wanted, environment, term_body(taken_tokens(body, after), NULL)};

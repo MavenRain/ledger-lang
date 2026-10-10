@@ -873,6 +873,10 @@ static void test_term_evaluator(void) {
       "def twiceP : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice (pickK k) n\n"
       "def twiceT : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice (constA Nat k) n\n"
       "def twiceN : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice size n\n"
+      "def twiceFF : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => "
+      "twice (fun (y : Nat) => twice (fun (z : Nat) => pickK y z) k) n\n"
+      "def twiceS : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => "
+      "twice (fun (k : Nat) => pickK k n) n\n"
       "def twiceV : (g : One) -> (n : Nat) -> Nat := fun (g : One) (n : Nat) => twice g n\n";
   const Bindings *environment = NULL;
   Failure failure;
@@ -1241,6 +1245,39 @@ static void test_term_evaluator(void) {
     BothPaths name_arrow = body_at(environment, name_rows[i].name, name_rows[i].args, 1000, 1000);
     assert(name_arrow.eval == 1 && same_text(name_arrow.value, text("7")));
   }
+
+  /* D3-s6 part C: the binder slots. Each row gives the same answer on the
+     two paths at each point of the grid, and the value at fuel 1000. viaNat
+     and twiceT: a function with type params (type_frame at the BIND_FUN
+     site and at typed_closure). twiceF: an inline fun in a function, its
+     body in check mode on bind_params. mapK: the unary binder in check mode
+     (eval_inline_unary). twiceFF: a fun in a fun. twiceS: an inline binder
+     with the name of a parameter (a shadow), thus the value is n. */
+  const struct {
+    const char *name;
+    const char *args;
+    const char *value;
+  } slot_rows[] = {{"viaNat", "4 7", "7"},           {"twiceT", "4 7", "4"},  {"twiceF", "4 7", "4"},
+                   {"mapK", "4 (cons 1 nil)", NULL}, {"twiceFF", "4 7", "7"}, {"twiceS", "4 7", "7"}};
+  for (Nat i = 0; i < sizeof slot_rows / sizeof slot_rows[0]; i++) {
+    GridCount count = body_grid(environment, slot_rows[i].name, slot_rows[i].args);
+    assert(count.worked > 0 && count.differ == 0);
+    BothPaths full = body_at(environment, slot_rows[i].name, slot_rows[i].args, 1000, 1000);
+    assert(full.eval == 1 && (slot_rows[i].value == NULL || same_text(full.value, text(slot_rows[i].value))));
+  }
+
+  /* D3-s6 part C: each TERM_VAR of the full grid finds its binder by slot. */
+  assert(slot_mismatches() == 0);
+
+  /* The fallback: a TERM_VAR with a wrong index gives the value of lookup
+     by name, and the count goes up by 1. */
+  const Value *fallback_value;
+  Nat fallback_left;
+  Nat misses = slot_mismatches();
+  assert(eval_term(1000, 1000, size_fun->type, size_at, term_var(0, 1, text("n"), 5), &fallback_value,
+                   &fallback_left, &(Failure){0, {NULL, 0}}) == 1);
+  assert(same_text(printed(fallback_value), text("4")));
+  assert(slot_mismatches() == misses + 1);
 }
 
 int main(void) {

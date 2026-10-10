@@ -309,6 +309,8 @@ typedef struct {
   const Params *params;
   const struct Term *term;
   const Bindings *scope;
+  /* The index of a run-time binder plus 1, or 0 for no slot (D3-s6 part C). */
+  Nat slot;
 } Binding;
 
 struct Bindings {
@@ -420,6 +422,8 @@ int symm_proof(Nat position, Typed found, Tokens tokens, Typed *result, Tokens *
 int trans_proof(Nat position, Typed left, Typed right, Tokens tokens, Typed *result, Tokens *rest,
                 Failure *failure);
 Binding check_marker(void);
+/* The count of TERM_VAR walks that found no binder by slot (D3-s6 part C). */
+Nat slot_mismatches(void);
 Nat checking_body(const Bindings *environment);
 const LTypes *param_types(const Params *params);
 Nat is_type_param(Param item);
