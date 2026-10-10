@@ -1719,10 +1719,10 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
    - the fuel or the budget is 0 at the entry of a node;
    - the expected type is an arrow and the argument is not a FUN or a
      PARTIAL (Q-S4-4);
-   - the callee is dependent;
-   - FOLD_VALUE or UNFOLD_VALUE has low fuel (D3-s3 part B2).
-   Type arguments and a PARTIAL of a callee with type params do not give 0
-   (D3-s5 part B). */
+   - FOLD_VALUE or UNFOLD_VALUE has low fuel (D3-s3 part B2);
+   - the token path fails at the node (part E makes these the failures).
+   Type arguments, a PARTIAL of a callee with type params (D3-s5 part B)
+   and dependent signatures (part C) do not give 0. */
 static const Tokens no_tokens = {NULL, 0};
 
 static int eval_worked(const Value *found, Nat budget, const Value **value, Nat *left) {
@@ -1763,11 +1763,12 @@ static int eval_arguments(Fuel fuel, Nat budget, const LTypes *types, const Bind
   }
 }
 
-/* dependent_arguments on the argument terms. The callee is not dependent,
-   thus instantiate_result reads no argument token. */
+/* dependent_arguments on the argument terms. start is the argument span
+   after the type arguments. instantiate_result reads the argument tokens
+   on it with skip_atom, as on the token path (D3-s5 part C). */
 static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const Bindings *environment,
-                          const Params *params, const Params *remaining, const Values *seen, const Terms *args,
-                          const Values **values, Nat *left) {
+                          const Params *params, const Params *remaining, const Values *seen, Tokens start,
+                          const Terms *args, const Values **values, Nat *left) {
   for (;; remaining = remaining->tail) {
     if (fuel == 0) return 0;
     fuel = fuel - 1;
@@ -1783,7 +1784,7 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
     const Values *earlier = reverse_values_onto(NULL, seen);
     const LType *instantiated = NULL;
     int resolved =
-        instantiate_result(fuel, environment, params, earlier, no_tokens, subst_type(chosen, head.type), &instantiated);
+        instantiate_result(fuel, environment, params, earlier, start, subst_type(chosen, head.type), &instantiated);
     const LType *expected;
     if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected)) return 0;
     const Value *value;
@@ -1797,7 +1798,6 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
 static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left) {
   const Binding *item;
   if (!lookup(term->name, environment, &item)) return 0;
-  if (dependent_result(item->type) == 1 || dependent_params(item->params) == 1) return 0;
   switch (item->kind) {
   case BIND_VALUE:
   case BIND_TYPE:
@@ -1812,11 +1812,11 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
       return 0;
     const Values *values;
     Nat spent;
-    if (!eval_dependent(fuel, budget, chosen, environment, item->params, item->params, NULL, term->args, &values,
-                        &spent))
+    if (!eval_dependent(fuel, budget, chosen, environment, item->params, item->params, NULL, after_types, term->args,
+                        &values, &spent))
       return 0;
     const LType *instantiated = NULL;
-    int resolved = instantiate_result(fuel, environment, item->params, values, no_tokens,
+    int resolved = instantiate_result(fuel, environment, item->params, values, after_types,
                                       subst_type(chosen, item->type), &instantiated);
     const LType *applied;
     if (!close_result(fuel, environment, item->params, values, resolved, instantiated, &applied)) return 0;
@@ -1824,7 +1824,7 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
     if (item->term == NULL) return 0;
     const Params *closed =
         close_params(fuel, environment, item->params, values,
-                     instantiate_params(fuel, environment, item->params, values, no_tokens, item->params));
+                     instantiate_params(fuel, environment, item->params, values, after_types, item->params));
     const Bindings *scope = bind_arguments(environment, value_params(chosen, closed), values,
                                            reverse_bindings_onto(definition_scope(item->name, environment), chosen));
     const Value *value;
@@ -1833,6 +1833,9 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
     return eval_typed((Typed){applied, value}, used, typed, left);
   }
   case BIND_CLOSURE: {
+    /* The token path gives eTerm for a dependent closure. The evaluator gives
+       0, and part E makes it the failure (D3-s5 part C, step C3). */
+    if (dependent_result(item->type) == 1 || dependent_params(item->params) == 1) return 0;
     const Values *values;
     Nat spent;
     if (!eval_arguments(fuel, budget, param_types(item->params), environment, term->args, &values, &spent)) return 0;
@@ -1865,7 +1868,8 @@ static const Term *third_arg(const Term *term) {
 }
 
 /* unary_argument on a name term. A function or a closure gives its body term
-   (D3-s4). A closure with dependent params keeps the body tokens. */
+   (D3-s4). Dependent params do not change this, as on the token path
+   (D3-s5 part C). */
 static int eval_unary_argument(const Bindings *environment, const Term *term, Unary *op) {
   const Binding *item;
   if (term == NULL || !lookup(term->name, environment, &item)) return 0;
@@ -1875,10 +1879,8 @@ static int eval_unary_argument(const Bindings *environment, const Term *term, Un
   case BIND_TYPE:
   case BIND_ARROW: return 0;
   case BIND_FUN:
-    op->term = item->term;
-    return dependent_params(item->params) == 0;
   case BIND_CLOSURE:
-    op->term = dependent_params(item->params) == 0 ? item->term : NULL;
+    op->term = item->term;
     return 1;
   }
   return 0;
@@ -1949,7 +1951,10 @@ static int eval_inline_unary(Fuel fuel, Nat budget, const LType *wanted, const B
   return 1;
 }
 
-/* 1 when partial_unary makes a bound_unary op from the binding. */
+/* 1 when partial_unary makes a bound_unary op from the binding. A function
+   with dependent params gives 0: there the token path gives eUnary
+   (partial_unary), eStep (partial_stepper) or eTerm (partial_argument).
+   Part E makes these the failures (D3-s5 part C, step C4). */
 static Nat partial_callee(const Binding *item) {
   switch (item->kind) {
   case BIND_VALUE:
@@ -2107,9 +2112,9 @@ static const Term *nth_term(const Terms *terms, Nat index) {
   return nth_term(terms->tail, index - 1);
 }
 
-/* stepper_argument on a VAR or NAME head. A function gives its body term (0
-   for dependent params); a closure gives its body term (the body tokens for
-   dependent params). */
+/* stepper_argument on a VAR or NAME head. A function or a closure gives its
+   body term. Dependent params do not change this, as on the token path
+   (D3-s5 part C). */
 static int eval_stepper_argument(const Bindings *environment, const Term *term, Stepper *op) {
   const Binding *item;
   if (term == NULL || !lookup(term->name, environment, &item)) return 0;
@@ -2118,13 +2123,12 @@ static int eval_stepper_argument(const Bindings *environment, const Term *term, 
   case BIND_TYPE:
   case BIND_ARROW: return 0;
   case BIND_FUN:
-    if (has_type_param(item->params) == 1 || dependent_params(item->params) == 1) return 0;
+    if (has_type_param(item->params) == 1) return 0;
     *op = (Stepper){item->params, item->type, term_tokens(item->term), definition_scope(item->name, environment),
                     item->term};
     return 1;
   case BIND_CLOSURE:
-    *op = (Stepper){item->params, item->type, term_tokens(item->term), item->scope,
-                    dependent_params(item->params) == 0 ? item->term : NULL};
+    *op = (Stepper){item->params, item->type, term_tokens(item->term), item->scope, item->term};
     return 1;
   }
   return 0;
@@ -2566,6 +2570,8 @@ static int eval_partial_argument(Fuel fuel, Nat budget, const LType *expected, c
   const Binding *item;
   if (fuel <= 1 || !lookup(term->name, environment, &item) || partial_callee(item) == 0) return 0;
   const Params *params = item->params;
+  /* A dependent callee: the token path gives eTerm. The evaluator gives 0,
+     and part E makes it the failure (D3-s5 part C). */
   if (same_type(expected, arrow_type(params, item->type)) == 1 || dependent_result(item->type) == 1 ||
       dependent_params(params) == 1)
     return 0;

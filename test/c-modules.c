@@ -673,6 +673,8 @@ static void test_term_evaluator(void) {
       "map (fun (y : Nat) => pickK k y) ys\n"
       "def sameNat : (n : Nat) -> (p : Eq Nat n n) -> Nat := fun (n : Nat) (p : Eq Nat n n) => n\n"
       "def viaSame : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => sameNat a refl\n"
+      "def reflN : (n : Nat) -> Eq Nat n n := fun (n : Nat) => refl\n"
+      "def viaRefl : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => sameNat b (reflN b)\n"
       "def id : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => x\n"
       "def viaA : (A : Type 0) -> (x : A) -> A := fun (A : Type 0) (x : A) => id A x\n"
       "def viaNat : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => viaA Nat b\n"
@@ -923,11 +925,19 @@ static void test_term_evaluator(void) {
   assert(failure.position == (Nat)(strstr(source, "=> pickK k y) ys") + 3 - source) &&
          same_text(failure.message, eBudget));
 
-  /* Fallback: a dependent callee (part C). The token path gives the value.
-     A PARTIAL of a callee with type params is now a keyword row (mapT,
-     foldT, foldValueT). */
-  BothPaths dependent = body_at(environment, "viaSame", "4 7", 1000, 1000);
-  assert(dependent.eval == 0 && dependent.parse == 1);
+  /* Dependent callees (D3-s5 part C): eval_apply gives instantiate_result
+     the argument tokens after the type arguments, as the token path does,
+     thus the two paths give the same answer at each point of the grid.
+     viaSame has a callee with a dependent param; viaRefl also has a callee
+     with a dependent result (an Eq proof) as an argument. */
+  const char *dependent_rows[] = {"viaSame", "viaRefl"};
+  const char *dependent_values[] = {"4", "7"};
+  for (Nat i = 0; i < sizeof dependent_rows / sizeof dependent_rows[0]; i++) {
+    GridCount count = body_grid(environment, dependent_rows[i], "4 7");
+    assert(count.worked > 0 && count.differ == 0);
+    BothPaths full = body_at(environment, dependent_rows[i], "4 7", 1000, 1000);
+    assert(full.eval == 1 && same_text(full.value, text(dependent_values[i])));
+  }
 
   /* Budget 1 on a fold over 3 items (part B2): the first step spends it.
      eval_term gives 0, and the token path gives eBudget at the first token
