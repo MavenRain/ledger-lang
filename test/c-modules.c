@@ -761,7 +761,8 @@ static void test_term_evaluator(void) {
       "fun (k : Nat) (n : Nat) => twice (fun (y : Nat) => pickK k y) n\n"
       "def twiceP : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice (pickK k) n\n"
       "def twiceT : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice (constA Nat k) n\n"
-      "def twiceN : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice size n\n";
+      "def twiceN : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice size n\n"
+      "def twiceV : (g : One) -> (n : Nat) -> Nat := fun (g : One) (n : Nat) => twice g n\n";
   const Bindings *environment = NULL;
   Failure failure;
   assert(check_definitions(text(source), &environment, &failure) == 1);
@@ -1011,10 +1012,22 @@ static void test_term_evaluator(void) {
   assert(arrow_value->kind == VALUE_ITEMS && arrow_value->items->head->kind == VALUE_TEXT);
   assert(same_text(arrow_value->items->head->text, text("pickK")));
 
-  /* Fallback: for a NAME argument (Q-S4-4, part D), eval_term gives 0 and
-     the token path gives the value. */
-  BothPaths name_arrow = body_at(environment, "twiceN", "4 7", 1000, 1000);
-  assert(name_arrow.eval == 0 && name_arrow.parse == 1);
+  /* NAME and VAR arguments (D3-s5 part D, Q-S5-4): eval_name_argument
+     mirrors the name branch of parse_term at an arrow expected type, thus
+     the two paths give the same answer at each point of the grid. twiceN
+     has a NAME (the function size). twiceV has a VAR (the closure param g,
+     bound to size). The D3-s4 fallback assert "a NAME argument gives 0" is
+     now a row with eval 1. */
+  const struct {
+    const char *name;
+    const char *args;
+  } name_rows[] = {{"twiceN", "4 7"}, {"twiceV", "size 7"}};
+  for (Nat i = 0; i < sizeof name_rows / sizeof name_rows[0]; i++) {
+    GridCount count = body_grid(environment, name_rows[i].name, name_rows[i].args);
+    assert(count.worked > 0 && count.differ == 0);
+    BothPaths name_arrow = body_at(environment, name_rows[i].name, name_rows[i].args, 1000, 1000);
+    assert(name_arrow.eval == 1 && same_text(name_arrow.value, text("7")));
+  }
 }
 
 int main(void) {

@@ -1717,8 +1717,8 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
    the same fuel steps and the same work charges in the same order. It
    reports no failure. It gives 0 and the caller replays the tokens when:
    - the fuel or the budget is 0 at the entry of a node;
-   - the expected type is an arrow and the argument is not a FUN or a
-     PARTIAL (Q-S4-4);
+   - the expected type is an arrow and the argument is not a FUN, a
+     PARTIAL, a NAME or a VAR (Q-S4-4; NAME and VAR from D3-s5 part D);
    - FOLD_VALUE or UNFOLD_VALUE has low fuel (D3-s3 part B2);
    - the token path fails at the node (part E makes these the failures).
    Type arguments, a PARTIAL of a callee with type params (D3-s5 part B)
@@ -2507,18 +2507,18 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   return 0;
 }
 
-/* 1 for the tags that eval_term takes at an arrow expected type: a FUN or a
-   PARTIAL argument and the GROUP around it (the atom rule). NAME and VAR
-   give 0 (Q-S4-4). */
+/* 1 for the tags that eval_term takes at an arrow expected type: a FUN, a
+   PARTIAL, a NAME or a VAR argument and the GROUP around it (the atom
+   rule). NAME and VAR give 1 from D3-s5 part D (Q-S5-4). */
 static Nat arrow_tag(const Term *term) {
   switch (term->tag) {
   case TERM_GROUP:
   case TERM_FUN:
-  case TERM_PARTIAL: return 1;
+  case TERM_PARTIAL:
+  case TERM_VAR:
+  case TERM_NAME: return 1;
   case TERM_NUMBER:
   case TERM_STRING:
-  case TERM_VAR:
-  case TERM_NAME:
   case TERM_APPLY:
   case TERM_CONSTRUCT:
   case TERM_REFL:
@@ -2596,6 +2596,31 @@ static int eval_partial_argument(Fuel fuel, Nat budget, const LType *expected, c
                      spent, value, left);
 }
 
+/* The name branch of parse_term at an arrow expected type (D3-s5 part D):
+   lookup, then the Binding kind. A BIND_FUN or a BIND_CLOSURE goes to
+   partial_argument at fuel - 1. Its first test gives the name as a text
+   Value when the type is the same. The token path builds a NAME or a VAR
+   node only for that test. A BIND_VALUE gives its Value, as in parse_term.
+   Each other answer gives 0. */
+static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
+                              const Term *term, const Value **value, Nat *left) {
+  const Binding *item;
+  if (!lookup(term->name, environment, &item)) return 0;
+  switch (item->kind) {
+  case BIND_VALUE:
+    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
+    return eval_worked(item->value, budget, value, left);
+  case BIND_TYPE:
+  case BIND_ARROW: return 0;
+  case BIND_FUN:
+  case BIND_CLOSURE:
+    /* partial_argument: eFuel at fuel 0 (part E makes it the failure). */
+    if (fuel == 0 || same_type(expected, arrow_type(item->params, item->type)) != 1) return 0;
+    return eval_worked(text_value(term->name), budget, value, left);
+  }
+  return 0;
+}
+
 int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
               const Value **value, Nat *left) {
   if (term == NULL || fuel == 0 || budget == 0 || (is_arrow_type(expected) == 1 && arrow_tag(term) == 0)) return 0;
@@ -2610,6 +2635,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_GROUP: return eval_term(more, budget, expected, environment, first_arg(term), value, left);
   case TERM_VAR:
   case TERM_NAME: {
+    if (is_arrow_type(expected) == 1) return eval_name_argument(more, budget, expected, environment, term, value, left);
     const Binding *item;
     if (!lookup(term->name, environment, &item) || item->kind != BIND_VALUE) return 0;
     if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
