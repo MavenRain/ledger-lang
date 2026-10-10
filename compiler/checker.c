@@ -1962,7 +1962,8 @@ static int eval_partial_unary(Fuel fuel, Nat budget, const LType *wanted, const 
 /* unary_term on the head term of a keyword form. */
 static int eval_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, const Term *term,
                       Unary *op, Nat *left, Failure *failure) {
-  if (term == NULL || fuel == 0) return 0;
+  if (term == NULL) return 0;
+  if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 1;
   switch (term->tag) {
   case TERM_VAR:
@@ -2073,7 +2074,8 @@ static int eval_bound_unary(Fuel fuel, Nat budget, const Bindings *environment, 
 /* partial_unary on the inner term of a GROUP head. */
 static int eval_partial_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment,
                               const Term *term, Unary *op, Nat *left, Failure *failure) {
-  if (term == NULL || fuel == 0) return 0;
+  if (term == NULL) return 0;
+  if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 1;
   switch (term->tag) {
   case TERM_GROUP: return eval_unary(more, budget, wanted, environment, term, op, left, failure);
@@ -2211,7 +2213,8 @@ static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *ex
 /* stepper_term on the function term of fold or unfold. */
 static int eval_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
                         const Term *term, Stepper *op, Nat *left, Failure *failure) {
-  if (term == NULL || fuel == 0) return 0;
+  if (term == NULL) return 0;
+  if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 1;
   switch (term->tag) {
   case TERM_VAR:
@@ -2339,7 +2342,8 @@ static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment
 /* partial_stepper on the inner term of a GROUP head. */
 static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, const Bindings *environment,
                                 const Term *term, Stepper *op, Nat *left, Failure *failure) {
-  if (term == NULL || fuel == 0) return 0;
+  if (term == NULL) return 0;
+  if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 1;
   switch (term->tag) {
   case TERM_GROUP: return eval_stepper(more, budget, mode, expected, environment, term, op, left, failure);
@@ -2375,7 +2379,7 @@ static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *ex
    At lower fuel it gives 0 again, thus FOLD has no guard (finding c). */
 static int eval_fold(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
                      const Value **value, Nat *left, Failure *failure) {
-  if (fuel == 0) return 0;
+  if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 1;
   Stepper op;
   Nat spent;
@@ -2402,7 +2406,8 @@ static int eval_fold(Fuel fuel, Nat budget, const LType *expected, const Binding
 /* algebra_term on one of f2 to f5 of a FOLD_VALUE term. */
 static int eval_algebra_term(Fuel fuel, Nat budget, Nat index, const LType *result, const Bindings *environment,
                              const Term *term, Stepper *op, Nat *left, Failure *failure) {
-  if (fuel == 0) return 0;
+  if (term == NULL) return 0;
+  if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Stepper found;
   Nat spent;
   if (!eval_stepper(fuel - 1, budget, 0, result, environment, term, &found, &spent, failure)) return 0;
@@ -2442,12 +2447,10 @@ static int eval_fold_value(Fuel fuel, Nat budget, const LType *expected, const B
   if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 1;
   const Term *function = first_arg(term);
-  /* stepper_term at fuel 0: eFuel at the first token of f1. */
-  if (more == 0) return function != NULL ? fail_at(failure, function->position, eFuel) : 0;
-  Fuel inner = more - 1;
   Stepper on_nat;
   Nat spent;
   if (!eval_stepper(more, budget, 0, expected, environment, function, &on_nat, &spent, failure)) return 0;
+  Fuel inner = more - 1;
   Stepper trial;
   Nat trial_left;
   /* A trial: a failed trial writes no failure (D3-s5 part E). */
@@ -2522,8 +2525,6 @@ static int eval_unfold_value(Fuel fuel, Nat budget, const LType *expected, const
   if (fuel <= 1) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 2;
   const Term *function = first_arg(term);
-  /* stepper_term at fuel 0: eFuel at the first token of g. */
-  if (more == 0) return function != NULL ? fail_at(failure, function->position, eFuel) : 0;
   Stepper op;
   Nat spent;
   if (!eval_stepper(more, budget, 2, &value_type, environment, function, &op, &spent, failure)) return 0;

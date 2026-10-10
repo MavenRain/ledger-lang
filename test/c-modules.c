@@ -872,6 +872,9 @@ static void test_term_evaluator(void) {
       "def foldValueT : (k : Nat) -> (v : Value) -> Nat := fun (k : Nat) (v : Value) => "
       "fold (constA Nat k) (fun (b : Flag) => 1) (fun (s : Text) => 2) (fun (xs : List Nat) => 3) "
       "(fun (fs : List (Prod Text Nat)) => 4) 0 v\n"
+      "def foldValueN : (k : Nat) -> (v : Value) -> Nat := fun (k : Nat) (v : Value) => "
+      "fold size (fun (b : Flag) => 1) (fun (s : Text) => 2) (fun (xs : List Nat) => 3) "
+      "(fun (fs : List (Prod Text Nat)) => 4) 0 v\n"
       "def grow : (s : Text) -> Option (Sum Nat (Sum Flag (Sum Text (Sum (List Text) (List (Prod Text Text)))))) := "
       "fun (s : Text) => some (inr (inr (inr (inr (cons (pair \"left\" s) nil)))))\n"
       "def unfoldValue : (k : Nat) -> (s : Text) -> Value := fun (k : Nat) (s : Text) => unfold grow k s\n"
@@ -1013,32 +1016,76 @@ static void test_term_evaluator(void) {
   }
 
   /* D3-s6 part B: the grid counts of the FOLD_VALUE and UNFOLD_VALUE rows,
-     and the rows at fuel 0 to 4 with budget 1000. Each FOLD_VALUE row has 75
-     unknown points: fuel 3 and fuel 9 to 12, at each budget above 0. At fuel
-     3, eval_stepper on f1 (a GROUP) calls eval_partial_stepper at fuel 0,
-     which gives 0 with no code. At fuel 9 to 12, eval_inline_stepper on f2
-     does not keep the failure of inline_binders. At these points the token
-     path gives eFuel. The two sites are shared stepper sites (delta (9) of
-     D3-s5 part E), thus part B keeps them as known rows. */
+     and the rows at fuel 0 to 4 with budget 1000. Each FOLD_VALUE row has 60
+     unknown points: fuel 9 to 12, at each budget above 0. At fuel 9 to 12,
+     eval_inline_stepper on f2 does not keep the failure of inline_binders. At
+     these points the token path gives eFuel. This site is a shared stepper
+     site (delta (9) of D3-s5 part E), thus part B keeps it as a known row.
+     D3-s7 part A: at fuel 3, eval_stepper on f1 (a GROUP) calls
+     eval_partial_stepper at fuel 0, which gives eFuel at the PARTIAL, the
+     same failure as the token path. Thus the 15 points of fuel 3 at budget 1
+     to 15 are failed answers, and no row gives unknown at fuel 0 to 4. */
   const struct {
     const char *name;
     const char *args;
     GridCount count;
     int fold;
   } valued_rows[] = {
-      {"foldValue", "4 (valueNat 9)", {714, 235, 75, 0}, 1},
-      {"foldValue", "4 (valueText \"a\")", {714, 235, 75, 0}, 1},
-      {"foldValueT", "4 (valueNat 9)", {714, 235, 75, 0}, 1},
+      {"foldValue", "4 (valueNat 9)", {714, 250, 60, 0}, 1},
+      {"foldValue", "4 (valueText \"a\")", {714, 250, 60, 0}, 1},
+      {"foldValueT", "4 (valueNat 9)", {714, 250, 60, 0}, 1},
       {"unfoldValue", "2 \"s\"", {468, 556, 0, 0}, 0},
   };
   for (Nat i = 0; i < sizeof valued_rows / sizeof valued_rows[0]; i++) {
     assert(same_grid(body_grid(environment, valued_rows[i].name, valued_rows[i].args), valued_rows[i].count));
     for (Fuel fuel = 0; fuel < 5; fuel++) {
       BothPaths low = body_at(environment, valued_rows[i].name, valued_rows[i].args, fuel, 1000);
-      assert(low.eval == 0 && low.parse == 0 &&
-             (low.failure.message.size == 0) == (valued_rows[i].fold == 1 && fuel == 3));
+      assert(low.eval == 0 && low.parse == 0 && low.failure.message.size != 0);
+    }
+    /* D3-s7 part A: at fuel 3, a FOLD_VALUE row gives no unknown at each
+       budget below 16. */
+    for (Nat budget = 0; budget < 16; budget++) {
+      BothPaths at_three = body_at(environment, valued_rows[i].name, valued_rows[i].args, 3, budget);
+      assert(valued_rows[i].fold == 0 || at_three.eval != 0 || at_three.failure.message.size != 0);
     }
   }
+
+  /* D3-s7 part A: the fuel 0 test of the six helper entries. eval_term at
+     fuel F calls the node helper at fuel F - 1. Each row puts fuel 0 on one
+     entry. In foldP, F 1 gives eval_fold at fuel 0, F 2 gives eval_stepper on
+     the GROUP (pushK k) and F 3 gives eval_partial_stepper on the PARTIAL. In
+     mapP, eval_structure keeps its own fuel 0 unknown, F 2 gives eval_unary on
+     the GROUP (pickK k) and F 3 gives eval_partial_unary on the PARTIAL. In
+     foldValueN, f1 is a NAME, thus at F 3 eval_stepper on f1 works at fuel 1
+     and the trial of f2 calls eval_algebra_term at fuel 0. The trial keeps
+     its failure local, and fold_tail gives the failed answer. Each row gives
+     a failed answer, and both_paths compares it with the token path. */
+  const struct {
+    const char *name;
+    const char *args;
+    Fuel fuel;
+  } entry_rows[] = {
+      {"foldP", "4 (cons 7 (cons 8 nil))", 1},
+      {"foldP", "4 (cons 7 (cons 8 nil))", 2},
+      {"foldP", "4 (cons 7 (cons 8 nil))", 3},
+      {"mapP", "4 (cons 7 (cons 8 nil))", 2},
+      {"mapP", "4 (cons 7 (cons 8 nil))", 3},
+      {"foldValueN", "4 (valueNat 9)", 3},
+  };
+  for (Nat i = 0; i < sizeof entry_rows / sizeof entry_rows[0]; i++) {
+    BothPaths entry = body_at(environment, entry_rows[i].name, entry_rows[i].args, entry_rows[i].fuel, 1000);
+    assert(entry.eval == 0 && entry.parse == 0 && entry.failure.message.size != 0);
+  }
+
+  /* D3-s7 part A: a TERM_FOLD node with a NULL stepper. At fuel 2,
+     eval_fold calls eval_stepper at fuel 0 on the NULL term. The NULL guard
+     comes before the fuel 0 test, thus the answer is 0 with no code. */
+  const Binding *fold_item = fun_named(environment, "foldP");
+  Binding no_stepper = *fold_item;
+  no_stepper.term = term_form(TERM_FOLD, 0, 1, one(NULL));
+  BothPaths no_stepper_paths =
+      both_paths(call_scope(environment, fold_item, "4 (cons 7 (cons 8 nil))"), &no_stepper, 2, 1000);
+  assert(no_stepper_paths.eval == 0 && no_stepper_paths.failure.message.size == 0);
 
   /* D3-s4 part B: closures by term. A closure param applied in the body
      (twice), a VAR head bound to a closure (mapV, foldV) and a PARTIAL head
@@ -1150,13 +1197,16 @@ static void test_term_evaluator(void) {
      on the body tokens and gives eFuel at first_position of the empty rest
      (0). The fuel step after the last argument gives unknown. At fuel 3,
      eval_term gives a failed answer with the Failure of the token path
-     (eFuel at 0), not eFuel at Term.end. At fuel 2 it gives unknown. */
+     (eFuel at 0), not eFuel at Term.end. D3-s7 part A: at fuel 2,
+     eval_unary on keep gets fuel 0 and gives eFuel at keep, the same failure
+     as the token path. */
   const Binding *filtered = fun_named(environment, "filterON");
   const Bindings *some7 = call_scope(environment, filtered, "4 (some 7)");
   BothPaths at_end = both_paths(some7, filtered, 3, 2);
   assert(at_end.eval == 0 && at_end.failure.position == 0 && same_text(at_end.failure.message, eFuel));
   BothPaths before_end = both_paths(some7, filtered, 2, 2);
-  assert(before_end.eval == 0 && before_end.parse == 0 && before_end.failure.message.size == 0);
+  assert(before_end.eval == 0 && before_end.parse == 0 && before_end.failure.position != 0 &&
+         same_text(before_end.failure.message, eFuel));
   assert(parse_term(3, 2, 0, filtered->type, some7, term_tokens(filtered->term), &starved_value, &starved_rest,
                     &starved_left, NULL, &failure) == 0);
   assert(failure.position == 0 && same_text(failure.message, eFuel));
