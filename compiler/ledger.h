@@ -382,7 +382,7 @@ int parse_type(Fuel fuel, Nat atom, const Bindings *environment, Tokens tokens, 
 
 /* checker.c (S4: checker.mech lines 1..614). A checked term keeps its type
    and its value. A unary function argument keeps the parameter name and
-   type, the result type, the body tokens and the scope of the definition.
+   type, the result type, the scope of the definition and the body term.
    A Parsed answer follows parser.c; check_synthesized takes the synthesized
    term (the caller passes an error on). sides_of, unary_from and unary_of
    return 1 and write the answer, or return 0 for none. */
@@ -395,10 +395,11 @@ typedef struct {
   Text name;
   const LType *type;
   const LType *result;
-  Tokens body;
   const Bindings *scope;
-  /* The checked body term, or NULL. Only eval_term makes an op with a term
-     (D3-s3 part B); the token path keeps NULL. */
+  /* The body term (D3-s5 part F). The token path gives a TERM_BODY with no
+     callee on the body tokens, and apply_body runs parse_term on its span.
+     The evaluator gives the term of the binding, or for a FUN op the checked
+     body (first_arg of the FUN term), which is not always a TERM_BODY. */
   const struct Term *term;
 } Unary;
 
@@ -462,9 +463,8 @@ const Params *front_params(const Params *params);
 const Params *bound_params(const Params *params, const Params *expected);
 const LType *unary_param(Unary op);
 const LType *unary_result(Unary op);
-Tokens unary_body(Unary op);
 const Bindings *unary_environment(Unary op, const Value *value);
-int unary_from(const Bindings *scope, const Params *params, const LType *result, Tokens body, Unary *op);
+int unary_from(const Bindings *scope, const Params *params, const LType *result, const struct Term *term, Unary *op);
 int unary_of(const Bindings *scope, const Binding *item, Unary *op);
 int unary_argument(const Bindings *environment, Tokens tokens, Unary *op, Tokens *rest, const struct Term **term,
                    Failure *failure);
@@ -472,7 +472,7 @@ int unary_argument(const Bindings *environment, Tokens tokens, Unary *op, Tokens
 /* checker.c (S5a1: checker.mech lines 615..1012). A Shape keeps the element
    type of Option, List, Sum E and the sequences, and the error type of Sum E.
    A Stepper is the function argument of fold and unfold: the parameters, the
-   result type, the body tokens and the scope. A ValueAlgebra keeps the five
+   result type, the scope and the body term. A ValueAlgebra keeps the five
    steppers of a fold over Value in constructor order. payload_of, unit_items,
    elements_of and text_of_elements return 1 and write the answer, or 0 for
    none; fields_of and rebuild return 0 with a Failure. */
@@ -487,9 +487,8 @@ typedef struct {
 typedef struct {
   const Params *params;
   const LType *result;
-  Tokens body;
   const Bindings *scope;
-  /* The checked body term, or NULL, as in Unary. */
+  /* The body term, as in Unary. */
   const struct Term *term;
 } Stepper;
 
@@ -520,7 +519,6 @@ const LType *structure_source(Nat form, const LType *ty, Unary op);
 const LType *structure_result(Nat form, const LType *ty);
 const Params *stepper_params(Stepper op);
 const LType *stepper_result(Stepper op);
-Tokens stepper_body(Stepper op);
 const Bindings *stepper_environment(Stepper op, const Values *values);
 int stepper_argument(const Bindings *environment, Tokens tokens, Stepper *op, Tokens *rest, const struct Term **term,
                      Failure *failure);
