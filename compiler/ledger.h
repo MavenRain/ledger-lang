@@ -20,7 +20,9 @@ typedef struct {
 /* Fuel is the number of steps that remain to a bounded recursion. */
 typedef uint64_t Fuel;
 
-/* A failure keeps a source byte offset and a message text. */
+/* A failure keeps a source byte offset and a message text. An empty message
+   (size 0) is "no failure": each caller sets {0, {NULL, 0}} before the call.
+   An eval function writes a failure only on a failed answer (D3-s5 part E). */
 typedef struct {
   Nat position;
   Text message;
@@ -816,8 +818,8 @@ Tokens taken_tokens(Tokens body, Tokens rest);
    or 0. On 0 the caller runs the token path. eval_synth follows
    synth_term and writes the type and the value. */
 int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
-              const Value **value, Nat *left);
-int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left);
+              const Value **value, Nat *left, Failure *failure);
+int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left, Failure *failure);
 
 #include "literals.h"
 

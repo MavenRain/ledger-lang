@@ -606,48 +606,68 @@ typedef struct {
   int eval;
   int parse;
   Text value;
+  Failure failure;
 } BothPaths;
 
 /* eval_term and parse_term on the body of item at one fuel and budget. When
    eval_term gives 1, parse_term gives 1 with the same value text and the
-   same remaining budget. */
+   same remaining budget. When eval_term gives a failed answer (0 with a
+   code), parse_term gives 0 with the same position and code (D3-s5 part E,
+   the rule E5). failure is the failure of eval_term: a message of size 0 is
+   an unknown answer. */
 static BothPaths both_paths(const Bindings *scope, const Binding *item, Fuel fuel, Nat budget) {
   const Value *eval_value = NULL;
   Nat eval_left = 0;
-  int eval = eval_term(fuel, budget, item->type, scope, item->term, &eval_value, &eval_left);
+  Failure eval_failure = {0, {NULL, 0}};
+  int eval = eval_term(fuel, budget, item->type, scope, item->term, &eval_value, &eval_left, &eval_failure);
   const Value *parse_value = NULL;
   Tokens rest;
   Nat parse_left = 0;
-  Failure failure;
+  Failure failure = {0, {NULL, 0}};
   int parse = parse_term(fuel, budget, 0, item->type, scope, term_tokens(item->term), &parse_value, &rest, &parse_left,
                          NULL, &failure);
   if (eval == 1) {
     assert(parse == 1 && eval_left == parse_left);
     assert(same_text(printed(eval_value), printed(parse_value)));
   }
-  return (BothPaths){eval, parse, eval == 1 ? printed(eval_value) : text("")};
+  if (eval == 0 && eval_failure.message.size != 0)
+    assert(parse == 0 && eval_failure.position == failure.position && same_text(eval_failure.message, failure.message));
+  return (BothPaths){eval, parse, eval == 1 ? printed(eval_value) : text(""), eval_failure};
 }
 
 typedef struct {
   Nat worked;
+  Nat failed;
+  Nat unknown;
   Nat differ;
 } GridCount;
 
 /* both_paths on each fuel below 64 and each budget below 16. worked counts
-   the points where eval_term gives 1; differ counts the points where the
-   two answers differ. */
+   the points where eval_term gives 1; failed counts the failed answers;
+   unknown counts the answers 0 with no code (a replay); differ counts the
+   points where the two answers differ. both_paths compares each failed
+   answer with the token path (the rule E5). The fuel step after the last
+   argument gives unknown, not a failure at Term.end (D3-s5 part E). */
 static GridCount body_grid(const Bindings *environment, const char *name, const char *args) {
   const Binding *item = fun_named(environment, name);
   assert(item != NULL && item->term != NULL);
   const Bindings *scope = call_scope(environment, item, args);
-  GridCount count = {0, 0};
+  GridCount count = {0, 0, 0, 0};
   for (Fuel fuel = 0; fuel < 64; fuel++)
     for (Nat budget = 0; budget < 16; budget++) {
       BothPaths paths = both_paths(scope, item, fuel, budget);
       count.worked += paths.eval == 1;
+      count.failed += paths.eval == 0 && paths.failure.message.size != 0;
+      count.unknown += paths.eval == 0 && paths.failure.message.size == 0;
       count.differ += paths.eval != paths.parse;
     }
   return count;
+}
+
+/* The grid rows with no unknown answer (D3-s5 part E). The other rows give
+   unknown at the sites of delta (9) in TERM-DESIGN D3-s5 part E. */
+static int no_unknown(const char *name) {
+  return strcmp(name, "pickK") == 0 || strcmp(name, "label") == 0 || strcmp(name, "twice") == 0;
 }
 
 /* both_paths on the body of the function name at one fuel and budget. */
@@ -658,10 +678,9 @@ static BothPaths body_at(const Bindings *environment, const char *name, const ch
 }
 
 /* eval_term gives the value, the remaining budget and the answer of
-   parse_term on the body tokens, or 0 (D3-s3 part A). A body with no type
-   arguments gives the same answer on both paths. A keyword form and a
-   dependent callee give 0 from eval_term. A body with type arguments gives 0
-   at the fuel margin. */
+   parse_term on the body tokens (D3-s3 part A), a failed answer with the
+   Failure of parse_term, or unknown: 0 with no code, a replay (D3-s5 part
+   E). The grid rows test this at each fuel and budget. */
 static void test_term_evaluator(void) {
   const char *source =
       "def pickK : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => k\n"
@@ -807,6 +826,7 @@ static void test_term_evaluator(void) {
   for (Nat i = 0; i < sizeof exact / sizeof exact[0]; i++) {
     GridCount count = body_grid(environment, exact[i], "4 7");
     assert(count.worked > 0 && count.differ == 0);
+    assert(no_unknown(exact[i]) == 0 || count.unknown == 0);
   }
   assert(same_text(body_at(environment, "twoList", "4 7", 1000, 1000).value, text("[4,7]")));
   assert(same_text(body_at(environment, "label", "4 7", 1000, 1000).value, text("\"hi\"")));
@@ -900,6 +920,7 @@ static void test_term_evaluator(void) {
   for (Nat i = 0; i < sizeof closures / sizeof closures[0]; i++) {
     GridCount count = body_grid(environment, closures[i].name, closures[i].args);
     assert(count.worked > 0 && count.differ == 0);
+    assert(no_unknown(closures[i].name) == 0 || count.unknown == 0);
     BothPaths full = body_at(environment, closures[i].name, closures[i].args, 1000, 1000);
     assert(full.eval == 1 && same_text(full.value, text(closures[i].value)));
   }
@@ -913,11 +934,14 @@ static void test_term_evaluator(void) {
   assert(fun_scope->tail->head.term->callee == NULL);
 
   /* Budget 1 on a map over 3 items: the first item spends it. eval_term
-     gives 0, and the token path gives eBudget at the first token of the
-     body. */
+     gives a failed answer, eBudget at the first token of the body, the same
+     failure as the token path (D3-s5 part E). */
   const Binding *mapped = fun_named(environment, "mapK");
   const Bindings *three = call_scope(environment, mapped, "4 (cons 1 (cons 2 (cons 3 nil)))");
-  assert(both_paths(three, mapped, 1000, 1).eval == 0);
+  BothPaths starved_map = both_paths(three, mapped, 1000, 1);
+  assert(starved_map.eval == 0 && starved_map.parse == 0);
+  assert(starved_map.failure.position == (Nat)(strstr(source, "=> pickK k y) ys") + 3 - source) &&
+         same_text(starved_map.failure.message, eBudget));
   const Value *starved_value;
   Tokens starved_rest;
   Nat starved_left;
@@ -941,25 +965,46 @@ static void test_term_evaluator(void) {
   }
 
   /* Budget 1 on a fold over 3 items (part B2): the first step spends it.
-     eval_term gives 0, and the token path gives eBudget at the first token
-     of the body of the inline fun. */
+     The token path gives eBudget at the first token of the body of the
+     inline fun. eval_term gives a failed answer with the same Failure (part
+     E). */
   const Binding *folded = fun_named(environment, "foldF");
   const Bindings *three_folded = call_scope(environment, folded, "4 (cons 1 (cons 2 (cons 3 nil)))");
-  assert(both_paths(three_folded, folded, 1000, 1).eval == 0);
+  BothPaths starved_fold = both_paths(three_folded, folded, 1000, 1);
+  assert(starved_fold.eval == 0);
   assert(parse_term(1000, 1, 0, folded->type, three_folded, term_tokens(folded->term), &starved_value,
                     &starved_rest, &starved_left, NULL, &failure) == 0);
   assert(failure.position == (Nat)(strstr(source, "=> cons y a) nil ys") + 3 - source) &&
          same_text(failure.message, eBudget));
+  assert(starved_fold.failure.position == failure.position && same_text(starved_fold.failure.message, eBudget));
 
   /* FOLD_VALUE at fuel 8 (part B2): second_function gives 0, thus the
      token path selects FOLD and fails at the first token of the second
-     function. eval_term gives 0. */
+     function. eval_term gives unknown (0 with no code): the f2 trial uses a
+     local Failure, thus it writes no failure (part E, E3). */
   const Binding *valued = fun_named(environment, "foldValue");
   const Bindings *nine = call_scope(environment, valued, "4 (valueNat 9)");
-  assert(both_paths(nine, valued, 8, 1000).eval == 0);
+  BothPaths valued8 = both_paths(nine, valued, 8, 1000);
+  assert(valued8.eval == 0 && valued8.failure.message.size == 0);
   assert(parse_term(8, 1000, 0, valued->type, nine, term_tokens(valued->term), &starved_value, &starved_rest,
                     &starved_left, NULL, &failure) == 0);
   assert(failure.position == (Nat)(strstr(source, "(fun (b : Flag) => 1)") + 1 - source));
+
+  /* Term.end (part E, ruling (a)): filterON at budget 2. Term.end of the
+     last argument is the next token of the source, but the token path runs
+     on the body tokens and gives eFuel at first_position of the empty rest
+     (0). The fuel step after the last argument gives unknown. At fuel 3,
+     eval_term gives a failed answer with the Failure of the token path
+     (eFuel at 0), not eFuel at Term.end. At fuel 2 it gives unknown. */
+  const Binding *filtered = fun_named(environment, "filterON");
+  const Bindings *some7 = call_scope(environment, filtered, "4 (some 7)");
+  BothPaths at_end = both_paths(some7, filtered, 3, 2);
+  assert(at_end.eval == 0 && at_end.failure.position == 0 && same_text(at_end.failure.message, eFuel));
+  BothPaths before_end = both_paths(some7, filtered, 2, 2);
+  assert(before_end.eval == 0 && before_end.parse == 0 && before_end.failure.message.size == 0);
+  assert(parse_term(3, 2, 0, filtered->type, some7, term_tokens(filtered->term), &starved_value, &starved_rest,
+                    &starved_left, NULL, &failure) == 0);
+  assert(failure.position == 0 && same_text(failure.message, eFuel));
 
   /* Type arguments: eval_apply reads them with type_arguments, as the token
      path does (D3-s5 part B), thus the two paths give the same answer at each
@@ -1002,13 +1047,13 @@ static void test_term_evaluator(void) {
   const Term *fun_node = fun_group->args->head;
   assert(fun_group->tag == TERM_GROUP && fun_node->tag == TERM_FUN);
   assert(eval_term(1000, 1000, one_type, call_scope(environment, fun_item, "4 7"), fun_group, &arrow_value,
-                   &arrow_left) == 1);
+                   &arrow_left, &(Failure){0, {NULL, 0}}) == 1);
   assert(arrow_value->term == fun_node->args->head);
   const Binding *partial_item = fun_named(environment, "twiceP");
   const Term *partial_group = partial_item->term->callee->args->head;
   assert(partial_group->tag == TERM_GROUP && partial_group->args->head->tag == TERM_PARTIAL);
   assert(eval_term(1000, 1000, one_type, call_scope(environment, partial_item, "4 7"), partial_group, &arrow_value,
-                   &arrow_left) == 1);
+                   &arrow_left, &(Failure){0, {NULL, 0}}) == 1);
   assert(arrow_value->kind == VALUE_ITEMS && arrow_value->items->head->kind == VALUE_TEXT);
   assert(same_text(arrow_value->items->head->text, text("pickK")));
 
