@@ -933,8 +933,8 @@ static void test_term_evaluator(void) {
      at fuel 1000 (no replay). Heads: VAR, NAME, GROUP, FUN and PARTIAL, also
      a PARTIAL of a callee with type params (mapT, foldT). A FUN head walks its
      body in check mode with no fuel margin (D3-s5 part B4), thus each head
-     gives the same answer at each point (exact 1). The FOLD_VALUE rows stay
-     exact 0 (D3-s3 part B2, see the fuel 8 test below). */
+     gives the same answer at each point (exact 1). The FOLD_VALUE rows are
+     exact too: a failed f2 trial runs fold_tail (D3-s6 part B). */
   const struct {
     const char *name;
     const char *args;
@@ -974,9 +974,9 @@ static void test_term_evaluator(void) {
       {"unfoldG", "3 7", "3", 1},
       {"unfoldF", "3 7", "3", 1},
       {"unfoldV", "half 7", "3", 1},
-      {"foldValue", "4 (valueNat 9)", "4", 0},
-      {"foldValue", "4 (valueText \"a\")", "2", 0},
-      {"foldValueT", "4 (valueNat 9)", "4", 0},
+      {"foldValue", "4 (valueNat 9)", "4", 1},
+      {"foldValue", "4 (valueText \"a\")", "2", 1},
+      {"foldValueT", "4 (valueNat 9)", "4", 1},
       {"unfoldValue", "2 \"s\"", "{\"left\":{\"left\":null}}", 1},
   };
   for (Nat i = 0; i < sizeof keyword / sizeof keyword[0]; i++) {
@@ -984,6 +984,34 @@ static void test_term_evaluator(void) {
     assert(count.worked > 0 && (keyword[i].exact == 0 || count.differ == 0));
     BothPaths full = body_at(environment, keyword[i].name, keyword[i].args, 1000, 1000);
     assert(full.eval == 1 && same_text(full.value, text(keyword[i].value)));
+  }
+
+  /* D3-s6 part B: the grid counts of the FOLD_VALUE and UNFOLD_VALUE rows,
+     and the rows at fuel 0 to 4 with budget 1000. Each FOLD_VALUE row has 75
+     unknown points: fuel 3 and fuel 9 to 12, at each budget above 0. At fuel
+     3, eval_stepper on f1 (a GROUP) calls eval_partial_stepper at fuel 0,
+     which gives 0 with no code. At fuel 9 to 12, eval_inline_stepper on f2
+     does not keep the failure of inline_binders. At these points the token
+     path gives eFuel. The two sites are shared stepper sites (delta (9) of
+     D3-s5 part E), thus part B keeps them as known rows. */
+  const struct {
+    const char *name;
+    const char *args;
+    GridCount count;
+    int fold;
+  } valued_rows[] = {
+      {"foldValue", "4 (valueNat 9)", {714, 235, 75, 0}, 1},
+      {"foldValue", "4 (valueText \"a\")", {714, 235, 75, 0}, 1},
+      {"foldValueT", "4 (valueNat 9)", {714, 235, 75, 0}, 1},
+      {"unfoldValue", "2 \"s\"", {468, 556, 0, 0}, 0},
+  };
+  for (Nat i = 0; i < sizeof valued_rows / sizeof valued_rows[0]; i++) {
+    assert(same_grid(body_grid(environment, valued_rows[i].name, valued_rows[i].args), valued_rows[i].count));
+    for (Fuel fuel = 0; fuel < 5; fuel++) {
+      BothPaths low = body_at(environment, valued_rows[i].name, valued_rows[i].args, fuel, 1000);
+      assert(low.eval == 0 && low.parse == 0 &&
+             (low.failure.message.size == 0) == (valued_rows[i].fold == 1 && fuel == 3));
+    }
   }
 
   /* D3-s4 part B: closures by term. A closure param applied in the body
@@ -1072,15 +1100,24 @@ static void test_term_evaluator(void) {
 
   /* FOLD_VALUE at fuel 8 (part B2): second_function gives 0, thus the
      token path selects FOLD and fails at the first token of the second
-     function. eval_term gives unknown (0 with no code): the f2 trial uses a
-     local Failure, thus it writes no failure (part E, E3). */
+     function. The f2 trial of eval_term gives 0, thus eval_term runs
+     fold_tail on the FOLD_VALUE span and gives the same failed answer
+     (D3-s6 part B). A FOLD_VALUE node with an empty span gives unknown. */
   const Binding *valued = fun_named(environment, "foldValue");
   const Bindings *nine = call_scope(environment, valued, "4 (valueNat 9)");
   BothPaths valued8 = both_paths(nine, valued, 8, 1000);
-  assert(valued8.eval == 0 && valued8.failure.message.size == 0);
   assert(parse_term(8, 1000, 0, valued->type, nine, term_tokens(valued->term), &starved_value, &starved_rest,
                     &starved_left, NULL, &failure) == 0);
   assert(failure.position == (Nat)(strstr(source, "(fun (b : Flag) => 1)") + 1 - source));
+  assert(valued8.eval == 0 && valued8.failure.position == failure.position &&
+         same_text(valued8.failure.message, failure.message));
+  const Term *spanned = body_term(environment, "foldValue");
+  assert(spanned->tag == TERM_FOLD_VALUE && spanned->tokens.size != 0);
+  Term bare = *spanned;
+  bare.tokens = (Tokens){0};
+  Failure bare_failure = {0, {NULL, 0}};
+  assert(eval_term(8, 1000, valued->type, nine, &bare, &starved_value, &starved_left, &bare_failure) == 0 &&
+         bare_failure.message.size == 0);
 
   /* Term.end (part E, ruling (a)): filterON at budget 2. Term.end of the
      last argument is the next token of the source, but the token path runs

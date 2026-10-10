@@ -2411,21 +2411,29 @@ static int eval_algebra_terms(Fuel fuel, Nat budget, const LType *result, Steppe
 /* fold_term on a FOLD_VALUE term [f1, f2, f3, f4, f5, start, source]: fuel
    is the fuel of fold_term. The token path selects FOLD_VALUE with
    second_function, a trial parse of f2 at fuel - 2. The evaluator runs that
-   trial first and gives 0 when it gives 0 (finding c). Then the steps of
-   fold_value_term at fuel - 1. */
+   trial first. A failed trial runs fold_tail on the span after f1, a local
+   token fallback as the closure body (Q-S4-3), and an empty span gives 0
+   (D3-s6 part B). Then the steps of fold_value_term at fuel - 1. */
 static int eval_fold_value(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
                            const Term *term, const Value **value, Nat *left, Failure *failure) {
-  if (fuel <= 2) return 0;
+  if (fuel == 0) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 1;
+  const Term *function = first_arg(term);
+  /* stepper_term at fuel 0: eFuel at the first token of f1. */
+  if (more == 0) return function != NULL ? fail_at(failure, function->position, eFuel) : 0;
   Fuel inner = more - 1;
   Stepper on_nat;
   Nat spent;
-  if (!eval_stepper(more, budget, 0, expected, environment, first_arg(term), &on_nat, &spent, failure)) return 0;
+  if (!eval_stepper(more, budget, 0, expected, environment, function, &on_nat, &spent, failure)) return 0;
   Stepper trial;
   Nat trial_left;
   /* A trial: a failed trial writes no failure (D3-s5 part E). */
   Failure tried = {0, {NULL, 0}};
-  if (!eval_algebra_term(inner, spent, 2, expected, environment, second_arg(term), &trial, &trial_left, &tried)) return 0;
+  if (!eval_algebra_term(inner, spent, 2, expected, environment, second_arg(term), &trial, &trial_left, &tried)) {
+    Tokens ignored;
+    return term->tokens.size != 0 && fold_tail(more, spent, term->position, function->position, expected, on_nat,
+                                               environment, term->tokens, NULL, value, &ignored, left, NULL, failure);
+  }
   if (same_type(stepper_result(on_nat), expected) != 1 ||
       same_types(param_types(stepper_params(on_nat)), types_item(&nat_type, NULL)) != 1)
     return 0;
@@ -2480,14 +2488,22 @@ static int eval_unfold(Fuel fuel, Nat budget, const LType *expected, const Bindi
 }
 
 /* unfold_term on an UNFOLD_VALUE term [g, n, seed]: fuel is the fuel of
-   unfold_term, which calls unfold_value_term at fuel - 1. */
+   unfold_term, which calls unfold_value_term at fuel - 1. The fuel tests of
+   the two and of stepper_term, step for step (D3-s6 part B). The type test
+   stays: the token path selects UNFOLD_VALUE by the same test. */
 static int eval_unfold_value(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
                              const Term *term, const Value **value, Nat *left, Failure *failure) {
-  if (fuel <= 2 || carrier_code(expected) != 0 || same_type(expected, &value_type) != 1) return 0;
+  if (carrier_code(expected) != 0 || same_type(expected, &value_type) != 1) return 0;
+  /* unfold_term at fuel 0, then unfold_value_term at fuel 0: eFuel at the
+     position of the keyword. */
+  if (fuel <= 1) return fail_at(failure, term->position, eFuel);
   Fuel more = fuel - 2;
+  const Term *function = first_arg(term);
+  /* stepper_term at fuel 0: eFuel at the first token of g. */
+  if (more == 0) return function != NULL ? fail_at(failure, function->position, eFuel) : 0;
   Stepper op;
   Nat spent;
-  if (!eval_stepper(more, budget, 2, &value_type, environment, first_arg(term), &op, &spent, failure)) return 0;
+  if (!eval_stepper(more, budget, 2, &value_type, environment, function, &op, &spent, failure)) return 0;
   if (unfold_value_fits(op) != 1) return 0;
   const Value *limit;
   Nat limit_left;
@@ -3492,14 +3508,26 @@ int fold_term(Fuel fuel, Nat budget, Nat position, Nat atom, const LType *expect
   if (!stepper_term(more, budget, 0, expected, environment, tokens, &op, &after_function, &spent,
                     want_term(term, &function), failure))
     return 0;
+  return fold_tail(more, spent, position, first_position(tokens), expected, op, environment, after_function, function,
+                   value, rest, left, term, failure);
+}
+
+/* fold_term after f1 (D3-s6 part B): second_function selects FOLD_VALUE,
+   else the FOLD route. The FOLD_VALUE node keeps after_function, the span
+   after f1, as Term.tokens. eval_fold_value runs fold_tail on that span,
+   with function and term NULL, when its f2 trial gives 0. */
+int fold_tail(Fuel more, Nat spent, Nat position, Nat function_position, const LType *expected, Stepper op,
+              const Bindings *environment, Tokens after_function, const Term *function, const Value **value,
+              Tokens *rest, Nat *left, const Term **term, Failure *failure) {
   if (second_function(more, spent, expected, environment, after_function) == 1) {
     const Term *algebra = NULL;
-    if (!fold_value_term(more, spent, position, first_position(tokens), expected, op, environment, after_function,
+    if (!fold_value_term(more, spent, position, function_position, expected, op, environment, after_function,
                          value, rest, left, want_term(term, &algebra), failure))
       return 0;
     return with_term(1, term,
                      function != NULL && algebra != NULL
-                         ? term_form(TERM_FOLD_VALUE, position, 0, terms_item(function, algebra->args))
+                         ? term_call(TERM_FOLD_VALUE, position, 0, after_function, 0, (Text){NULL, 0}, NULL, NULL,
+                                     terms_item(function, algebra->args))
                          : NULL);
   }
   const Value *start = NULL;
@@ -3518,7 +3546,7 @@ int fold_term(Fuel fuel, Nat budget, Nat position, Nat atom, const LType *expect
     return 0;
   if (carrier_code(found.type) == 0)
     return fail_at(failure, first_position(after_start), same_type(found.type, &value_type) != 0 ? eCases : eStructure);
-  if (fold_fits(found.type, expected, op) != 1) return fail_at(failure, first_position(tokens), eTerm);
+  if (fold_fits(found.type, expected, op) != 1) return fail_at(failure, function_position, eTerm);
   const Term *made = term != NULL ? form_term(TERM_FOLD, position,
                                               terms_item(function, terms_item(start_term, terms_item(source, NULL))))
                                   : NULL;

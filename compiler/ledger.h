@@ -670,6 +670,9 @@ int algebra_terms(Fuel fuel, Nat budget, const LType *result, Stepper on_nat, co
                   Tokens tokens, ValueAlgebra *ops, Tokens *rest, Nat *left, const struct Terms **terms,
                   Failure *failure);
 Nat second_function(Fuel fuel, Nat budget, const LType *result, const Bindings *environment, Tokens tokens);
+int fold_tail(Fuel more, Nat spent, Nat position, Nat function_position, const LType *expected, Stepper op,
+              const Bindings *environment, Tokens after_function, const struct Term *function, const Value **value,
+              Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int fold_value_term(Fuel fuel, Nat budget, Nat position, Nat function_position, const LType *expected,
                     Stepper on_nat, const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest,
                     Nat *left, const struct Term **term, Failure *failure);
