@@ -2711,16 +2711,20 @@ static int eval_partial_argument(Fuel fuel, Nat budget, const LType *expected, c
                      spent, value, left);
 }
 
+static int var_binding(const Term *term, const Bindings *environment, const Binding **found);
+
 /* The name branch of parse_term at an arrow expected type (D3-s5 part D):
    lookup, then the Binding kind. A BIND_FUN or a BIND_CLOSURE goes to
    partial_argument at fuel - 1. Its first test gives the name as a text
    Value when the type is the same. The token path builds a NAME or a VAR
    node only for that test. A BIND_VALUE gives its Value, as in parse_term.
-   Each other answer gives 0. */
+   Each other answer gives 0. A TERM_VAR finds its item by slot, as in
+   eval_term (var_binding, D3-s7 part C). A TERM_NAME keeps lookup. */
 static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment,
                               const Term *term, const Value **value, Nat *left, Failure *failure) {
   const Binding *item;
-  if (!lookup(term->name, environment, &item)) return 0;
+  int found = term->tag == TERM_VAR ? var_binding(term, environment, &item) : lookup(term->name, environment, &item);
+  if (!found) return 0;
   switch (item->kind) {
   case BIND_VALUE:
     if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;

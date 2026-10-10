@@ -1374,13 +1374,16 @@ static void test_term_evaluator(void) {
      site and at typed_closure). twiceF: an inline fun in a function, its
      body in check mode on bind_params. mapK: the unary binder in check mode
      (eval_inline_unary). twiceFF: a fun in a fun. twiceS: an inline binder
-     with the name of a parameter (a shadow), thus the value is n. */
+     with the name of a parameter (a shadow), thus the value is n. twiceV
+     (D3-s7 part C): a VAR at an arrow type (the param g), thus
+     eval_name_argument finds its item by slot. */
   const struct {
     const char *name;
     const char *args;
     const char *value;
   } slot_rows[] = {{"viaNat", "4 7", "7"},           {"twiceT", "4 7", "4"},  {"twiceF", "4 7", "4"},
-                   {"mapK", "4 (cons 1 nil)", NULL}, {"twiceFF", "4 7", "7"}, {"twiceS", "4 7", "7"}};
+                   {"mapK", "4 (cons 1 nil)", NULL}, {"twiceFF", "4 7", "7"}, {"twiceS", "4 7", "7"},
+                   {"twiceV", "size 7", "7"}};
   for (Nat i = 0; i < sizeof slot_rows / sizeof slot_rows[0]; i++) {
     GridCount count = body_grid(environment, slot_rows[i].name, slot_rows[i].args);
     assert(count.worked > 0 && count.differ == 0);
@@ -1400,6 +1403,25 @@ static void test_term_evaluator(void) {
                    &fallback_left, &(Failure){0, {NULL, 0}}) == 1);
   assert(same_text(printed(fallback_value), text("4")));
   assert(slot_mismatches() == misses + 1);
+
+  /* D3-s7 part C: a TERM_VAR at an arrow type goes to eval_name_argument,
+     and it finds its item by slot. A wrong index gives the answer of lookup
+     by name (the same as the right index), and the count goes up by 1. */
+  const Binding *twice_v = fun_named(environment, "twiceV");
+  const Bindings *twice_v_at = call_scope(environment, twice_v, "size 7");
+  const Binding *g_item;
+  assert(lookup(text("g"), twice_v_at, &g_item) && g_item->kind == BIND_CLOSURE);
+  const LType *g_type = arrow_type(g_item->params, g_item->type);
+  const Value *slot_value;
+  Nat slot_left;
+  Nat arrow_misses = slot_mismatches();
+  assert(eval_term(1000, 1000, g_type, twice_v_at, term_var(0, 1, text("g"), 0), &slot_value, &slot_left,
+                   &(Failure){0, {NULL, 0}}) == 1);
+  assert(slot_mismatches() == arrow_misses);
+  assert(eval_term(1000, 1000, g_type, twice_v_at, term_var(0, 1, text("g"), 5), &fallback_value,
+                   &fallback_left, &(Failure){0, {NULL, 0}}) == 1);
+  assert(same_text(printed(fallback_value), printed(slot_value)));
+  assert(slot_mismatches() == arrow_misses + 1);
 }
 
 int main(void) {
