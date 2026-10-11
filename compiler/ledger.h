@@ -818,6 +818,8 @@ const Term *marker_vars(const Term *term);
 const Term *term_with_markers(const Term *term, const Term *const *table, Nat size);
 Nat term_marker_bound(const Term *term);
 const Term *term_marker_first(const Term *term, Nat index);
+/* term.c: the literal node of a number or text value, or node (D4 part C). */
+const Term *value_node(Nat position, const Value *value, const Term *node);
 const Term *term_body(Tokens tokens, const Term *callee);
 Tokens term_tokens(const Term *term);
 /* checker.c: the body tokens before rest. */
@@ -832,6 +834,8 @@ Tokens taken_tokens(Tokens body, Tokens rest);
 int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
               const Value **value, Nat *left, Failure *failure);
 int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left, Failure *failure);
+/* checker.c: the normal form of a side node in the scope, or 0 (D4 part C). */
+int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term **normal, Failure *failure);
 
 #include "literals.h"
 

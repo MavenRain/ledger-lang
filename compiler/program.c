@@ -351,7 +351,11 @@ static int mark_side(const Bindings *environment, const Params *done, Tokens tok
       if (!found) return 0;
       head.text = marker_name(level);
     } else if (head.kind == TOKEN_IDENTIFIER) {
-      if (lookup(head.text, environment, &item)) return 0;
+      /* D4 part C (Q-D4-7 lift 2): an earlier definition at the head of an
+         application (the token after the open parenthesis) is accepted. */
+      if (lookup(head.text, environment, &item) &&
+          !(at > 0 && tokens.items[at - 1].kind == TOKEN_PUNCTUATION && tokens.items[at - 1].number == '('))
+        return 0;
       if (same_text(head.text, sfun) == 1) return 0;
     }
     items[at] = head;
@@ -382,11 +386,16 @@ static int computed_side(Fuel fuel, const LType *a, const Bindings *environment,
   const Term *node = NULL;
   Tokens after;
   Nat remaining;
-  if (!parse_term(fuel, 1, 1, a, binding_cons(check_marker(), marker_bindings(done, environment)), term, &value,
+  const Bindings *scope = binding_cons(check_marker(), marker_bindings(done, environment));
+  if (!parse_term(fuel, 1, 1, a, scope, term, &value,
                   &after, &remaining, &node, failure))
     return 0;
   if (node == NULL) return fail_at(failure, first_position(tokens), eTerm);
-  *side = term_side(marker_vars(node));
+  const Term *marked = marker_vars(node);
+  /* D4 part C: a side with a marker takes its normal form (design item 5).
+     close_side closes a side with no marker later, as before. */
+  if (term_marker_bound(marked) > 0 && !side_normal(fuel, scope, marked, &marked, failure)) return 0;
+  *side = term_side(marked);
   *rest = skip_atom(0, tokens);
   *left = remaining;
   return 1;

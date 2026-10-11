@@ -339,3 +339,18 @@ const Term *term_marker_first(const Term *term, Nat index) {
   }
   return NULL;
 }
+
+/* value_node gives the literal node of a number or text value at the
+   position, or the node itself for each other value kind (the closed
+   sub-term of a side, D4 part C). */
+const Term *value_node(Nat position, const Value *value, const Term *node) {
+  switch (value->kind) {
+  case VALUE_NAT: return term_number(position, 0, value->number);
+  case VALUE_TEXT: return term_string(position, 0, value->text);
+  case VALUE_NULL:
+  case VALUE_FLAG:
+  case VALUE_ITEMS:
+  case VALUE_ATTRS: return node;
+  }
+  return node;
+}

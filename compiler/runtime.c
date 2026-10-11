@@ -226,7 +226,9 @@ Nat token_position(Token token) { return token.position; }
 
 Nat first_position(Tokens tokens) { return tokens.size == 0 ? 0 : tokens.items[0].position; }
 
-/* Two computed sides compare by same_term on their nodes. */
+/* Two computed sides compare by same_term on their nodes: the normal forms
+   of D4 part C. A VAL_CLOSED side against a VAL_TERM side gives 0, because a
+   normal form with a marker is never closed (design item 6). */
 Nat same_val(Val left, Val right) {
   if (left.kind != right.kind) return 0;
   switch (left.kind) {

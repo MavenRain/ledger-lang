@@ -1990,6 +1990,115 @@ static void test_d4_carrier(void) {
   assert(marker_vars_at(mixed.node) == 1 && kept_side(mixed) == 1);
 }
 
+/* The node inside each TERM_GROUP around node. */
+static const Term *ungrouped(const Term *node) {
+  return node->tag == TERM_GROUP ? ungrouped(node->args->head) : node;
+}
+
+/* A normal form row (D4 part C): the left side of left keeps a node with
+   one marker, side_normal on it gives the same node (the make-time normal
+   form, no copy), and same_type on the two types agrees with same_val on
+   the two left sides (design item 6). */
+static void normal_row(const Bindings *environment, const char *left, const char *right, Nat expected) {
+  Val lhs = lhs_of(environment, left);
+  Val rhs = lhs_of(environment, right);
+  const Term *normal;
+  Failure failure = {0, {NULL, 0}};
+  assert(lhs.kind == VAL_TERM && marker_vars_at(lhs.node) == 1);
+  assert(side_normal(1000, environment, lhs.node, &normal, &failure) == 1 && normal == lhs.node);
+  assert(same_val(lhs, rhs) == expected);
+  assert(same_type(fun_named(environment, left)->type, fun_named(environment, right)->type) == expected);
+}
+
+/* Closed forms keep the expected type supplied by their constructor. */
+static void test_d4_closed_forms(void) {
+  const char *source =
+      "def option : (n : Nat) -> Eq (Prod Nat (Option Nat)) (pair n (pure 1)) (pair n (pure 1)) := fun (n : Nat) => refl\n"
+      "def list : (n : Nat) -> Eq (Prod Nat (List Text)) (pair n (pure \"s\")) (pair n (pure \"s\")) := fun (n : Nat) => refl\n"
+      "def sum : (n : Nat) -> Eq (Prod Nat (Sum Text Nat)) (pair n (pure 1)) (pair n (pure 1)) := fun (n : Nat) => refl\n"
+      "def nested : (n : Nat) -> Eq (Prod Nat (Option (List Nat))) (pair n (pure (pure 1))) (pair n (pure (pure 1))) := fun (n : Nat) => refl\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  normal_row(environment, "option", "option", 1);
+  normal_row(environment, "list", "list", 1);
+  normal_row(environment, "sum", "sum", 1);
+  normal_row(environment, "nested", "nested", 1);
+}
+
+/* Option payloads share Value kinds with scalars, but need Option terms. */
+static void test_d4_option_literals(void) {
+  const char *source =
+      "def number : Option Nat := some 1\n"
+      "def text : Option Text := some \"s\"\n"
+      "def fn : (n : Nat) -> Eq (Prod Nat (Option Nat)) (pair n (number)) (pair n (number)) := fun (n : Nat) => refl\n"
+      "def ft : (n : Nat) -> Eq (Prod Nat (Option Text)) (pair n (text)) (pair n (text)) := fun (n : Nat) => refl\n"
+      "def pn : Eq (Prod Nat (Option Nat)) (pair 3 (some 1)) (pair 3 (some 1)) := fn 3\n"
+      "def pt : Eq (Prod Nat (Option Text)) (pair 3 (some \"s\")) (pair 3 (some \"s\")) := ft 3\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  const char *bad =
+      "def number : Option Nat := some 1\n"
+      "def f : (n : Nat) -> Eq (Prod Nat (Option Nat)) (pair n (number)) (pair n (number)) := fun (n : Nat) => refl\n"
+      "def p : Eq (Prod Nat (Option Nat)) (pair 3 (some 2)) (pair 3 (some 2)) := f 3\n";
+  assert(!check_definitions(text(bad), &environment, &failure));
+  assert(failure.position == (Nat)(strstr(bad, "f 3") - bad) && same_text(failure.message, eTerm));
+}
+
+/* D4 part C: side_normal (design item 5). A constructor, a nested
+   constructor and a neutral application of an earlier definition keep
+   their node (Q-D4-5: no unfold, thus some (inc n) is not some n). A closed
+   name after the rename gives its literal. A fun with a marker is refused
+   at the position of the fun. Called last from main (test_d4_close). */
+static void test_d4_normal(void) {
+  const char *source =
+      "def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def dec : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def c1 : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl\n"
+      "def c2 : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl\n"
+      "def s1 : (n : Nat) -> Eq (Option (Option Nat)) (some (some n)) (some (some n)) := fun (n : Nat) => refl\n"
+      "def s2 : (n : Nat) -> Eq (Option (Option Nat)) (some (some n)) (some (some n)) := fun (n : Nat) => refl\n"
+      "def a1 : (n : Nat) -> Eq (Option Nat) (some (inc n)) (some (inc n)) := fun (n : Nat) => refl\n"
+      "def a2 : (n : Nat) -> Eq (Option Nat) (some (inc n)) (some (inc n)) := fun (n : Nat) => refl\n"
+      "def a3 : (n : Nat) -> Eq (Option Nat) (some (dec n)) (some (dec n)) := fun (n : Nat) => refl\n"
+      "def pf : (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := fun (n : Nat) (m : Nat) => refl\n"
+      "def k1 : (j : Nat) -> (k : Nat) -> Eq (Prod Nat Nat) (pair k 1) (pair k 1) := fun (j : Nat) (k : Nat) => refl\n"
+      "def one : Nat := 1\n"
+      "def outer : (j : Nat) -> (k : Nat) -> Nat := fun (j : Nat) (k : Nat) => k\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* A constructor, a nested constructor and a neutral application. */
+  normal_row(environment, "c1", "c2", 1);
+  normal_row(environment, "s1", "s2", 1);
+  normal_row(environment, "a1", "a2", 1);
+  normal_row(environment, "c1", "a1", 0);
+  normal_row(environment, "a1", "a3", 0);
+  normal_row(environment, "s1", "c1", 0);
+
+  /* A closed name after the rename in the body of outer: pf k one gives
+     the literal 1 (R-C1), and the side is the left side of k1. */
+  Bindings *body = arena_alloc(sizeof *body);
+  *body = (Bindings){.head = body_marker(2),
+                     .tail = bind_params(fun_named(environment, "outer")->params, NULL, environment)};
+  Val closed = renamed_in(environment, body, "pf", "k one");
+  assert(ungrouped(closed.node)->args->tail->head->tag == TERM_NUMBER);
+  val_row(closed, lhs_of(environment, "k1"), 1, 1, 1);
+
+  /* A fun with a marker in a constructor. mark_side refuses fun, thus the
+     node is built by hand. */
+  const Term *some = ungrouped(lhs_of(environment, "c1").node);
+  const Term *marker = some->args->head;
+  assert(marker->tag == TERM_VAR);
+  const Term *fun = term_form(TERM_FUN, 9, 1, one(marker));
+  const Term *normal;
+  Failure refused = {0, {NULL, 0}};
+  assert(side_normal(1000, environment, as_construct(some, one(fun)), &normal, &refused) == 0);
+  assert(refused.position == 9 && same_text(refused.message, eTerm));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -2008,6 +2117,9 @@ int main(void) {
   test_closed_marker_nodes();
   test_d4_close();
   test_d4_carrier();
+  test_d4_closed_forms();
+  test_d4_option_literals();
+  test_d4_normal();
   puts("C module tests passed");
   return 0;
 }

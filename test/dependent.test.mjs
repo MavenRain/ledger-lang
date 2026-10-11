@@ -62,8 +62,8 @@ test('a computed side names value parameters inside an atom', () => {
     reflError, 'refl');
   reject(f + g + ' f 3', typeError, 'f 3');
   refuse('def f : (A : Type 0) -> (x : A) -> Eq (Option A) (some x) (some x) := fun (A : Type 0) (x : A) => refl');
-  refuse('def same : (x : Nat) -> Nat := fun (x : Nat) => x' +
-    ' def f : (n : Nat) -> Eq Nat (same n) (same n) := fun (n : Nat) => refl');
+  assert.deepEqual(instances('def same : (x : Nat) -> Nat := fun (x : Nat) => x' +
+    ' def f : (n : Nat) -> Eq Nat (same n) (same n) := fun (n : Nat) => refl' + k), kOut);
 });
 
 test('a proof parameter can have a computed side', () => {
@@ -107,7 +107,8 @@ test('a closed argument in a body gives a computed side its token', () => {
     ' fun (a : Nat) (e : Eq (Option Nat) (some a) (some 3)) => lift a 3 e def p : Eq (Option Nat) (some 3) (some 3) := h 3 refl' + k), kOut);
   reject(f + ' def g : (m : Nat) -> Eq (Option Nat) (some 4) (some 4) := fun (m : Nat) => f 3', typeError, 'f 3');
   reject(pf + ' def g : (m : Nat) -> Eq (Prod Nat Nat) (pair m 2) (pair m 2) := fun (m : Nat) => pf m 1', typeError, 'pf m 1');
-  reject('def one : Nat := 1 ' + pf + mixed + ' pf m one', typeError, 'pf m one');
+  assert.deepEqual(instances('def one : Nat := 1 ' + pf + mixed + ' pf m one'),
+    [{ name: 'one', type: 'Nat', value: 1 }]);
   reject(lift + three.replace('g', 'h') + ' lift 3 4 refl', reflError, 'refl');
   refuse(f + three + ' f (natAdd 1 2)');
 });

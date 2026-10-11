@@ -1327,6 +1327,10 @@ int instantiate_side(Fuel fuel, const Bindings *environment, const Params *param
     }
     const Term *node;
     if (!rename_markers(fuel, environment, params, values, tokens, side.node, &node)) return 0;
+    /* D4 part C: a side with a marker left takes its normal form again
+       (design item 5). close_body_side closes a side with no marker left. */
+    Failure failure = {0, {NULL, 0}};
+    if (term_marker_bound(node) > 0 && !side_normal(fuel, environment, node, &node, &failure)) return 0;
     *result = (Val){.kind = VAL_TERM, .node = node};
     return 1;
   }
@@ -3079,6 +3083,93 @@ int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *
   }
   }
   return 0;
+}
+
+/* D4 part C (design item 5): side_normal gives the normal form of a side
+   node in the scope. A marker, a number and a string give themselves. A
+   closed sub-term (no marker) of another form gives the literal of its
+   eval_synth value (value_node), or keeps its node if the value has no
+   literal. A closed form that needs an expected type keeps its checked
+   node. A constructor and an application of an earlier definition give
+   the same node with the normal forms of their arguments (Q-D4-5: no
+   unfold). A group gives the normal form of its inner term, and a new
+   literal without the group. Each other form with a marker is refused
+   (eTerm at its position). A node is copied only when a child changes. */
+static int normal_args(Fuel fuel, const Bindings *scope, const Terms *args, const Terms **normal, Failure *failure) {
+  if (fuel == 0) return 0;
+  if (args == NULL) {
+    *normal = NULL;
+    return 1;
+  }
+  const Term *head;
+  const Terms *tail;
+  if (!side_normal(fuel - 1, scope, args->head, &head, failure)) return 0;
+  if (!normal_args(fuel - 1, scope, args->tail, &tail, failure)) return 0;
+  *normal = head == args->head && tail == args->tail ? args : terms_item(head, tail);
+  return 1;
+}
+
+static const Term *with_args(const Term *node, const Terms *args) {
+  if (args == node->args) return node;
+  Term *copy = arena_alloc(sizeof *copy);
+  *copy = *node;
+  copy->args = args;
+  return copy;
+}
+
+int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term **normal, Failure *failure) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  if (node->tag == TERM_VAR || node->tag == TERM_NUMBER || node->tag == TERM_STRING) {
+    *normal = node;
+    return 1;
+  }
+  if (term_marker_bound(node) == 0 && node->tag != TERM_CONSTRUCT && node->tag != TERM_GROUP) {
+    /* These checked forms have no eval_synth case. Their expected type
+       came from the enclosing constructor, so inference cannot replace
+       the node. Keep the closed form, as for other non-literal values. */
+    switch (node->tag) {
+    case TERM_PARTIAL:
+    case TERM_FUN:
+    case TERM_REFL:
+    case TERM_PURE:
+    case TERM_MAP:
+    case TERM_BIND:
+    case TERM_FILTER:
+    case TERM_FOLD:
+    case TERM_FOLD_VALUE:
+    case TERM_UNFOLD:
+    case TERM_UNFOLD_VALUE:
+      *normal = node;
+      return 1;
+    default: break;
+    }
+    Typed typed;
+    Nat left;
+    if (!eval_synth(more, 1, scope, node, &typed, &left, failure)) return 0;
+    /* Some Option payloads use VALUE_NAT or VALUE_TEXT too. Only a Nat
+       or Text term can be replaced by the corresponding scalar literal. */
+    *normal = same_type(typed.type, &nat_type) || same_type(typed.type, &text_type)
+                  ? value_node(node->position, typed.value, node)
+                  : node;
+    return 1;
+  }
+  if (node->tag == TERM_GROUP) {
+    const Term *inner;
+    if (!side_normal(more, scope, node->args->head, &inner, failure)) return 0;
+    if (inner->tag == TERM_NUMBER || inner->tag == TERM_STRING) {
+      *normal = inner;
+      return 1;
+    }
+    *normal = inner == node->args->head ? node : with_args(node, terms_item(inner, node->args->tail));
+    return 1;
+  }
+  int applied = node->tag == TERM_APPLY && (node->callee == NULL || node->callee->tag == TERM_NAME);
+  if (node->tag != TERM_CONSTRUCT && !applied) return fail_at(failure, node->position, eTerm);
+  const Terms *args;
+  if (!normal_args(more, scope, node->args, &args, failure)) return 0;
+  *normal = with_args(node, args);
+  return 1;
 }
 
 int close_body_side(Fuel fuel, const Bindings *environment, const LType *a, Val side, Val *closed) {
