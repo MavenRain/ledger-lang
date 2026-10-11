@@ -1608,6 +1608,80 @@ static void test_refused_nodes(void) {
   assert(unknown_answer(fun_swapped(twice_scope, twice_item, &var_body)));
 }
 
+/* The count of marker names in the term. Each one is a TERM_VAR with the
+   index of its marker. */
+static Nat marker_vars_at(const Term *term) {
+  if (term == NULL) return 0;
+  Nat index;
+  Nat count = 0;
+  if (marker_index(term->name, &index)) {
+    assert(term->tag == TERM_VAR && term->index == index);
+    count = 1;
+  }
+  count = count + marker_vars_at(term->callee);
+  for (const Terms *at = term->args; at != NULL; at = at->tail) count = count + marker_vars_at(at->head);
+  return count;
+}
+
+/* A grid row: both sides keep a node with the text of their tokens and
+   the marker variables, and same_val on the nodes gives the token answer. */
+static void val_row(Val left, Val right, Nat expected, Nat left_markers, Nat right_markers) {
+  assert(left.kind == VAL_TERM && right.kind == VAL_TERM && left.node != NULL && right.node != NULL);
+  assert(same_text(term_text(left.node), tokens_text(left.term)));
+  assert(same_text(term_text(right.node), tokens_text(right.term)));
+  assert(marker_vars_at(left.node) == left_markers && marker_vars_at(right.node) == right_markers);
+  assert(same_text(tokens_text(left.term), tokens_text(right.term)) == expected);
+  assert(same_val(left, right) == expected);
+}
+
+static void test_val_terms(void) {
+  const char *source =
+      "def someA : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl\n"
+      "def someB : (n : Nat) -> (m : Nat) -> (e : Eq (Option Nat) (some n) (some m)) -> "
+      "Eq (Option Nat) (some m) (some n) := fun (n : Nat) (m : Nat) (e : Eq (Option Nat) (some n) (some m)) => symm e\n"
+      "def listA : (n : Nat) -> Eq (List Nat) (cons n nil) (cons n nil) := fun (n : Nat) => refl\n"
+      "def pairA : (n : Nat) -> Eq (Prod Nat Nat) (pair n 5) (pair n 5) := fun (n : Nat) => refl\n"
+      "def pairB : (n : Nat) -> Eq (Prod Nat Nat) (pair n 6) (pair n 6) := fun (n : Nat) => refl\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure));
+  Val some_a;
+  Val some_a_rhs;
+  Val some_m;
+  Val some_n;
+  Val list_a;
+  Val list_a_rhs;
+  Val pair_5;
+  Val pair_5_rhs;
+  Val pair_6;
+  Val pair_6_rhs;
+  const LType *a;
+  assert(sides_of(fun_named(environment, "someA")->type, &a, &some_a, &some_a_rhs));
+  assert(sides_of(fun_named(environment, "someB")->type, &a, &some_m, &some_n));
+  assert(sides_of(fun_named(environment, "listA")->type, &a, &list_a, &list_a_rhs));
+  assert(sides_of(fun_named(environment, "pairA")->type, &a, &pair_5, &pair_5_rhs));
+  assert(sides_of(fun_named(environment, "pairB")->type, &a, &pair_6, &pair_6_rhs));
+
+  /* Equal atoms, in one definition and in two definitions. */
+  val_row(some_a, some_a_rhs, 1, 1, 1);
+  val_row(some_a, some_n, 1, 1, 1);
+  val_row(pair_5, pair_5_rhs, 1, 1, 1);
+  /* Another constructor, another marker, another literal. */
+  val_row(some_a, list_a, 0, 1, 1);
+  val_row(some_m, some_n, 0, 1, 1);
+  val_row(pair_5, pair_6, 0, 1, 1);
+  /* No row has another fun binder name: mark_side refuses fun in a
+     computed side. Thus no grid row has two different answers. */
+
+  /* Fallback: a renamed side (checker.c instantiate_side) and a shifted side
+     (program.c shift_eq_side) keep node NULL. same_val then gives the token
+     answer. */
+  Val bare = {.kind = VAL_TERM, .term = some_a.term};
+  Val bare_list = {.kind = VAL_TERM, .term = list_a.term};
+  assert(same_val(bare, some_a_rhs) == 1 && same_val(some_a_rhs, bare) == 1);
+  assert(same_val(bare, bare_list) == 0 && same_val(bare_list, some_a) == 0);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -1621,6 +1695,7 @@ int main(void) {
   test_term_evaluator();
   test_construct_argument_lookup();
   test_refused_nodes();
+  test_val_terms();
   puts("C module tests passed");
   return 0;
 }

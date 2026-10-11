@@ -17,6 +17,12 @@ Text error_text(Nat position, Text message) {
   return message;
 }
 
+Nat same_term(const Term *left, const Term *right) {
+  (void)left;
+  (void)right;
+  return 0;
+}
+
 int main(void) {
   assert(freopen("/dev/null", "r", stdout) != NULL);
   assert(setvbuf(stdout, NULL, _IONBF, 0) == 0);

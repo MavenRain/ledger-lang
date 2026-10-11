@@ -253,3 +253,32 @@ Text term_text(const Term *term) {
   emit_term(&builder, term);
   return builder_text(&builder);
 }
+
+/* parse_term gives a marker name as TERM_NAME: the marker bindings have no
+   count frame (binder_index). marker_vars gives each TERM_NAME or TERM_VAR
+   that names the marker i, with no types and no arguments, as a variable
+   node with index i. Other nodes are copied only when a child changes. */
+static const Terms *marker_var_list(const Terms *terms);
+
+const Term *marker_vars(const Term *term) {
+  Nat index;
+  if (term == NULL) return NULL;
+  if ((term->tag == TERM_NAME || term->tag == TERM_VAR) && term->types == NULL && term->args == NULL &&
+      marker_index(term->name, &index))
+    return term_var(term->position, term->cost, term->name, index);
+  const Term *callee = marker_vars(term->callee);
+  const Terms *args = marker_var_list(term->args);
+  if (callee == term->callee && args == term->args) return term;
+  Term copy = *term;
+  copy.callee = callee;
+  copy.args = args;
+  return make_term(copy);
+}
+
+static const Terms *marker_var_list(const Terms *terms) {
+  if (terms == NULL) return NULL;
+  const Term *head = marker_vars(terms->head);
+  const Terms *tail = marker_var_list(terms->tail);
+  if (head == terms->head && tail == terms->tail) return terms;
+  return terms_item(head, tail);
+}

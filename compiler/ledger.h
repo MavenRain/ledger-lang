@@ -101,7 +101,8 @@ Nat first_position(Tokens tokens);
 
 /* A side of an equality type. A closed side keeps the canonical JSON text
    of its value. A neutral side keeps the position of a value parameter. A
-   computed side keeps the tokens of an atom. */
+   computed side keeps the tokens of an atom and its term (node). A shifted
+   or a renamed side keeps node NULL. */
 typedef enum { VAL_CLOSED, VAL_VAR, VAL_TERM } ValKind;
 
 typedef struct {
@@ -109,6 +110,7 @@ typedef struct {
   Text text;
   Nat index;
   Tokens term;
+  const struct Term *node;
 } Val;
 
 Nat same_val(Val left, Val right);
@@ -811,6 +813,8 @@ const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args);
 Nat same_term(const Term *left, const Term *right);
 Nat same_terms(const Terms *left, const Terms *right);
 Text term_text(const Term *term);
+/* The term with each marker name as a variable node (D3-s9 part A). */
+const Term *marker_vars(const Term *term);
 const Term *term_body(Tokens tokens, const Term *callee);
 Tokens term_tokens(const Term *term);
 /* checker.c: the body tokens before rest. */

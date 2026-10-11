@@ -47,7 +47,7 @@ static Val closed_side(Text text) { return (Val){.kind = VAL_CLOSED, .text = tex
 
 static Val var_side(Nat index) { return (Val){.kind = VAL_VAR, .index = index}; }
 
-static Val term_side(Tokens term) { return (Val){.kind = VAL_TERM, .term = term}; }
+static Val term_side(Tokens term, const Term *node) { return (Val){.kind = VAL_TERM, .term = term, .node = node}; }
 
 static const Params *param_cons(Param head, const Params *tail) {
   Params *cell = arena_alloc(sizeof *cell);
@@ -245,7 +245,7 @@ static Val shift_eq_side(Nat offset, Val side) {
   switch (side.kind) {
   case VAL_CLOSED: return side;
   case VAL_VAR: return var_side(offset + side.index);
-  case VAL_TERM: return term_side(shift_markers(offset, side.term));
+  case VAL_TERM: return term_side(shift_markers(offset, side.term), NULL);
   }
   return side;
 }
@@ -370,19 +370,22 @@ static const Bindings *marker_bindings(const Params *done, const Bindings *envir
 }
 
 /* A computed side (step D4a) is an atom that names value parameters, such
-   as `(some n)`. A function type with type parameters cannot have one. */
+   as `(some n)`. A function type with type parameters cannot have one. The
+   side keeps the marked tokens and the term, with each marker as a variable
+   node. */
 static int computed_side(Fuel fuel, const LType *a, const Bindings *environment, const Params *done, Tokens tokens,
                          Val *side, Tokens *rest, Nat *left, Failure *failure) {
   Tokens term;
   if (!mark_side(environment, done, atom_of(0, tokens), &term)) return fail_at(failure, first_position(tokens), eTerm);
   if (has_type_param(done) == 1) return fail_at(failure, first_position(tokens), eTerm);
   const Value *value;
+  const Term *node = NULL;
   Tokens after;
   Nat remaining;
   if (!parse_term(fuel, 1, 1, a, binding_cons(check_marker(), marker_bindings(done, environment)), term, &value,
-                  &after, &remaining, NULL, failure))
+                  &after, &remaining, &node, failure))
     return 0;
-  *side = term_side(term);
+  *side = term_side(term, marker_vars(node));
   *rest = skip_atom(0, tokens);
   *left = remaining;
   return 1;
