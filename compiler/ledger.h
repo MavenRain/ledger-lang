@@ -593,7 +593,7 @@ int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Param
                   Tokens tokens, Val *side);
 int argument_token(Nat index, const Params *params, Tokens tokens, Token *token);
 int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
-                   Tokens term, Tokens *renamed);
+                   Tokens term, const struct Term *node, Tokens *renamed, const struct Term **renamed_node);
 Nat kept_side(Val side);
 int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
                      Val side, Val *result);
@@ -815,6 +815,10 @@ Nat same_terms(const Terms *left, const Terms *right);
 Text term_text(const Term *term);
 /* The term with each marker name as a variable node (D3-s9 part A). */
 const Term *marker_vars(const Term *term);
+/* The term with each marker variable i (i < size, table[i] not NULL) as
+   table[i], and 1 plus the largest marker index in the term (D3-s9 part B). */
+const Term *term_with_markers(const Term *term, const Term *const *table, Nat size);
+Nat term_marker_bound(const Term *term);
 const Term *term_body(Tokens tokens, const Term *callee);
 Tokens term_tokens(const Term *term);
 /* checker.c: the body tokens before rest. */

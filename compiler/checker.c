@@ -1249,11 +1249,45 @@ int argument_token(Nat index, const Params *params, Tokens tokens, Token *token)
   return 0;
 }
 
+/* The node of a closed argument token, with cost 0 (Q-S9-6). A
+   parenthesized argument gives no closed side (argument_text). */
+static int closed_node(Nat index, const Bindings *environment, const Params *params, Token token, const Term **node) {
+  switch (token.kind) {
+  case TOKEN_NUMBER: *node = term_number(token.position, 0, token.number); return 1;
+  case TOKEN_STRING: *node = term_string(token.position, 0, token.text); return 1;
+  case TOKEN_IDENTIFIER: {
+    for (; params != NULL && index != 0; params = params->tail, index--) {}
+    if (params == NULL) return 0;
+    /* Match parse_term: bindings take precedence over constructors, and
+       refl is a form rather than a name. */
+    const Binding *item;
+    Plan selected;
+    if (lookup(token.text, environment, &item)) {
+      *node = term_named(TERM_NAME, token.position, 0, token.text, NULL, NULL);
+    } else if (constructor_plan(params->head.type, token.text, &selected)) {
+      *node = term_named(TERM_CONSTRUCT, token.position, 0, token.text, NULL, NULL);
+    } else if (same_text(token.text, srefl)) {
+      *node = term_form(TERM_REFL, token.position, 0, NULL);
+    } else {
+      return 0;
+    }
+    return 1;
+  }
+  case TOKEN_PUNCTUATION: return 0;
+  }
+  return 0;
+}
+
 /* The mech recursion renames the tail first, but a none anywhere gives
-   none and nothing else depends on the order, so the loop goes forward. */
+   none and nothing else depends on the order, so the loop goes forward.
+   The node gets the same rule through a table of the marker nodes; a NULL
+   node gives a NULL renamed node. */
 int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
-                   Tokens term, Tokens *renamed) {
+                   Tokens term, const Term *node, Tokens *renamed, const Term **renamed_node) {
   Token *items = arena_alloc(sizeof(Token) * (term.size + 1));
+  Nat size = term_marker_bound(node);
+  const Term **table = arena_alloc(sizeof *table * (size + 1));
+  for (Nat index = 0; index < size; index++) table[index] = NULL;
   for (Nat at = 0; at < term.size; at++) {
     Token head = term.items[at];
     Nat index = 0;
@@ -1264,11 +1298,14 @@ int rename_markers(Fuel fuel, const Bindings *environment, const Params *params,
     if (side.kind == VAL_TERM) return 0;
     if (side.kind == VAL_VAR) {
       items[at] = (Token){TOKEN_IDENTIFIER, head.position, 0, marker_name(side.index)};
+      if (index < size) table[index] = term_var(head.position, 0, marker_name(side.index), side.index);
       continue;
     }
     if (!argument_token(index, params, tokens, &items[at])) return 0;
+    if (index < size && !closed_node(index, environment, params, items[at], &table[index])) return 0;
   }
   *renamed = (Tokens){items, term.size};
+  *renamed_node = term_with_markers(node, table, size);
   return 1;
 }
 
@@ -1276,7 +1313,7 @@ Nat kept_side(Val side) {
   switch (side.kind) {
   case VAL_CLOSED:
   case VAL_VAR: return 1;
-  case VAL_TERM: return has_marker(side.term);
+  case VAL_TERM: return side.node != NULL ? term_marker_bound(side.node) > 0 : has_marker(side.term);
   }
   return 0;
 }
@@ -1292,8 +1329,9 @@ int instantiate_side(Fuel fuel, const Bindings *environment, const Params *param
       return 1;
     }
     Tokens renamed;
-    if (!rename_markers(fuel, environment, params, values, tokens, side.term, &renamed)) return 0;
-    *result = (Val){.kind = VAL_TERM, .term = renamed};
+    const Term *node;
+    if (!rename_markers(fuel, environment, params, values, tokens, side.term, side.node, &renamed, &node)) return 0;
+    *result = (Val){.kind = VAL_TERM, .term = renamed, .node = node};
     return 1;
   }
   }

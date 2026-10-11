@@ -1673,13 +1673,129 @@ static void test_val_terms(void) {
   /* No row has another fun binder name: mark_side refuses fun in a
      computed side. Thus no grid row has two different answers. */
 
-  /* Fallback: a renamed side (checker.c instantiate_side) and a shifted side
-     (program.c shift_eq_side) keep node NULL. same_val then gives the token
-     answer. */
+  /* Fallback: a side with node NULL. Since D3-s9 part B a renamed side and a
+     shifted side keep a node (test_val_nodes), thus these rows make the side
+     with node NULL directly. same_val then gives the token answer. */
   Val bare = {.kind = VAL_TERM, .term = some_a.term};
   Val bare_list = {.kind = VAL_TERM, .term = list_a.term};
   assert(same_val(bare, some_a_rhs) == 1 && same_val(some_a_rhs, bare) == 1);
   assert(same_val(bare, bare_list) == 0 && same_val(bare_list, some_a) == 0);
+}
+
+static Val lhs_of(const Bindings *environment, const char *name) {
+  const LType *a;
+  Val lhs;
+  Val rhs;
+  assert(sides_of(fun_named(environment, name)->type, &a, &lhs, &rhs));
+  return lhs;
+}
+
+/* A rename row (D3-s9 part B): instantiate_side on the left side of callee
+   in the body of outer, with the arguments in args. The renamed side keeps
+   a node with the text of its tokens and the marker variables, and
+   kept_side on the node gives has_marker on the tokens. */
+static void rename_row(const Bindings *environment, const char *callee, const char *args, Nat answer, Nat markers) {
+  const Binding *item = fun_named(environment, callee);
+  /* The body scope of program.c parse_function: body_marker on the bound
+     parameters of outer. */
+  Bindings *body = arena_alloc(sizeof *body);
+  *body = (Bindings){.head = body_marker(2),
+                     .tail = bind_params(fun_named(environment, "outer")->params, NULL, environment)};
+  const Values *values;
+  Tokens rest;
+  Nat left;
+  Failure failure;
+  Tokens tokens = lexed(args);
+  assert(parse_arguments(1000, 1000, 1, param_types(item->params), body, tokens, &values, &rest, &left, NULL,
+                         &failure));
+  assert(rest.size == 0);
+  Val result;
+  assert(instantiate_side(1000, body, item->params, values, tokens, lhs_of(environment, callee), &result) == answer);
+  if (answer == 0) return;
+  assert(result.kind == VAL_TERM && result.node != NULL);
+  assert(same_text(term_text(result.node), tokens_text(result.term)));
+  assert(marker_vars_at(result.node) == markers);
+  assert(kept_side(result) == has_marker(result.term) && kept_side(result) == (markers > 0));
+}
+
+/* A closed constructor substituted into a computed side must compare as
+   the same constructor written directly in another proof. */
+static void test_closed_marker_nodes(void) {
+  const char *cases[][2] = {{"Flag", "flagYes"}, {"Flag", "flagNo"}, {"Option Nat", "none"},
+                            {"List Nat", "nil"}, {"Text", "textEnd"}, {"Value", "valueNull"},
+                            {"Values", "valuesEnd"}, {"Attrs", "attrsEnd"}};
+  for (size_t at = 0; at < sizeof cases / sizeof *cases; at++) {
+    char source[2048];
+    const char *type = cases[at][0];
+    const char *atom = cases[at][1];
+    int length = snprintf(source, sizeof source,
+                          "def wrap : (x : %s) -> (n : Nat) -> Eq (Prod (%s) Nat) (pair x n) (pair x n) := "
+                          "fun (x : %s) (n : Nat) => refl\n"
+                          "def direct : (n : Nat) -> Eq (Prod (%s) Nat) (pair %s n) (pair %s n) := "
+                          "fun (n : Nat) => refl\n"
+                          "def use : (n : Nat) -> Eq (Prod (%s) Nat) (pair %s n) (pair %s n) := "
+                          "fun (n : Nat) => trans (wrap %s n) (direct n)\n",
+                          type, type, type, type, atom, atom, type, atom, atom, atom);
+    assert(length > 0 && (size_t)length < sizeof source);
+    const Bindings *environment = NULL;
+    Failure failure;
+    int accepted = check_definitions(text(source), &environment, &failure);
+    if (!accepted)
+      fprintf(stderr, "closed marker case %s: %s at %llu\n", type, atom, (unsigned long long)failure.position);
+    assert(accepted);
+  }
+
+  const Bindings *environment = NULL;
+  Failure failure;
+  const char *different =
+      "def wrap : (b : Flag) -> (n : Nat) -> Eq (Prod Flag Nat) (pair b n) (pair b n) := "
+      "fun (b : Flag) (n : Nat) => refl\n"
+      "def direct : (n : Nat) -> Eq (Prod Flag Nat) (pair flagNo n) (pair flagNo n) := "
+      "fun (n : Nat) => refl\n"
+      "def use : (n : Nat) -> Eq (Prod Flag Nat) (pair flagYes n) (pair flagNo n) := "
+      "fun (n : Nat) => trans (wrap flagYes n) (direct n)\n";
+  assert(!check_definitions(text(different), &environment, &failure));
+  assert(same_text(failure.message, eTrans));
+}
+
+static void test_val_nodes(void) {
+  const char *source =
+      "def PairEq : Type 0 := (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m)\n"
+      "def q0 : PairEq := fun (n : Nat) (m : Nat) => refl\n"
+      "def q1 : (a : Nat) -> PairEq := fun (a : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def q2 : (a : Nat) -> (b : Nat) -> PairEq := fun (a : Nat) (b : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def d0 : (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := fun (n : Nat) (m : Nat) => refl\n"
+      "def d1 : (a : Nat) -> (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := "
+      "fun (a : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def d2 : (a : Nat) -> (b : Nat) -> (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := "
+      "fun (a : Nat) (b : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def dt : (n : Nat) -> (s : Text) -> Eq (Prod Nat Text) (pair n s) (pair n s) := fun (n : Nat) (s : Text) => refl\n"
+      "def one : Nat := 1\n"
+      "def outer : (j : Nat) -> (k : Nat) -> Nat := fun (j : Nat) (k : Nat) => k\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* Shift (program.c shift_node): the named signature after 0, 1 and 2
+     value parameters gives the node of the side written directly after
+     the same parameters. Another offset gives other markers. */
+  val_row(lhs_of(environment, "q0"), lhs_of(environment, "d0"), 1, 2, 2);
+  val_row(lhs_of(environment, "q1"), lhs_of(environment, "d1"), 1, 2, 2);
+  val_row(lhs_of(environment, "q2"), lhs_of(environment, "d2"), 1, 2, 2);
+  val_row(lhs_of(environment, "q0"), lhs_of(environment, "q1"), 0, 2, 2);
+  val_row(lhs_of(environment, "q1"), lhs_of(environment, "q2"), 0, 2, 2);
+
+  /* Rename (checker.c rename_markers): body parameters in both orders, so
+     one row moves each marker to the other index; a body parameter and a
+     closed name; closed numbers, a closed string and a closed name. A
+     body gives no VAL_TERM argument (argument_text): a parenthesized
+     argument gives 0. */
+  rename_row(environment, "d0", "k j", 1, 2);
+  rename_row(environment, "d0", "j k", 1, 2);
+  rename_row(environment, "d0", "k one", 1, 1);
+  rename_row(environment, "dt", "3 \"a\"", 1, 0);
+  rename_row(environment, "d0", "one 2", 1, 0);
+  rename_row(environment, "d0", "(k) 1", 0, 0);
 }
 
 int main(void) {
@@ -1696,6 +1812,8 @@ int main(void) {
   test_construct_argument_lookup();
   test_refused_nodes();
   test_val_terms();
+  test_val_nodes();
+  test_closed_marker_nodes();
   puts("C module tests passed");
   return 0;
 }

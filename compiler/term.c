@@ -282,3 +282,44 @@ static const Terms *marker_var_list(const Terms *terms) {
   if (head == terms->head && tail == terms->tail) return terms;
   return terms_item(head, tail);
 }
+
+/* term_with_markers gives each TERM_VAR that names the marker i, with i
+   less than size and a table item that is not NULL, as table[i] (the
+   shift and the rename of D3-s9 part B). The new node keeps the position
+   and the cost of the table item. Other nodes are copied only when a child
+   changes. term_marker_bound gives 1 plus the largest marker index of a
+   TERM_VAR in the term, or 0 if no TERM_VAR names a marker. */
+static const Terms *marker_list_with(const Terms *terms, const Term *const *table, Nat size);
+
+const Term *term_with_markers(const Term *term, const Term *const *table, Nat size) {
+  Nat index;
+  if (term == NULL) return NULL;
+  if (term->tag == TERM_VAR && marker_index(term->name, &index) && index < size && table[index] != NULL)
+    return table[index];
+  const Term *callee = term_with_markers(term->callee, table, size);
+  const Terms *args = marker_list_with(term->args, table, size);
+  if (callee == term->callee && args == term->args) return term;
+  Term copy = *term;
+  copy.callee = callee;
+  copy.args = args;
+  return make_term(copy);
+}
+
+static const Terms *marker_list_with(const Terms *terms, const Term *const *table, Nat size) {
+  if (terms == NULL) return NULL;
+  const Term *head = term_with_markers(terms->head, table, size);
+  const Terms *tail = marker_list_with(terms->tail, table, size);
+  if (head == terms->head && tail == terms->tail) return terms;
+  return terms_item(head, tail);
+}
+
+static Nat larger(Nat left, Nat right) { return left > right ? left : right; }
+
+Nat term_marker_bound(const Term *term) {
+  Nat index;
+  if (term == NULL) return 0;
+  Nat bound = term_marker_bound(term->callee);
+  if (term->tag == TERM_VAR && marker_index(term->name, &index)) bound = larger(bound, index + 1);
+  for (const Terms *at = term->args; at != NULL; at = at->tail) bound = larger(bound, term_marker_bound(at->head));
+  return bound;
+}

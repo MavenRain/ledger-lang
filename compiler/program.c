@@ -241,11 +241,29 @@ static Tokens shift_markers(Nat offset, Tokens tokens) {
   return (Tokens){items, tokens.size};
 }
 
+/* The node map of shift_markers: the table maps the marker i to the
+   variable node of the marker offset + i, at the position of the first
+   marker token i, with cost 0. */
+static const Term *shift_node(Nat offset, Tokens tokens, const Term *node) {
+  if (node == NULL) return NULL;
+  Nat size = term_marker_bound(node);
+  const Term **table = arena_alloc(sizeof *table * (size + 1));
+  for (Nat index = 0; index < size; index++) table[index] = NULL;
+  for (Nat at = 0; at < tokens.size; at++) {
+    Token token = tokens.items[at];
+    Nat index;
+    if (token.kind != TOKEN_IDENTIFIER || !marker_index(token.text, &index) || index >= size || table[index] != NULL)
+      continue;
+    table[index] = term_var(token.position, 0, marker_name(offset + index), offset + index);
+  }
+  return term_with_markers(node, table, size);
+}
+
 static Val shift_eq_side(Nat offset, Val side) {
   switch (side.kind) {
   case VAL_CLOSED: return side;
   case VAL_VAR: return var_side(offset + side.index);
-  case VAL_TERM: return term_side(shift_markers(offset, side.term), NULL);
+  case VAL_TERM: return term_side(shift_markers(offset, side.term), shift_node(offset, side.term, side.node));
   }
   return side;
 }
