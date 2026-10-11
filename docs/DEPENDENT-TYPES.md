@@ -4,7 +4,7 @@ This plan covers items 1 and 2 of "Remaining M0 work" in `STATUS.md`:
 dependent function types, Sigma, `transport`, `cong`, and `ReadPath`. Each
 step is one slice with its own tests. Each step keeps all earlier tests.
 
-## Current model
+## Starting model (before D1)
 
 - A type is an `LType` value. `tyEq A x y` keeps the canonical JSON text of
   the two sides. `refl` compares the two texts.
@@ -89,9 +89,29 @@ The plan adds neutral values in two stages:
   a side does not evaluate the name of an earlier definition, so with
   `def one : Nat := 1`, `pf m one` does not prove `(pair m 1)`. A
   parenthesized argument is still refused.
-- D3. Syntax tree and value domain, as above. The checker checks a body
-  once into a `Term`. An application evaluates the `Term`, not the tokens.
-  The work budget stays the same. The JSON output stays the same.
+- D3 (syntax tree done). The checker checks a body once into a `Term` and
+  keeps its tokens as a fallback. Applications try the term evaluator;
+  body evaluation can still fall back to parsing the tokens. The work
+  budget and JSON output stay the same. General neutral evaluation and
+  read-back remain planned for D4. A computed side keeps both its tokens
+  with markers and its `Term` node. Remaining token uses include:
+  - `synth_term`, `eval_apply` and `apply_body` (`compiler/checker.c`):
+    body evaluation can fall back to `parse_term`.
+  - `unary_of`, `stepper_argument` and the inline, partial and bound
+    callback helpers (`compiler/checker.c`): parser routes for structure
+    forms and folds keep token-only `TERM_BODY` carriers, which
+    `apply_body` parses again.
+  - `val_text` (`compiler/runtime.c`), `type_name` and `same_type`
+    (`compiler/types.c`): the JSON output and the type name.
+  - `close_side` (`compiler/checker.c`): it parses the side tokens again.
+  - `mark_side` and `marker_bindings` (`compiler/program.c`): the parse
+    input of a computed side.
+  - `rename_markers` (`compiler/checker.c`): it substitutes the side
+    tokens alongside the `Term` node when instantiating an application.
+  - `same_val` (`compiler/runtime.c`) when a side has no `Term` node: it
+    compares the tokens.
+  - `kept_side` (`compiler/checker.c`) when a side has no `Term` node: it
+    calls `has_marker` (`compiler/runtime.c`) on the tokens.
 - D4. Computed sides. A side can be any term, such as `(natAdd n 1)` or
   `(some n)`. The checker evaluates it to a `Val`, which can be neutral.
   Two sides are equal when their read-backs are equal.

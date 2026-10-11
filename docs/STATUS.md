@@ -19,9 +19,9 @@ not complete the M0 milestone in `SPEC.md`.
   of a data type A. The compiler compares them by their JSON encoding. An
   equality type is only the type of a definition, and proofs are not
   instances. `symm` and `trans` synthesize their types like `first`.
-- Dependent equality results, steps D1, D2, D2b, D3a, D4a, D4b and D4c of
-  `docs/DEPENDENT-TYPES.md`. A function type can end in `Eq A x y`, and a
-  side can be the name of a value parameter of type A. Such a side is
+- Dependent equality results, steps D1, D2, D2b, D3, D3a, D4a, D4b and D4c
+  of `docs/DEPENDENT-TYPES.md`. A function type can end in `Eq A x y`, and
+  a side can be the name of a value parameter of type A. Such a side is
   neutral. The definition checks the body with the neutral sides, so `refl`
   needs the same parameter, the same closed value or the same computed side
   on both sides. Step D2: an application replaces
@@ -29,7 +29,11 @@ not complete the M0 milestone in `SPEC.md`.
   argument that names a parameter of the body gives the neutral side of
   that parameter. Step D2b: the type of a proof parameter `(e : Eq A x y)`
   can name earlier value parameters, and an application checks a proof
-  argument with the sides of the earlier arguments. Step D3a: a side is a
+  argument with the sides of the earlier arguments. The syntax tree
+  portion of D3 is done: the checker checks a body once into a `Term`,
+  and applications try its evaluator with token fallbacks (see step D3
+  in `docs/DEPENDENT-TYPES.md`). General neutral evaluation and read-back
+  remain planned for D4. Step D3a: a side is a
   closed, neutral or computed value, and `refl` and `trans` compare sides
   the same way. Step D4a: a side can be an atom of constructor forms and
   literals that names a value parameter, such as `(some n)` (a computed
@@ -153,7 +157,9 @@ not complete the M0 milestone in `SPEC.md`.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types. `docs/DEPENDENT-TYPES.md` gives the plan
-   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b and D4c are done.
+   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b and D4c and the
+   syntax tree portion of D3 are done. Its general neutral value domain
+   and the computed-side evaluation and read-back of D4 remain.
 2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
    needs the dependent function types of item 1. Until then the type parser
    refuses this name with `this type belongs to a later milestone`.
