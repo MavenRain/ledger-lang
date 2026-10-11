@@ -1441,6 +1441,173 @@ static void test_term_evaluator(void) {
   assert(slot_mismatches() == arrow_misses + 1);
 }
 
+/* both_paths on the body of the function name in the scope of the function
+   scope_name, called with args, at the result type of scope_name. In that
+   scope a name of the body can have a different type (D3-s8 part A). */
+static BothPaths swapped_at(const Bindings *environment, const char *name, const char *scope_name, const char *args) {
+  const Binding *host = fun_named(environment, scope_name);
+  const Binding *guest = fun_named(environment, name);
+  assert(host != NULL && guest != NULL);
+  Binding swapped = *host;
+  swapped.term = guest->term;
+  return both_paths(call_scope(environment, host, args), &swapped, 1000, 1000);
+}
+
+/* both_paths on item, with fun in place of the FUN in the first argument (a
+   GROUP) of the body node. The body tokens stay, thus the token path reads
+   the original body (D3-s7 part B). */
+static BothPaths fun_swapped(const Bindings *scope, const Binding *item, const Term *fun) {
+  const Term *node = item->term->callee;
+  Term group = *node->args->head;
+  group.args = terms_item(fun, NULL);
+  Term changed = *node;
+  changed.args = terms_item(&group, node->args->tail);
+  Binding copy = *item;
+  copy.term = term_body(term_tokens(item->term), &changed);
+  return both_paths(scope, &copy, 1000, 1000);
+}
+
+/* 1 when both paths give 0 with the message at the position. */
+static int refused_at(BothPaths paths, Text message, Nat position) {
+  return paths.eval == 0 && paths.parse == 0 && same_text(paths.failure.message, message) &&
+         paths.failure.position == position;
+}
+
+/* 1 when the node path gives 0 with no code (an unknown answer, a replay). */
+static int unknown_answer(BothPaths paths) {
+  return paths.eval == 0 && paths.failure.message.size == 0;
+}
+
+/* The offset of mark in source. */
+static Nat offset_of(const char *source, const char *mark) {
+  const char *at = strstr(source, mark);
+  assert(at != NULL);
+  return (Nat)(at - source);
+}
+
+/* D3-s8 part A: the new failed answers of the node path, and the unknown
+   answers that stay. Each row has the token answer as the expected answer.
+   The source has its own definitions, thus the grid counts of the other
+   rows do not change. */
+static void test_refused_nodes(void) {
+  const char *source =
+      "def Num : Type 0 := Nat\n"
+      "def One : Type 0 := (n : Nat) -> Nat\n"
+      "def pickK : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => k\n"
+      "def twice : (f : One) -> (n : Nat) -> Nat := fun (f : One) (n : Nat) => f (f n)\n"
+      "def someOf : (k : Nat) -> (y : Nat) -> Option (Prod Nat Nat) := "
+      "fun (k : Nat) (y : Nat) => some (pair k y)\n"
+      "def five : Nat := 5\n"
+      "def mapNum : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "map (fun (y : Num) => y) ys\n"
+      "def twiceNum : (k : Nat) -> (n : Nat) -> Nat := fun (k : Nat) (n : Nat) => twice (fun (y : Num) => y) n\n"
+      "def foldF : (k : Nat) -> (ys : List Nat) -> List Nat := fun (k : Nat) (ys : List Nat) => "
+      "fold (fun (y : Nat) (a : List Nat) => cons y a) nil ys\n"
+      "def numScope : (Num : Nat) -> (ys : List Nat) -> List Nat := fun (Num : Nat) (ys : List Nat) => ys\n"
+      "def numScopeN : (Num : Nat) -> (n : Nat) -> Nat := fun (Num : Nat) (n : Nat) => n\n"
+      "def fstP : (n : Nat) -> (p : Prod Nat Nat) -> Nat := fun (n : Nat) (p : Prod Nat Nat) => first p\n"
+      "def sndP : (n : Nat) -> (p : Prod Nat Nat) -> Nat := fun (n : Nat) (p : Prod Nat Nat) => second p\n"
+      "def symmP : (n : Nat) -> (p : Eq Nat n n) -> Eq Nat n n := fun (n : Nat) (p : Eq Nat n n) => symm p\n"
+      "def transP : (n : Nat) -> (p : Eq Nat n n) -> Eq Nat n n := fun (n : Nat) (p : Eq Nat n n) => trans p p\n"
+      "def reflP : (n : Nat) -> (p : Eq Nat n n) -> Eq Nat n n := fun (n : Nat) (p : Eq Nat n n) => refl\n"
+      "def valP : (n : Nat) -> (p : Nat) -> Nat := fun (n : Nat) (p : Nat) => p\n"
+      "def flagP : (n : Nat) -> (p : Flag) -> Nat := fun (n : Nat) (p : Flag) => n\n"
+      "def useFive : (n : Nat) -> (p : Nat) -> Nat := fun (n : Nat) (p : Nat) => five\n"
+      "def fiveScope : (n : Nat) -> (five : Flag) -> Nat := fun (n : Nat) (five : Flag) => n\n"
+      "def keep : (n : Nat) -> Flag := fun (n : Nat) => flagYes\n"
+      "def filterT : (k : Nat) -> (s : Text) -> Text := fun (k : Nat) (s : Text) => filter keep s\n"
+      "def unfoldL : (k : Nat) -> (n : Nat) -> List Nat := fun (k : Nat) (n : Nat) => unfold (someOf k) 3 n\n"
+      "def textHost : (k : Nat) -> (n : Nat) -> Text := fun (k : Nat) (n : Nat) => \"x\"\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* U1 and U2: in numScope, Num is a Nat value and not a type. Thus the
+     binder of the inline function refuses. */
+  assert(refused_at(swapped_at(environment, "mapNum", "numScope", "4 (cons 7 nil)"), text("expected a supported type"),
+                    offset_of(source, "Num) => y) ys")));
+  assert(refused_at(swapped_at(environment, "twiceNum", "numScopeN", "4 5"), text("expected a supported type"),
+                    offset_of(source, "Num) => y) n")));
+
+  /* U3: rebuild refuses an item above 255 at Text. unfold: the body of
+     unfoldL gives the items 300 in the scope of textHost. filter: s holds
+     the items of cons 300 nil in place of a text. */
+  assert(refused_at(swapped_at(environment, "unfoldL", "textHost", "300 5"), eByte,
+                    offset_of(source, "unfold (someOf")));
+  const LType *list_nat;
+  Tokens rest;
+  Nat left;
+  const Value *items_300;
+  assert(parse_type(1000, 0, NULL, lexed("List Nat"), &list_nat, &rest, &failure));
+  assert(parse_term(1000, 1000, 0, list_nat, NULL, lexed("cons 300 nil"), &items_300, &rest, &left, NULL, &failure));
+  const Binding *filter_item = fun_named(environment, "filterT");
+  const Bindings *filter_scope = call_scope(environment, filter_item, "4 \"ab\"");
+  assert(same_text(filter_scope->head.name, text("s")));
+  Bindings byte_scope = *filter_scope;
+  byte_scope.head.value = items_300;
+  assert(refused_at(both_paths(&byte_scope, filter_item, 1000, 1000), eByte, offset_of(source, "filter keep")));
+
+  /* U4: p is a Nat. Thus first and second do not get a pair, symm and trans
+     do not get a proof, and refl does not get an equality type. */
+  assert(refused_at(swapped_at(environment, "fstP", "valP", "4 5"), eProduct, offset_of(source, "first p")));
+  assert(refused_at(swapped_at(environment, "sndP", "valP", "4 5"), eProduct, offset_of(source, "second p")));
+  assert(refused_at(swapped_at(environment, "symmP", "valP", "4 5"), eProof, offset_of(source, "symm p")));
+  assert(refused_at(swapped_at(environment, "transP", "valP", "4 5"), eProof, offset_of(source, "trans p")));
+  assert(refused_at(swapped_at(environment, "reflP", "valP", "4 5"), eTerm, offset_of(source, "refl\n")));
+
+  /* U5: a VAR, a NAME and a CONSTRUCT over a BIND_VALUE of type Flag where
+     the body expects a Nat, and a proof name over a value that is not a
+     proof (a proof out of scope). */
+  assert(refused_at(swapped_at(environment, "valP", "flagP", "4 flagYes"), eTerm, offset_of(source, "=> p\n") + 3));
+  assert(refused_at(swapped_at(environment, "useFive", "fiveScope", "4 flagYes"), eTerm,
+                    offset_of(source, "=> five") + 3));
+  const Binding *flag_item = fun_named(environment, "flagP");
+  Binding construct = *flag_item;
+  construct.term = construct_body("p", "p", NULL);
+  assert(refused_at(both_paths(call_scope(environment, flag_item, "4 flagYes"), &construct, 1000, 1000), eTerm, 0));
+  const LType *nat;
+  assert(parse_type(1000, 0, NULL, lexed("Nat"), &nat, &rest, &failure));
+  LType equality = {.tag = TY_EQ, .left = nat, .lhs = {.kind = VAL_VAR}, .rhs = {.kind = VAL_VAR}};
+  const Value *five;
+  assert(parse_term(1000, 1000, 0, nat, NULL, lexed("5"), &five, &rest, &left, NULL, &failure));
+  Bindings proof_scope = {{.kind = BIND_VALUE, .name = text("proof"), .type = &equality, .value = five}, NULL};
+  Binding proof_var = {.type = &equality, .term = term_body(lexed("proof"), term_var(0, 0, text("proof"), 0))};
+  assert(refused_at(both_paths(&proof_scope, &proof_var, 1000, 1000), eTerm, 0));
+  Binding proof_name = {.type = &equality,
+                        .term = term_body(lexed("proof"), term_named(TERM_NAME, 0, 0, text("proof"), NULL, NULL))};
+  assert(refused_at(both_paths(&proof_scope, &proof_name, 1000, 1000), eTerm, 0));
+
+  /* The unknown answers that stay (the D3-s8 fallback list). U1: a binder
+     span of 0 or 1 token, two binders, and fuel 4 (the node path gives
+     unknown at the inline binder, the token path gives eFuel at fun). U2: a
+     FUN with no body, and a FUN whose body is not a TERM_BODY. */
+  const Binding *map_item = fun_named(environment, "mapNum");
+  const Bindings *map_scope = call_scope(environment, map_item, "4 (cons 7 nil)");
+  const Term *map_fun = map_item->term->callee->args->head->args->head;
+  const Term *fold_fun = fun_named(environment, "foldF")->term->callee->args->head->args->head;
+  assert(map_fun->tag == TERM_FUN && fold_fun->tag == TERM_FUN && map_fun->tokens.size > 1);
+  Term no_span = *map_fun;
+  no_span.tokens = (Tokens){0};
+  Term one_token = *map_fun;
+  one_token.tokens.size = 1;
+  Term two_binders = *map_fun;
+  two_binders.tokens = fold_fun->tokens;
+  assert(unknown_answer(fun_swapped(map_scope, map_item, &no_span)));
+  assert(unknown_answer(fun_swapped(map_scope, map_item, &one_token)));
+  assert(unknown_answer(fun_swapped(map_scope, map_item, &two_binders)));
+  assert(unknown_answer(both_paths(map_scope, map_item, 4, 1000)));
+  const Binding *twice_item = fun_named(environment, "twiceNum");
+  const Term *twice_fun = twice_item->term->callee->args->head->args->head;
+  assert(twice_fun->tag == TERM_FUN && twice_fun->args->head->tag == TERM_BODY);
+  Term no_body = *twice_fun;
+  no_body.args = NULL;
+  Term var_body = *twice_fun;
+  var_body.args = twice_item->term->callee->args->tail;
+  const Bindings *twice_scope = call_scope(environment, twice_item, "4 5");
+  assert(unknown_answer(fun_swapped(twice_scope, twice_item, &no_body)));
+  assert(unknown_answer(fun_swapped(twice_scope, twice_item, &var_body)));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -1453,6 +1620,7 @@ int main(void) {
   test_type_references();
   test_term_evaluator();
   test_construct_argument_lookup();
+  test_refused_nodes();
   puts("C module tests passed");
   return 0;
 }

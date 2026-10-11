@@ -2003,19 +2003,24 @@ static int eval_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings
   return 0;
 }
 
-/* inline_unary on a FUN term (D3-s5 part B). inline_binders reads the one
-   binder on the binder span, thus parse_type gets fuel - 1, as on the token
-   path. Then the body walk in check mode at fuel - 1. The walk makes no
-   charge, thus its budget answer is not used. */
+/* inline_unary on a FUN term (D3-s5 part B). inline_binder reads the one
+   binder on the binder span at fuel - 1, as on the token path. Then the body
+   walk in check mode at fuel - 1. The walk makes no charge, thus its budget
+   answer is not used. */
 static int eval_inline_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment,
                              const Term *term, Unary *op, Nat *left, Failure *failure) {
-  const Params *params;
+  Param binder;
+  Tokens after_binder;
   Tokens body;
-  Failure refused;
-  if (fuel == 0 || budget == 0 || first_arg(term) == NULL ||
-      !inline_binders(fuel, environment, NULL, term->tokens, &params, &body, &refused) || params->tail != NULL)
-    return 0;
-  Param binder = params->head;
+  Failure refused = {0, {NULL, 0}};
+  if (fuel == 0 || budget == 0 || first_arg(term) == NULL || term->tokens.size < 2) return 0;
+  /* inline_unary reads one binder with the tests of inline_binder: a refusal
+     is the failure of the token path (D3-s8 U1). A span of one token is
+     unknown: the token path gives eFun at the fun token. */
+  if (!inline_binder(fuel - 1, environment, NULL, term->tokens, &binder, &after_binder, &refused))
+    return fail_at(failure, refused.position, refused.message);
+  /* Two binders are unknown: the token path gives eFun at the second `(`. */
+  if (!expect_mark(63, after_binder, &body, &refused)) return 0;
   const Value *checked;
   Nat spent;
   if (!eval_term(fuel - 1, budget, wanted,
@@ -2135,7 +2140,7 @@ static int eval_structure(Fuel fuel, Nat budget, Nat form, const LType *expected
     return 0;
   if (checking_body(environment) == 1) return eval_worked(&null_value, used, value, left);
   Tokens ignored;
-  Failure refused;
+  Failure refused = {0, {NULL, 0}};
   if (carrier_code(expected) == 2) {
     const Values *items;
     Nat mapped_left;
@@ -2143,7 +2148,8 @@ static int eval_structure(Fuel fuel, Nat budget, Nat form, const LType *expected
                    failure))
       return 0;
     const Value *rebuilt;
-    if (!rebuild(expected, items, &rebuilt, &refused)) return 0;
+    /* The refusal of rebuild at the node, as on the token path (D3-s8 U3). */
+    if (!rebuild(expected, items, &rebuilt, &refused)) return fail_at(failure, term->position, refused.message);
     return eval_worked(rebuilt, mapped_left, value, left);
   }
   const Value *item;
@@ -2519,12 +2525,13 @@ static int eval_unfold(Fuel fuel, Nat budget, const LType *expected, const Bindi
   const Values *items;
   Tokens ignored;
   Nat built_left;
-  Failure refused;
+  Failure refused = {0, {NULL, 0}};
   if (!unfold_items(more, seed_left, term->position, op, carrier_code(expected), count_of(limit), seed, &items,
                     &ignored, &built_left, failure))
     return 0;
   const Value *rebuilt;
-  if (!rebuild(expected, items, &rebuilt, &refused)) return 0;
+  /* The refusal of rebuild at the node, as on the token path (D3-s8 U3). */
+  if (!rebuild(expected, items, &rebuilt, &refused)) return fail_at(failure, term->position, refused.message);
   return eval_worked(rebuilt, built_left, value, left);
 }
 
@@ -2570,7 +2577,6 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   Typed found;
   Nat spent;
   Tokens rest;
-  Failure refused;
   switch (term->tag) {
   case TERM_GROUP: return eval_synth(more, budget, environment, first_arg(term), typed, left, failure);
   case TERM_VAR:
@@ -2586,17 +2592,17 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
     return lift_parsed(spent,
                        project(term->position, term->tag == TERM_FIRST ? 1 : 2, found, no_tokens, typed, &rest,
-                               &refused),
+                               failure),
                        left);
   case TERM_SYMM:
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
-    return lift_parsed(spent, symm_proof(term->position, found, no_tokens, typed, &rest, &refused), left);
+    return lift_parsed(spent, symm_proof(term->position, found, no_tokens, typed, &rest, failure), left);
   case TERM_TRANS: {
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
     Typed other;
     Nat used;
     if (!eval_synth(more, spent, environment, second_arg(term), &other, &used, failure)) return 0;
-    return lift_parsed(used, trans_proof(term->position, found, other, no_tokens, typed, &rest, &refused), left);
+    return lift_parsed(used, trans_proof(term->position, found, other, no_tokens, typed, &rest, failure), left);
   }
   case TERM_NUMBER:
   case TERM_STRING:
@@ -2663,10 +2669,11 @@ static int eval_inline_argument(Fuel fuel, Nat budget, const LType *expected, co
   const Term *body = first_arg(term);
   const Params *params;
   Tokens binder_rest;
-  Failure refused;
-  if (body == NULL || body->tag != TERM_BODY ||
-      !inline_binders(more, environment, NULL, term->tokens, &params, &binder_rest, &refused))
-    return 0;
+  Failure refused = {0, {NULL, 0}};
+  if (body == NULL || body->tag != TERM_BODY) return 0;
+  /* inline_argument: the refusal of inline_binders at fuel - 1 (D3-s8 U2). */
+  if (!inline_binders(more, environment, NULL, term->tokens, &params, &binder_rest, &refused))
+    return fail_at(failure, refused.position, refused.message);
   /* inline_argument: eTerm when the binders do not give the type (D3-s5 part E). */
   if (same_type(expected, arrow_type(params, arrow_result(expected))) != 1) return fail_at(failure, term->position, eTerm);
   const Value *checked;
@@ -2733,7 +2740,9 @@ static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, cons
   if (!found) return 0;
   switch (item->kind) {
   case BIND_VALUE:
-    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
+    /* The test of the token path: eTerm at the name (D3-s8 U5). */
+    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1)
+      return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
   case BIND_TYPE:
   case BIND_ARROW: return fail_at(failure, term->position, eTerm);
@@ -2761,7 +2770,9 @@ static int eval_construct_name(Fuel fuel, Nat budget, const LType *expected, con
   switch (item->kind) {
   case BIND_VALUE:
     if (term->args != NULL) return 0;
-    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
+    /* The test of the token path: eTerm at the name (D3-s8 U5). */
+    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1)
+      return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
   case BIND_TYPE:
   case BIND_ARROW: return fail_at(failure, term->position, eTerm);
@@ -2821,7 +2832,9 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
     const Binding *item;
     int found = term->tag == TERM_VAR ? var_binding(term, environment, &item) : lookup(term->name, environment, &item);
     if (!found || item->kind != BIND_VALUE) return 0;
-    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1) return 0;
+    /* The test of the token path: eTerm at the name (D3-s8 U5). */
+    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1)
+      return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
   }
   case TERM_CONSTRUCT: {
@@ -2843,7 +2856,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
     return fail_at(failure, term->position, planned.message);
   }
   case TERM_REFL:
-    return lift_parsed(budget, refl_check(term->position, expected, no_tokens, value, &rest, &refused), left);
+    return lift_parsed(budget, refl_check(term->position, expected, no_tokens, value, &rest, failure), left);
   case TERM_APPLY:
   case TERM_FIRST:
   case TERM_SECOND:
