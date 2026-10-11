@@ -222,40 +222,29 @@ Text tokens_text(Tokens tokens) {
   return builder_text(&builder);
 }
 
-Nat has_marker(Tokens tokens) {
-  Nat index;
-  for (Nat at = 0; at < tokens.size; at++) {
-    if (tokens.items[at].kind == TOKEN_IDENTIFIER && marker_index(tokens.items[at].text, &index)) return 1;
-  }
-  return 0;
-}
-
 Nat token_position(Token token) { return token.position; }
 
 Nat first_position(Tokens tokens) { return tokens.size == 0 ? 0 : tokens.items[0].position; }
 
-/* Two computed sides compare by same_term when both keep a node, else by
-   their tokens. */
+/* Two computed sides compare by same_term on their nodes. */
 Nat same_val(Val left, Val right) {
   if (left.kind != right.kind) return 0;
   switch (left.kind) {
     case VAL_CLOSED: return same_text(left.text, right.text);
     case VAL_VAR: return left.index == right.index;
-    case VAL_TERM:
-      if (left.node != NULL && right.node != NULL) return same_term(left.node, right.node);
-      return same_text(tokens_text(left.term), tokens_text(right.term));
+    case VAL_TERM: return same_term(left.node, right.node);
   }
   return 0;
 }
 
 /* A neutral side prints as item 0, then its position. A computed side
-   prints as item 1, then its tokens. Neither equals the JSON text of a
-   closed side. */
+   prints as item 1, then the text of its node. Neither equals the JSON text
+   of a closed side. */
 Text val_text(Val side) {
   switch (side.kind) {
     case VAL_CLOSED: return side.text;
     case VAL_VAR: return text_byte(0, text_one(side.index));
-    case VAL_TERM: return text_byte(1, side.node != NULL ? term_text(side.node) : tokens_text(side.term));
+    case VAL_TERM: return text_byte(1, term_text(side.node));
   }
   return text_end();
 }

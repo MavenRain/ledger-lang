@@ -1623,14 +1623,12 @@ static Nat marker_vars_at(const Term *term) {
   return count;
 }
 
-/* A grid row: both sides keep a node with the text of their tokens and
-   the marker variables, and same_val on the nodes gives the token answer. */
+/* A grid row: both sides keep a node with the marker variables, and
+   same_val on the nodes gives the answer of the printed sides. */
 static void val_row(Val left, Val right, Nat expected, Nat left_markers, Nat right_markers) {
   assert(left.kind == VAL_TERM && right.kind == VAL_TERM && left.node != NULL && right.node != NULL);
-  assert(same_text(term_text(left.node), tokens_text(left.term)));
-  assert(same_text(term_text(right.node), tokens_text(right.term)));
   assert(marker_vars_at(left.node) == left_markers && marker_vars_at(right.node) == right_markers);
-  assert(same_text(tokens_text(left.term), tokens_text(right.term)) == expected);
+  assert(same_text(val_text(left), val_text(right)) == expected);
   assert(same_val(left, right) == expected);
 }
 
@@ -1672,14 +1670,6 @@ static void test_val_terms(void) {
   val_row(pair_5, pair_6, 0, 1, 1);
   /* No row has another fun binder name: mark_side refuses fun in a
      computed side. Thus no grid row has two different answers. */
-
-  /* Fallback: a side with node NULL. Since D3-s9 part B a renamed side and a
-     shifted side keep a node (test_val_nodes), thus these rows make the side
-     with node NULL directly. same_val then gives the token answer. */
-  Val bare = {.kind = VAL_TERM, .term = some_a.term};
-  Val bare_list = {.kind = VAL_TERM, .term = list_a.term};
-  assert(same_val(bare, some_a_rhs) == 1 && same_val(some_a_rhs, bare) == 1);
-  assert(same_val(bare, bare_list) == 0 && same_val(bare_list, some_a) == 0);
 }
 
 static Val lhs_of(const Bindings *environment, const char *name) {
@@ -1692,8 +1682,8 @@ static Val lhs_of(const Bindings *environment, const char *name) {
 
 /* A rename row (D3-s9 part B): instantiate_side on the left side of callee
    in the body of outer, with the arguments in args. The renamed side keeps
-   a node with the text of its tokens and the marker variables, and
-   kept_side on the node gives has_marker on the tokens. */
+   a node with the marker variables, and kept_side on the node is 1 only
+   with a marker. */
 static void rename_row(const Bindings *environment, const char *callee, const char *args, Nat answer, Nat markers) {
   const Binding *item = fun_named(environment, callee);
   /* The body scope of program.c parse_function: body_marker on the bound
@@ -1713,9 +1703,8 @@ static void rename_row(const Bindings *environment, const char *callee, const ch
   assert(instantiate_side(1000, body, item->params, values, tokens, lhs_of(environment, callee), &result) == answer);
   if (answer == 0) return;
   assert(result.kind == VAL_TERM && result.node != NULL);
-  assert(same_text(term_text(result.node), tokens_text(result.term)));
   assert(marker_vars_at(result.node) == markers);
-  assert(kept_side(result) == has_marker(result.term) && kept_side(result) == (markers > 0));
+  assert(kept_side(result) == (markers > 0));
 }
 
 /* A closed constructor substituted into a computed side must compare as
@@ -1820,21 +1809,31 @@ static Val closed_in(const Bindings *bound, const LType *a, Val side) {
   return closed;
 }
 
-/* A D4 part A row: val_text on the node of side gives the token text, and
-   the close on the node gives the closed side of the token parse (the same
-   side with node NULL) in the same scope. Gives the token answer. */
-static Val close_row(const Bindings *bound, const LType *a, Val side) {
+/* The closed side of the closed atom source, as eq_side makes it:
+   parse_term in bound, then printed_side. */
+static Val closed_atom(const Bindings *bound, const LType *a, const char *source) {
+  const Value *value;
+  Tokens rest;
+  Nat left;
+  Failure failure;
+  Val closed;
+  assert(parse_term(1000, 1, 1, a, bound, lexed(source), &value, &rest, &left, NULL, &failure));
+  assert(printed_side(1000, value, &closed) && closed.kind == VAL_CLOSED);
+  return closed;
+}
+
+/* A D4 row: the close on the node of side gives the closed side of the
+   closed atom expected (closed_atom) in the same scope. */
+static Val close_row(const Bindings *bound, const LType *a, Val side, const char *expected) {
   assert(side.kind == VAL_TERM && side.node != NULL);
-  Val bare = {.kind = VAL_TERM, .term = side.term};
-  assert(same_text(val_text(side), val_text(bare)));
-  Val by_tokens = closed_in(bound, a, bare);
-  assert(same_text(val_text(closed_in(bound, a, side)), val_text(by_tokens)));
-  return by_tokens;
+  Val closed = closed_in(bound, a, side);
+  assert(same_text(val_text(closed), val_text(closed_atom(bound, a, expected))));
+  return closed;
 }
 
 /* The rows of the Eq type ty in bound. closed is the type that close_result
-   or close_params gives for ty: its sides are the token answers. */
-static void close_type_row(const Bindings *bound, const LType *ty, const LType *closed) {
+   or close_params gives for ty: its sides are the closed atom expected. */
+static void close_type_row(const Bindings *bound, const LType *ty, const LType *closed, const char *expected) {
   const LType *a;
   const LType *b;
   Val lhs;
@@ -1842,14 +1841,14 @@ static void close_type_row(const Bindings *bound, const LType *ty, const LType *
   Val x;
   Val y;
   assert(sides_of(ty, &a, &lhs, &rhs) && sides_of(closed, &b, &x, &y));
-  assert(x.kind == VAL_CLOSED && same_text(val_text(x), val_text(close_row(bound, a, lhs))));
-  assert(y.kind == VAL_CLOSED && same_text(val_text(y), val_text(close_row(bound, a, rhs))));
+  assert(x.kind == VAL_CLOSED && same_text(val_text(x), val_text(close_row(bound, a, lhs, expected))));
+  assert(y.kind == VAL_CLOSED && same_text(val_text(y), val_text(close_row(bound, a, rhs, expected))));
 }
 
 /* A D4c row: instantiate_side renames the markers of the left side of p to
    the closed arguments in args, in the body scope. kept_side gives 0, thus
-   close_body_side closes the renamed side. */
-static void body_close_row(const Bindings *environment, const Bindings *body, const char *args) {
+   close_body_side closes the renamed side to the closed atom expected. */
+static void body_close_row(const Bindings *environment, const Bindings *body, const char *args, const char *expected) {
   const Binding *p = fun_named(environment, "p");
   const LType *a;
   Val lhs;
@@ -1858,7 +1857,7 @@ static void body_close_row(const Bindings *environment, const Bindings *body, co
   assert(sides_of(p->type, &a, &lhs, &rhs));
   assert(instantiate_side(1000, body, p->params, call_values(body, p->params, args), lexed(args), lhs, &side) == 1);
   assert(kept_side(side) == 0);
-  close_row(body, a, side);
+  close_row(body, a, side, expected);
 }
 
 /* D4 part A: a computed side in a result (D4a, close_result), in the type of
@@ -1886,11 +1885,11 @@ static void test_d4_close(void) {
   const Values *p_values = call_values(environment, p->params, "2 6");
   const LType *closed;
   assert(close_result(1000, environment, p->params, p_values, 1, p->type, &closed));
-  close_type_row(argument_bindings(0, p->params, p_values, environment), p->type, closed);
+  close_type_row(argument_bindings(0, p->params, p_values, environment), p->type, closed, "(pair 2 6)");
   const Binding *w = fun_named(environment, "w");
   const Values *w_values = call_values(environment, w->params, "4");
   assert(close_result(1000, environment, w->params, w_values, 1, w->type, &closed));
-  close_type_row(argument_bindings(0, w->params, w_values, environment), w->type, closed);
+  close_type_row(argument_bindings(0, w->params, w_values, environment), w->type, closed, "(some 4)");
 
   /* D4b: the proof parameter e of q 2 6. The third value is a number: the
      sides of e use only the markers of n and m. */
@@ -1898,25 +1897,97 @@ static void test_d4_close(void) {
   const Values *q_values = call_values(environment, fun_named(environment, "three")->params, "2 6 0");
   const Params *q_closed = close_params(1000, environment, q->params, q_values, q->params);
   close_type_row(argument_bindings(0, q->params, q_values, environment), q->params->tail->tail->head.type,
-                 q_closed->tail->tail->head.type);
+                 q_closed->tail->tail->head.type, "(pair 2 6)");
 
   /* D4c: closed numbers and the closed name one in the body of outer. */
   Bindings *body = arena_alloc(sizeof *body);
   *body = (Bindings){.head = body_marker(2),
                      .tail = bind_params(fun_named(environment, "outer")->params, NULL, environment)};
-  body_close_row(environment, body, "3 4");
-  body_close_row(environment, body, "one 2");
+  body_close_row(environment, body, "3 4", "(pair 3 4)");
+  body_close_row(environment, body, "one 2", "(pair 1 2)");
 
   /* The unknown answer (Q-D4-4): a side with markers in a scope with no
-     marker binding. The close on the node gives 0 and does not replay the
-     tokens. The token parse also gives 0. */
+     marker binding. The close on the node gives 0: the side has no tokens
+     to replay. */
   const LType *a;
   Val lhs;
   Val rhs;
   Val none;
   assert(sides_of(p->type, &a, &lhs, &rhs));
   assert(close_side(1000, environment, a, lhs, &none) == 0);
-  assert(close_side(1000, environment, a, (Val){.kind = VAL_TERM, .term = lhs.term}, &none) == 0);
+}
+
+/* The renamed left side of callee in body, with the arguments in args. */
+static Val renamed_in(const Bindings *environment, const Bindings *body, const char *callee, const char *args) {
+  const Binding *item = fun_named(environment, callee);
+  Val side;
+  assert(instantiate_side(1000, body, item->params, call_values(body, item->params, args), lexed(args),
+                          lhs_of(environment, callee), &side) == 1);
+  assert(side.kind == VAL_TERM && side.node != NULL);
+  return side;
+}
+
+/* D4 part B: a computed side keeps only its node. The shift after 0, 1 and
+   2 value parameters and the rename to body parameters, closed numbers, a
+   closed string and a closed name walk the node, with no side tokens.
+   Called last from main: each close on a node adds slot misses
+   (test_d4_close). */
+static void test_d4_carrier(void) {
+  const char *source =
+      "def PairEq : Type 0 := (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m)\n"
+      "def q0 : PairEq := fun (n : Nat) (m : Nat) => refl\n"
+      "def q1 : (a : Nat) -> PairEq := fun (a : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def q2 : (a : Nat) -> (b : Nat) -> PairEq := fun (a : Nat) (b : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def d0 : (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := fun (n : Nat) (m : Nat) => refl\n"
+      "def d1 : (a : Nat) -> (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := "
+      "fun (a : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def d2 : (a : Nat) -> (b : Nat) -> (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := "
+      "fun (a : Nat) (b : Nat) (n : Nat) (m : Nat) => refl\n"
+      "def sw : (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair m n) (pair m n) := fun (n : Nat) (m : Nat) => refl\n"
+      "def dt : (n : Nat) -> (s : Text) -> Eq (Prod Nat Text) (pair n s) (pair n s) := fun (n : Nat) (s : Text) => refl\n"
+      "def one : Nat := 1\n"
+      "def outer : (j : Nat) -> (k : Nat) -> Nat := fun (j : Nat) (k : Nat) => k\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* Shift (program.c shift_node) by 0, 1 and 2: the node of the side
+     written directly after the same parameters. Another offset gives other
+     markers. */
+  val_row(lhs_of(environment, "q0"), lhs_of(environment, "d0"), 1, 2, 2);
+  val_row(lhs_of(environment, "q1"), lhs_of(environment, "d1"), 1, 2, 2);
+  val_row(lhs_of(environment, "q2"), lhs_of(environment, "d2"), 1, 2, 2);
+  val_row(lhs_of(environment, "q1"), lhs_of(environment, "d0"), 0, 2, 2);
+  val_row(lhs_of(environment, "q2"), lhs_of(environment, "d1"), 0, 2, 2);
+
+  /* Rename (checker.c rename_markers) in the body of outer. VAL_VAR: j k
+     keeps the markers of d0, and k j gives the markers of sw. */
+  Bindings *body = arena_alloc(sizeof *body);
+  *body = (Bindings){.head = body_marker(2),
+                     .tail = bind_params(fun_named(environment, "outer")->params, NULL, environment)};
+  val_row(renamed_in(environment, body, "d0", "j k"), lhs_of(environment, "d0"), 1, 2, 2);
+  val_row(renamed_in(environment, body, "d0", "k j"), lhs_of(environment, "sw"), 1, 2, 2);
+  val_row(renamed_in(environment, body, "d0", "k j"), lhs_of(environment, "d0"), 0, 2, 2);
+
+  /* A closed number, a closed string and a closed name: no marker stays,
+     and the close on the node gives the closed atom. */
+  const LType *a;
+  const LType *t;
+  Val lhs;
+  Val rhs;
+  assert(sides_of(fun_named(environment, "d0")->type, &a, &lhs, &rhs));
+  assert(sides_of(fun_named(environment, "dt")->type, &t, &lhs, &rhs));
+  Val numbers = renamed_in(environment, body, "d0", "3 4");
+  Val text_side = renamed_in(environment, body, "dt", "3 \"a\"");
+  Val named = renamed_in(environment, body, "d0", "one 2");
+  assert(kept_side(numbers) == 0 && kept_side(text_side) == 0 && kept_side(named) == 0);
+  close_row(body, a, numbers, "(pair 3 4)");
+  close_row(body, t, text_side, "(pair 3 \"a\")");
+  close_row(body, a, named, "(pair 1 2)");
+
+  /* A body parameter and a closed name: one marker stays. */
+  Val mixed = renamed_in(environment, body, "d0", "k one");
+  assert(marker_vars_at(mixed.node) == 1 && kept_side(mixed) == 1);
 }
 
 int main(void) {
@@ -1936,6 +2007,7 @@ int main(void) {
   test_val_nodes();
   test_closed_marker_nodes();
   test_d4_close();
+  test_d4_carrier();
   puts("C module tests passed");
   return 0;
 }

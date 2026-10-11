@@ -1280,31 +1280,28 @@ static int closed_node(Nat index, const Bindings *environment, const Params *par
 
 /* The mech recursion renames the tail first, but a none anywhere gives
    none and nothing else depends on the order, so the loop goes forward.
-   The node gets the same rule through a table of the marker nodes; a NULL
-   node gives a NULL renamed node. */
+   The table maps each marker of the node to its argument: a VAL_VAR
+   argument to the variable node of its marker, at the position of the
+   first variable node of the marker, and a closed argument to its node. */
 int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
-                   Tokens term, const Term *node, Tokens *renamed, const Term **renamed_node) {
-  Token *items = arena_alloc(sizeof(Token) * (term.size + 1));
+                   const Term *node, const Term **renamed_node) {
   Nat size = term_marker_bound(node);
   const Term **table = arena_alloc(sizeof *table * (size + 1));
-  for (Nat index = 0; index < size; index++) table[index] = NULL;
-  for (Nat at = 0; at < term.size; at++) {
-    Token head = term.items[at];
-    Nat index = 0;
-    items[at] = head;
-    if (head.kind != TOKEN_IDENTIFIER || !marker_index(head.text, &index)) continue;
+  for (Nat index = 0; index < size; index++) {
+    table[index] = NULL;
+    const Term *first = term_marker_first(node, index);
+    if (first == NULL) continue;
     Val side;
     if (!argument_side(fuel, index, environment, params, values, tokens, &side)) return 0;
     if (side.kind == VAL_TERM) return 0;
     if (side.kind == VAL_VAR) {
-      items[at] = (Token){TOKEN_IDENTIFIER, head.position, 0, marker_name(side.index)};
-      if (index < size) table[index] = term_var(head.position, 0, marker_name(side.index), side.index);
+      table[index] = term_var(first->position, 0, marker_name(side.index), side.index);
       continue;
     }
-    if (!argument_token(index, params, tokens, &items[at])) return 0;
-    if (index < size && !closed_node(index, environment, params, items[at], &table[index])) return 0;
+    Token token;
+    if (!argument_token(index, params, tokens, &token)) return 0;
+    if (!closed_node(index, environment, params, token, &table[index])) return 0;
   }
-  *renamed = (Tokens){items, term.size};
   *renamed_node = term_with_markers(node, table, size);
   return 1;
 }
@@ -1313,7 +1310,7 @@ Nat kept_side(Val side) {
   switch (side.kind) {
   case VAL_CLOSED:
   case VAL_VAR: return 1;
-  case VAL_TERM: return side.node != NULL ? term_marker_bound(side.node) > 0 : has_marker(side.term);
+  case VAL_TERM: return term_marker_bound(side.node) > 0;
   }
   return 0;
 }
@@ -1328,10 +1325,9 @@ int instantiate_side(Fuel fuel, const Bindings *environment, const Params *param
       *result = side;
       return 1;
     }
-    Tokens renamed;
     const Term *node;
-    if (!rename_markers(fuel, environment, params, values, tokens, side.term, side.node, &renamed, &node)) return 0;
-    *result = (Val){.kind = VAL_TERM, .term = renamed, .node = node};
+    if (!rename_markers(fuel, environment, params, values, tokens, side.node, &node)) return 0;
+    *result = (Val){.kind = VAL_TERM, .node = node};
     return 1;
   }
   }
@@ -3074,15 +3070,11 @@ int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *
   case VAL_VAR: *closed = side; return 1;
   case VAL_TERM: {
     const Value *value;
-    Tokens rest;
     Nat left;
     Failure failure = {0, {NULL, 0}};
-    /* D4 part A: a side with a node closes on the node with eval_term. An
-       unknown answer is a refusal: the side does not replay its tokens (K1
-       stays out, Q-D4-4). A side with node NULL keeps the token parse. */
-    int found = side.node != NULL ? eval_term(more, 1, a, bound, side.node, &value, &left, &failure)
-                                  : parse_term(more, 1, 1, a, bound, side.term, &value, &rest, &left, NULL, &failure);
-    if (!found) return 0;
+    /* D4: a side closes on its node with eval_term. An unknown answer is a
+       refusal: the side has no tokens to replay (K1 stays out, Q-D4-4). */
+    if (!eval_term(more, 1, a, bound, side.node, &value, &left, &failure)) return 0;
     return printed_side(more, value, closed);
   }
   }

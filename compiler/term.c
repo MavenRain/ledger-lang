@@ -323,3 +323,19 @@ Nat term_marker_bound(const Term *term) {
   for (const Terms *at = term->args; at != NULL; at = at->tail) bound = larger(bound, term_marker_bound(at->head));
   return bound;
 }
+
+/* term_marker_first gives the first TERM_VAR (the callee, then the
+   arguments in order) that names the marker index, or NULL (the shift and
+   the rename of D4 part B). */
+const Term *term_marker_first(const Term *term, Nat index) {
+  Nat found;
+  if (term == NULL) return NULL;
+  if (term->tag == TERM_VAR && marker_index(term->name, &found) && found == index) return term;
+  const Term *callee = term_marker_first(term->callee, index);
+  if (callee != NULL) return callee;
+  for (const Terms *at = term->args; at != NULL; at = at->tail) {
+    const Term *head = term_marker_first(at->head, index);
+    if (head != NULL) return head;
+  }
+  return NULL;
+}

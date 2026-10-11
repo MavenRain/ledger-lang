@@ -47,7 +47,7 @@ static Val closed_side(Text text) { return (Val){.kind = VAL_CLOSED, .text = tex
 
 static Val var_side(Nat index) { return (Val){.kind = VAL_VAR, .index = index}; }
 
-static Val term_side(Tokens term, const Term *node) { return (Val){.kind = VAL_TERM, .term = term, .node = node}; }
+static Val term_side(const Term *node) { return (Val){.kind = VAL_TERM, .node = node}; }
 
 static const Params *param_cons(Param head, const Params *tail) {
   Params *cell = arena_alloc(sizeof *cell);
@@ -227,34 +227,16 @@ static Nat param_count(const Params *params) {
 }
 
 /* Prefixing a named signature moves its neutral parameter positions. A
-   closed side and the local scopes of function parameter types stay intact. */
-static Token shift_marker(Nat offset, Token token) {
-  Nat index;
-  if (token.kind != TOKEN_IDENTIFIER || !marker_index(token.text, &index)) return token;
-  token.text = marker_name(offset + index);
-  return token;
-}
-
-static Tokens shift_markers(Nat offset, Tokens tokens) {
-  Token *items = arena_alloc(sizeof *items * (tokens.size + 1));
-  for (Nat index = 0; index < tokens.size; index++) items[index] = shift_marker(offset, tokens.items[index]);
-  return (Tokens){items, tokens.size};
-}
-
-/* The node map of shift_markers: the table maps the marker i to the
-   variable node of the marker offset + i, at the position of the first
-   marker token i, with cost 0. */
-static const Term *shift_node(Nat offset, Tokens tokens, const Term *node) {
-  if (node == NULL) return NULL;
+   closed side and the local scopes of function parameter types stay intact.
+   The table of shift_node maps the marker i to the variable node of the
+   marker offset + i, at the position of the first variable node of the
+   marker i, with cost 0. */
+static const Term *shift_node(Nat offset, const Term *node) {
   Nat size = term_marker_bound(node);
   const Term **table = arena_alloc(sizeof *table * (size + 1));
-  for (Nat index = 0; index < size; index++) table[index] = NULL;
-  for (Nat at = 0; at < tokens.size; at++) {
-    Token token = tokens.items[at];
-    Nat index;
-    if (token.kind != TOKEN_IDENTIFIER || !marker_index(token.text, &index) || index >= size || table[index] != NULL)
-      continue;
-    table[index] = term_var(token.position, 0, marker_name(offset + index), offset + index);
+  for (Nat index = 0; index < size; index++) {
+    const Term *first = term_marker_first(node, index);
+    table[index] = first == NULL ? NULL : term_var(first->position, 0, marker_name(offset + index), offset + index);
   }
   return term_with_markers(node, table, size);
 }
@@ -263,7 +245,7 @@ static Val shift_eq_side(Nat offset, Val side) {
   switch (side.kind) {
   case VAL_CLOSED: return side;
   case VAL_VAR: return var_side(offset + side.index);
-  case VAL_TERM: return term_side(shift_markers(offset, side.term), shift_node(offset, side.term, side.node));
+  case VAL_TERM: return term_side(shift_node(offset, side.node));
   }
   return side;
 }
@@ -389,8 +371,8 @@ static const Bindings *marker_bindings(const Params *done, const Bindings *envir
 
 /* A computed side (step D4a) is an atom that names value parameters, such
    as `(some n)`. A function type with type parameters cannot have one. The
-   side keeps the marked tokens and the term, with each marker as a variable
-   node. */
+   side keeps only the term, with each marker as a variable node: the marked
+   tokens are the parse input. A side with no term is refused. */
 static int computed_side(Fuel fuel, const LType *a, const Bindings *environment, const Params *done, Tokens tokens,
                          Val *side, Tokens *rest, Nat *left, Failure *failure) {
   Tokens term;
@@ -403,7 +385,8 @@ static int computed_side(Fuel fuel, const LType *a, const Bindings *environment,
   if (!parse_term(fuel, 1, 1, a, binding_cons(check_marker(), marker_bindings(done, environment)), term, &value,
                   &after, &remaining, &node, failure))
     return 0;
-  *side = term_side(term, marker_vars(node));
+  if (node == NULL) return fail_at(failure, first_position(tokens), eTerm);
+  *side = term_side(marker_vars(node));
   *rest = skip_atom(0, tokens);
   *left = remaining;
   return 1;

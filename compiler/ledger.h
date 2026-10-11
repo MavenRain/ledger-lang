@@ -95,21 +95,19 @@ Text marker_name(Nat index);
 int marker_index(Text name, Nat *index);
 Text token_text(Token token);
 Text tokens_text(Tokens tokens);
-Nat has_marker(Tokens tokens);
 Nat token_position(Token token);
 Nat first_position(Tokens tokens);
 
 /* A side of an equality type. A closed side keeps the canonical JSON text
    of its value. A neutral side keeps the position of a value parameter. A
-   computed side keeps the tokens of an atom and its term (node). A shifted
-   or a renamed side keeps node NULL. */
+   computed side keeps only its term (node), with each marker as a variable
+   node. A computed side always has a node. */
 typedef enum { VAL_CLOSED, VAL_VAR, VAL_TERM } ValKind;
 
 typedef struct {
   ValKind kind;
   Text text;
   Nat index;
-  Tokens term;
   const struct Term *node;
 } Val;
 
@@ -593,7 +591,7 @@ int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Param
                   Tokens tokens, Val *side);
 int argument_token(Nat index, const Params *params, Tokens tokens, Token *token);
 int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
-                   Tokens term, const struct Term *node, Tokens *renamed, const struct Term **renamed_node);
+                   const struct Term *node, const struct Term **renamed_node);
 Nat kept_side(Val side);
 int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
                      Val side, Val *result);
@@ -819,6 +817,7 @@ const Term *marker_vars(const Term *term);
    table[i], and 1 plus the largest marker index in the term (D3-s9 part B). */
 const Term *term_with_markers(const Term *term, const Term *const *table, Nat size);
 Nat term_marker_bound(const Term *term);
+const Term *term_marker_first(const Term *term, Nat index);
 const Term *term_body(Tokens tokens, const Term *callee);
 Tokens term_tokens(const Term *term);
 /* checker.c: the body tokens before rest. */

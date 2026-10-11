@@ -67,10 +67,11 @@ The plan adds neutral values in two stages:
 - D4a (done). Computed sides in one atom. A side can be an atom that
   applies constructor forms to value parameters and literals, such as
   `(some n)` or `(pair n 1)`. The checker keeps such a side as a `valTerm`:
-  its tokens, with a marker for each parameter. `refl` needs the same
-  tokens on both sides, so `(some n)` and `(some m)` are not equal. An
-  application binds the markers to the argument values and evaluates the
-  side to a closed value, so `f 3` proves `Eq (Option Nat) (some 3) (some 3)`.
+  its syntax tree, with a marker variable for each parameter. `refl` needs
+  structurally equal trees on both sides, so `(some n)` and `(some m)` are
+  not equal. An application binds the markers to the argument values and
+  evaluates the side to a closed value, so `f 3` proves
+  `Eq (Option Nat) (some 3) (some 3)`.
   In a definition body the argument at such a position must be a parameter
   of the body until D4c. A computed side is refused in a signature with a type
   parameter, with a function parameter, with the name of an earlier
@@ -82,36 +83,31 @@ The plan adds neutral values in two stages:
   body, the argument at such a position follows the rules of D4a and D4c.
 - D4c (done). Closed arguments in a body. In a definition body, a literal
   or the name of an earlier definition at the position of a marker gives
-  its own token to the computed side. A side with no marker left is
+  its own node to the computed side. A side with no marker left is
   evaluated to a closed value, so `fun (m : Nat) => f 3` proves
   `Eq (Option Nat) (some 3) (some 3)`. A side that keeps a marker keeps the
-  token, so `pf m 1` proves `Eq (Prod Nat Nat) (pair m 1) (pair m 1)`. Such
-  a side does not evaluate the name of an earlier definition, so with
+  argument node, so `pf m 1` proves
+  `Eq (Prod Nat Nat) (pair m 1) (pair m 1)`. Such a side does not evaluate
+  the name of an earlier definition, so with
   `def one : Nat := 1`, `pf m one` does not prove `(pair m 1)`. A
   parenthesized argument is still refused.
 - D3 (syntax tree done). The checker checks a body once into a `Term` and
   keeps its tokens as a fallback. Applications try the term evaluator;
   body evaluation can still fall back to parsing the tokens. The work
   budget and JSON output stay the same. General neutral evaluation and
-  read-back remain planned for D4. A computed side keeps both its tokens
-  with markers and its `Term` node. Remaining token uses include:
+  read-back remain planned for D4. A computed side keeps only its `Term`
+  node, with a marker variable for each parameter. Computed sides compare with
+  `same_term`; shifting and renaming markers walk the tree. `close_side`
+  evaluates the tree with `eval_term` and refuses an unknown answer without
+  replaying tokens. Remaining token uses include:
   - `synth_term`, `eval_apply` and `apply_body` (`compiler/checker.c`):
     body evaluation can fall back to `parse_term`.
   - `unary_of`, `stepper_argument` and the inline, partial and bound
     callback helpers (`compiler/checker.c`): parser routes for structure
     forms and folds keep token-only `TERM_BODY` carriers, which
     `apply_body` parses again.
-  - `val_text` (`compiler/runtime.c`), `type_name` and `same_type`
-    (`compiler/types.c`): the JSON output and the type name.
-  - `close_side` (`compiler/checker.c`): it parses the side tokens again.
   - `mark_side` and `marker_bindings` (`compiler/program.c`): the parse
     input of a computed side.
-  - `rename_markers` (`compiler/checker.c`): it substitutes the side
-    tokens alongside the `Term` node when instantiating an application.
-  - `same_val` (`compiler/runtime.c`) when a side has no `Term` node: it
-    compares the tokens.
-  - `kept_side` (`compiler/checker.c`) when a side has no `Term` node: it
-    calls `has_marker` (`compiler/runtime.c`) on the tokens.
 - D4. Computed sides. A side can be any term, such as `(natAdd n 1)` or
   `(some n)`. The checker evaluates it to a `Val`, which can be neutral.
   Two sides are equal when their read-backs are equal.
