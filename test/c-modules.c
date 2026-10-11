@@ -1777,14 +1777,14 @@ static void test_val_nodes(void) {
   /* Rename (checker.c rename_markers): body parameters in both orders, so
      one row moves each marker to the other index; a body parameter and a
      closed name; closed numbers, a closed string and a closed name. A
-     body gives no VAL_TERM argument (argument_text): a parenthesized
-     argument gives 0. */
+     parenthesized argument in a body gives a VAL_TERM argument
+     (argument_text) that keeps its body markers. */
   rename_row(environment, "d0", "k j", 1, 2);
   rename_row(environment, "d0", "j k", 1, 2);
   rename_row(environment, "d0", "k one", 1, 1);
   rename_row(environment, "dt", "3 \"a\"", 1, 0);
   rename_row(environment, "d0", "one 2", 1, 0);
-  rename_row(environment, "d0", "(k) 1", 0, 0);
+  rename_row(environment, "d0", "(k) 1", 1, 1);
 }
 
 /* The values of the arguments in args for params (parse_arguments). */
@@ -2026,6 +2026,82 @@ static void test_d4_closed_forms(void) {
   normal_row(environment, "nested", "nested", 1);
 }
 
+/* D4 part D (Q-D4-7 lifts 1 and 3, split row D). Lift 1: a parenthesized
+   argument in a body, at a neutral position and in a side; its body
+   parameters become markers and the side takes its normal form. Lift 3:
+   the bare name of an earlier definition in a side. A parenthesized closed
+   argument takes its normal form after the rename (pf m (one)). Q-D4-5: no
+   unfold, thus (natAdd 1 m) does not prove (natAdd m 1). A parenthesized
+   parameter (m) stays a group and does not prove the side m. Called last
+   from main. */
+static void test_d4_lifts(void) {
+  const char *head =
+      "def one : Nat := 1\n"
+      "def identity : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def polyProof : (A : Type 0) -> (n : A) -> Eq A n n := fun (A : Type 0) (n : A) => refl\n"
+      "def polyLast : (A : Type 0) -> (B : Type 0) -> (n : A) -> (j : B) -> Eq B j j := "
+      "fun (A : Type 0) (B : Type 0) (n : A) (j : B) => refl\n"
+      "def polyUse : (A : Type 0) -> (n : A) -> (p : Eq A n n) -> Eq A n n := "
+      "fun (A : Type 0) (n : A) (p : Eq A n n) => p\n"
+      "def natAdd : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => a\n"
+      "def e : (n : Nat) -> Eq Nat n n := fun (n : Nat) => refl\n"
+      "def pf : (n : Nat) -> (j : Nat) -> Eq (Prod Nat Nat) (pair n j) (pair n j) := fun (n : Nat) (j : Nat) => refl\n"
+      "def po : (n : Nat) -> (o : Option Nat) -> Eq (Prod Nat (Option Nat)) (pair n o) (pair n o) := "
+      "fun (n : Nat) (o : Option Nat) => refl\n";
+  const char *accepted[] = {
+      "def g : (m : Nat) -> Eq Nat (natAdd m 1) (natAdd m 1) := fun (m : Nat) => e (natAdd m 1)\n",
+      "def g : (m : Nat) -> Eq Nat (natAdd m 1) (natAdd m 1) := fun (m : Nat) => e (natAdd m one)\n",
+      "def g : (m : Nat) -> Eq (Prod Nat (Option Nat)) (pair m (some m)) (pair m (some m)) := "
+      "fun (m : Nat) => po m (some m)\n",
+      "def p1 : (n : Nat) -> Eq (Prod Nat Nat) (pair n one) (pair n one) := fun (n : Nat) => refl\n"
+      "def u : (m : Nat) -> Eq (Prod Nat Nat) (pair m 1) (pair m 1) := fun (m : Nat) => p1 m\n"
+      "def w : Eq (Prod Nat Nat) (pair 3 1) (pair 3 1) := p1 3\n",
+      "def q : (n : Nat) -> Eq Nat (natAdd n one) (natAdd n 1) := fun (n : Nat) => refl\n",
+      "def g : (m : Nat) -> Eq (Prod Nat Nat) (pair m 1) (pair m 1) := fun (m : Nat) => pf m (one)\n",
+      "def g : (m : Nat) -> Eq Nat (identity m) (identity m) := fun (m : Nat) => polyProof Nat (identity m)\n",
+      "def g : (m : Nat) -> Eq Nat 1 1 := fun (m : Nat) => polyProof Nat (one)\n"
+      "def resultProof : Eq Nat 1 1 := g 3\n",
+      "def g : (m : Nat) -> Eq (Option Nat) (some m) (some m) := fun (m : Nat) => polyProof (Option Nat) (some m)\n"
+      "def resultProof : Eq (Option Nat) (some 3) (some 3) := g 3\n",
+      "def g : (m : Nat) -> Eq (Option Nat) (some m) (some m) := "
+      "fun (m : Nat) => polyLast Text (Option Nat) (\"a\") (some m)\n"
+      "def resultProof : Eq (Option Nat) (some 3) (some 3) := g 3\n",
+      "def g : (m : Nat) -> Eq Nat (identity m) (identity m) := fun (m : Nat) => polyUse Nat (identity m) refl\n",
+      "def g : (m : Nat) -> Eq (Option Nat) (some m) (some m) := "
+      "fun (m : Nat) => polyUse (Option Nat) (some m) refl\n"
+      "def resultProof : Eq (Option Nat) (some 3) (some 3) := g 3\n"};
+  for (size_t at = 0; at < sizeof accepted / sizeof *accepted; at++) {
+    char source[2048];
+    int length = snprintf(source, sizeof source, "%s%s", head, accepted[at]);
+    assert(length > 0 && (size_t)length < sizeof source);
+    const Bindings *environment = NULL;
+    Failure failure = {0, {NULL, 0}};
+    int ok = check_definitions(text(source), &environment, &failure);
+    if (!ok)
+      fprintf(stderr, "lift row %llu: failure at %llu\n", (unsigned long long)at, (unsigned long long)failure.position);
+    assert(ok);
+  }
+
+  struct {
+    const char *source;
+    const Text *message;
+  } refused[] = {
+      {"def g : (m : Nat) -> Eq Nat (natAdd m 1) (natAdd m 1) := fun (m : Nat) => e (natAdd 1 m)\n", &eTerm},
+      {"def bad : (n : Nat) -> Eq Nat (natAdd 1 n) (natAdd n 1) := fun (n : Nat) => refl\n", &eRefl},
+      {"def g : (m : Nat) -> Eq (Prod Nat Nat) (pair m 1) (pair m 1) := fun (m : Nat) => pf (m) 1\n", &eTerm},
+      {"def g : (m : Nat) -> Eq Nat (identity m) (identity m) := fun (m : Nat) => polyProof Text (identity m)\n", &eTerm},
+      {"def g : (m : Nat) -> Eq Nat (identity m) (identity m) := fun (m : Nat) => polyUse Nat (identity m) (e 1)\n", &eTerm}};
+  for (size_t at = 0; at < sizeof refused / sizeof *refused; at++) {
+    char source[2048];
+    int length = snprintf(source, sizeof source, "%s%s", head, refused[at].source);
+    assert(length > 0 && (size_t)length < sizeof source);
+    const Bindings *environment = NULL;
+    Failure failure = {0, {NULL, 0}};
+    assert(!check_definitions(text(source), &environment, &failure));
+    assert(same_text(failure.message, *refused[at].message));
+  }
+}
+
 /* Option payloads share Value kinds with scalars, but need Option terms. */
 static void test_d4_option_literals(void) {
   const char *source =
@@ -2050,7 +2126,8 @@ static void test_d4_option_literals(void) {
    constructor and a neutral application of an earlier definition keep
    their node (Q-D4-5: no unfold, thus some (inc n) is not some n). A closed
    name after the rename gives its literal. A fun with a marker is refused
-   at the position of the fun. Called last from main (test_d4_close). */
+   at the position of the fun. Called from main after test_d4_close;
+   test_d4_lifts (D4 part D) comes after it. */
 static void test_d4_normal(void) {
   const char *source =
       "def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
@@ -2120,6 +2197,7 @@ int main(void) {
   test_d4_closed_forms();
   test_d4_option_literals();
   test_d4_normal();
+  test_d4_lifts();
   puts("C module tests passed");
   return 0;
 }

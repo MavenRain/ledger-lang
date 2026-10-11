@@ -586,7 +586,7 @@ int param_level(Text name, Nat count, const Bindings *environment, Nat *found, N
 int body_level(Text name, const Bindings *environment, Nat *found, Nat *index);
 Nat proof_in_scope(Text name, const LType *ty, const Bindings *environment);
 int printed_side(Fuel fuel, const Value *value, Val *side);
-int argument_text(Fuel fuel, const Bindings *environment, const Value *value, Tokens tokens, Val *side);
+int argument_text(Fuel fuel, const Bindings *environment, const LType *a, const Value *value, Tokens tokens, Val *side);
 int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Params *params, const Values *values,
                   Tokens tokens, Val *side);
 int argument_token(Nat index, const Params *params, Tokens tokens, Token *token);

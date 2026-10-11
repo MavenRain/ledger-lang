@@ -338,25 +338,21 @@ static Tokens atom_of(Nat depth, Tokens tokens) {
   return (Tokens){tokens.items, count};
 }
 
-/* A computed side renames each value parameter to its marker. It cannot
-   name an earlier definition or hold an inline function. */
+/* A computed side renames each value parameter to its marker. It can name
+   an earlier definition: at the head of an application (D4 part C, Q-D4-7
+   lift 2) and as a bare name (D4 part D, lift 3). It cannot hold an inline
+   function. */
 static int mark_side(const Bindings *environment, const Params *done, Tokens tokens, Tokens *marked) {
   Token *items = arena_alloc(sizeof *items * (tokens.size + 1));
   for (Nat at = 0; at < tokens.size; at++) {
     Token head = tokens.items[at];
     Nat found;
     Nat level;
-    const Binding *item;
     if (head.kind == TOKEN_IDENTIFIER && marker_for(head.text, done, &found, &level)) {
       if (!found) return 0;
       head.text = marker_name(level);
-    } else if (head.kind == TOKEN_IDENTIFIER) {
-      /* D4 part C (Q-D4-7 lift 2): an earlier definition at the head of an
-         application (the token after the open parenthesis) is accepted. */
-      if (lookup(head.text, environment, &item) &&
-          !(at > 0 && tokens.items[at - 1].kind == TOKEN_PUNCTUATION && tokens.items[at - 1].number == '('))
-        return 0;
-      if (same_text(head.text, sfun) == 1) return 0;
+    } else if (head.kind == TOKEN_IDENTIFIER && same_text(head.text, sfun) == 1) {
+      return 0;
     }
     items[at] = head;
   }
