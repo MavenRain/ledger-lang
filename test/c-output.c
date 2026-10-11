@@ -23,6 +23,11 @@ Nat same_term(const Term *left, const Term *right) {
   return 0;
 }
 
+Text term_text(const Term *term) {
+  (void)term;
+  return text_end();
+}
+
 int main(void) {
   assert(freopen("/dev/null", "r", stdout) != NULL);
   assert(setvbuf(stdout, NULL, _IONBF, 0) == 0);

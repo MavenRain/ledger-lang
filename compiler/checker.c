@@ -3076,8 +3076,13 @@ int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *
     const Value *value;
     Tokens rest;
     Nat left;
-    Failure failure;
-    if (!parse_term(more, 1, 1, a, bound, side.term, &value, &rest, &left, NULL, &failure)) return 0;
+    Failure failure = {0, {NULL, 0}};
+    /* D4 part A: a side with a node closes on the node with eval_term. An
+       unknown answer is a refusal: the side does not replay its tokens (K1
+       stays out, Q-D4-4). A side with node NULL keeps the token parse. */
+    int found = side.node != NULL ? eval_term(more, 1, a, bound, side.node, &value, &left, &failure)
+                                  : parse_term(more, 1, 1, a, bound, side.term, &value, &rest, &left, NULL, &failure);
+    if (!found) return 0;
     return printed_side(more, value, closed);
   }
   }

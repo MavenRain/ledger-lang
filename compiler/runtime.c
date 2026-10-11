@@ -255,7 +255,7 @@ Text val_text(Val side) {
   switch (side.kind) {
     case VAL_CLOSED: return side.text;
     case VAL_VAR: return text_byte(0, text_one(side.index));
-    case VAL_TERM: return text_byte(1, tokens_text(side.term));
+    case VAL_TERM: return text_byte(1, side.node != NULL ? term_text(side.node) : tokens_text(side.term));
   }
   return text_end();
 }

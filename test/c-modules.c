@@ -1798,6 +1798,127 @@ static void test_val_nodes(void) {
   rename_row(environment, "d0", "(k) 1", 0, 0);
 }
 
+/* The values of the arguments in args for params (parse_arguments). */
+static const Values *call_values(const Bindings *environment, const Params *params, const char *args) {
+  const Values *values;
+  Tokens rest;
+  Nat left;
+  Failure failure;
+  assert(parse_arguments(1000, 1000, 1, param_types(params), environment, lexed(args), &values, &rest, &left, NULL,
+                         &failure));
+  assert(rest.size == 0);
+  return values;
+}
+
+/* The closed side of side in bound: close_body_side in a body scope, else
+   close_side. */
+static Val closed_in(const Bindings *bound, const LType *a, Val side) {
+  Val closed;
+  assert(checking_body(bound) == 1 ? close_body_side(1000, bound, a, side, &closed)
+                                   : close_side(1000, bound, a, side, &closed));
+  assert(closed.kind == VAL_CLOSED);
+  return closed;
+}
+
+/* A D4 part A row: val_text on the node of side gives the token text, and
+   the close on the node gives the closed side of the token parse (the same
+   side with node NULL) in the same scope. Gives the token answer. */
+static Val close_row(const Bindings *bound, const LType *a, Val side) {
+  assert(side.kind == VAL_TERM && side.node != NULL);
+  Val bare = {.kind = VAL_TERM, .term = side.term};
+  assert(same_text(val_text(side), val_text(bare)));
+  Val by_tokens = closed_in(bound, a, bare);
+  assert(same_text(val_text(closed_in(bound, a, side)), val_text(by_tokens)));
+  return by_tokens;
+}
+
+/* The rows of the Eq type ty in bound. closed is the type that close_result
+   or close_params gives for ty: its sides are the token answers. */
+static void close_type_row(const Bindings *bound, const LType *ty, const LType *closed) {
+  const LType *a;
+  const LType *b;
+  Val lhs;
+  Val rhs;
+  Val x;
+  Val y;
+  assert(sides_of(ty, &a, &lhs, &rhs) && sides_of(closed, &b, &x, &y));
+  assert(x.kind == VAL_CLOSED && same_text(val_text(x), val_text(close_row(bound, a, lhs))));
+  assert(y.kind == VAL_CLOSED && same_text(val_text(y), val_text(close_row(bound, a, rhs))));
+}
+
+/* A D4c row: instantiate_side renames the markers of the left side of p to
+   the closed arguments in args, in the body scope. kept_side gives 0, thus
+   close_body_side closes the renamed side. */
+static void body_close_row(const Bindings *environment, const Bindings *body, const char *args) {
+  const Binding *p = fun_named(environment, "p");
+  const LType *a;
+  Val lhs;
+  Val rhs;
+  Val side;
+  assert(sides_of(p->type, &a, &lhs, &rhs));
+  assert(instantiate_side(1000, body, p->params, call_values(body, p->params, args), lexed(args), lhs, &side) == 1);
+  assert(kept_side(side) == 0);
+  close_row(body, a, side);
+}
+
+/* D4 part A: a computed side in a result (D4a, close_result), in the type of
+   a proof parameter (D4b, close_params) and with closed arguments in a body
+   (D4c, close_body_side) closes on its node with eval_term. Called last from
+   main: a marker on the node resolves by name (argument_bindings sets no
+   slot), thus each close adds slot misses, and an earlier row asserts
+   slot_mismatches() == 0. */
+static void test_d4_close(void) {
+  const char *source =
+      "def p : (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := fun (n : Nat) (m : Nat) => refl\n"
+      "def q : (n : Nat) -> (m : Nat) -> (e : Eq (Prod Nat Nat) (pair n m) (pair n m)) -> "
+      "Eq (Prod Nat Nat) (pair n m) (pair n m) := fun (n : Nat) (m : Nat) (e : Eq (Prod Nat Nat) (pair n m) (pair n m)) "
+      "=> symm e\n"
+      "def w : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl\n"
+      "def three : (a : Nat) -> (b : Nat) -> (c : Nat) -> Nat := fun (a : Nat) (b : Nat) (c : Nat) => c\n"
+      "def one : Nat := 1\n"
+      "def outer : (j : Nat) -> (k : Nat) -> Nat := fun (j : Nat) (k : Nat) => k\n";
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* D4a: the results of p 2 6 and w 4. */
+  const Binding *p = fun_named(environment, "p");
+  const Values *p_values = call_values(environment, p->params, "2 6");
+  const LType *closed;
+  assert(close_result(1000, environment, p->params, p_values, 1, p->type, &closed));
+  close_type_row(argument_bindings(0, p->params, p_values, environment), p->type, closed);
+  const Binding *w = fun_named(environment, "w");
+  const Values *w_values = call_values(environment, w->params, "4");
+  assert(close_result(1000, environment, w->params, w_values, 1, w->type, &closed));
+  close_type_row(argument_bindings(0, w->params, w_values, environment), w->type, closed);
+
+  /* D4b: the proof parameter e of q 2 6. The third value is a number: the
+     sides of e use only the markers of n and m. */
+  const Binding *q = fun_named(environment, "q");
+  const Values *q_values = call_values(environment, fun_named(environment, "three")->params, "2 6 0");
+  const Params *q_closed = close_params(1000, environment, q->params, q_values, q->params);
+  close_type_row(argument_bindings(0, q->params, q_values, environment), q->params->tail->tail->head.type,
+                 q_closed->tail->tail->head.type);
+
+  /* D4c: closed numbers and the closed name one in the body of outer. */
+  Bindings *body = arena_alloc(sizeof *body);
+  *body = (Bindings){.head = body_marker(2),
+                     .tail = bind_params(fun_named(environment, "outer")->params, NULL, environment)};
+  body_close_row(environment, body, "3 4");
+  body_close_row(environment, body, "one 2");
+
+  /* The unknown answer (Q-D4-4): a side with markers in a scope with no
+     marker binding. The close on the node gives 0 and does not replay the
+     tokens. The token parse also gives 0. */
+  const LType *a;
+  Val lhs;
+  Val rhs;
+  Val none;
+  assert(sides_of(p->type, &a, &lhs, &rhs));
+  assert(close_side(1000, environment, a, lhs, &none) == 0);
+  assert(close_side(1000, environment, a, (Val){.kind = VAL_TERM, .term = lhs.term}, &none) == 0);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -1814,6 +1935,7 @@ int main(void) {
   test_val_terms();
   test_val_nodes();
   test_closed_marker_nodes();
+  test_d4_close();
   puts("C module tests passed");
   return 0;
 }
