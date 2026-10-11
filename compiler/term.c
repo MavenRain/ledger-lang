@@ -34,6 +34,14 @@ const Term *term_var(Nat position, Nat cost, Text name, Nat index) {
   return make_term((Term){.tag = TERM_VAR, .position = position, .cost = cost, .index = index, .name = name});
 }
 
+const Term *term_closed(Nat position, const LType *type, const Value *value, Text printed) {
+  if (type->tag == TY_NAT) return term_number(position, 0, value->number);
+  if (type->tag == TY_TEXT) return term_string(position, 0, value->text);
+  Typed *closed = arena_alloc(sizeof *closed);
+  *closed = (Typed){type, value};
+  return make_term((Term){.tag = TERM_CLOSED, .position = position, .name = printed, .closed = closed});
+}
+
 /* TERM_NAME, TERM_APPLY, TERM_PARTIAL and TERM_CONSTRUCT. */
 const Term *term_named(TermTag tag, Nat position, Nat cost, Text name, const TermTypes *types, const Terms *args) {
   return make_term((Term){.tag = tag, .position = position, .cost = cost, .name = name, .types = types, .args = args});
@@ -114,6 +122,7 @@ Nat same_term(const Term *left, const Term *right) {
   switch (left->tag) {
     case TERM_NUMBER: return left->number == right->number;
     case TERM_STRING: return same_text(left->name, right->name);
+    case TERM_CLOSED: return same_type(left->closed->type, right->closed->type) && same_text(left->name, right->name);
     case TERM_VAR: return left->index == right->index;
     case TERM_NAME:
     case TERM_CONSTRUCT:
@@ -127,6 +136,8 @@ Nat same_term(const Term *left, const Term *right) {
     case TERM_REFL:
     case TERM_FIRST:
     case TERM_SECOND:
+    case TERM_WITNESS:
+    case TERM_PAYLOAD:
     case TERM_SYMM:
     case TERM_TRANS:
     case TERM_EITHER:
@@ -148,6 +159,7 @@ static Text term_keyword(TermTag tag) {
   switch (tag) {
     case TERM_NUMBER:
     case TERM_STRING:
+    case TERM_CLOSED:
     case TERM_GROUP:
     case TERM_VAR:
     case TERM_NAME:
@@ -159,6 +171,8 @@ static Text term_keyword(TermTag tag) {
     case TERM_REFL: return srefl;
     case TERM_FIRST: return sfirst;
     case TERM_SECOND: return ssecond;
+    case TERM_WITNESS: return switness;
+    case TERM_PAYLOAD: return spayload;
     case TERM_SYMM: return ssymm;
     case TERM_TRANS: return strans;
     case TERM_EITHER: return seither;
@@ -205,6 +219,7 @@ static void emit_term(TextBuilder *builder, const Term *term) {
   switch (term->tag) {
     case TERM_NUMBER: emit_token(builder, TOKEN_NUMBER, term->number, text_end()); return;
     case TERM_STRING: emit_token(builder, TOKEN_STRING, 0, term->name); return;
+    case TERM_CLOSED: emit_token(builder, TOKEN_IDENTIFIER, 0, term->name); return;
     case TERM_GROUP:
       emit_mark(builder, 40);
       emit_terms(builder, term->args);
@@ -231,6 +246,8 @@ static void emit_term(TextBuilder *builder, const Term *term) {
     case TERM_REFL:
     case TERM_FIRST:
     case TERM_SECOND:
+    case TERM_WITNESS:
+    case TERM_PAYLOAD:
     case TERM_SYMM:
     case TERM_TRANS:
     case TERM_EITHER:

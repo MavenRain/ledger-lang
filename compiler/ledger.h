@@ -754,6 +754,9 @@ typedef enum {
   TERM_FOLD_VALUE,
   TERM_UNFOLD,
   TERM_UNFOLD_VALUE,
+  TERM_WITNESS,
+  TERM_PAYLOAD,
+  TERM_CLOSED,
   TERM_BODY
 } TermTag;
 
@@ -776,7 +779,9 @@ typedef enum {
    the binder span on TERM_FUN (the tokens after fun up to the body) and
    the body span on TERM_BODY. end is the position of the first token after
    the argument list on TERM_APPLY, TERM_PARTIAL and TERM_CONSTRUCT (0 when
-   no token follows). A list of terms; NULL is the end. */
+   no token follows). TERM_CLOSED is an internal typed data value: closed
+   keeps the type and value, and name keeps its canonical JSON text.
+   A list of terms; NULL is the end. */
 typedef struct Term Term;
 typedef struct Terms Terms;
 struct Term {
@@ -791,6 +796,7 @@ struct Term {
   const Terms *args;
   Tokens tokens;
   Nat end;
+  const Typed *closed;
 };
 
 struct Terms {
@@ -812,6 +818,8 @@ const Terms *terms_item(const Term *head, const Terms *tail);
 const TermTypes *term_types_item(TermType head, const TermTypes *tail);
 const Term *term_number(Nat position, Nat cost, Nat number);
 const Term *term_string(Nat position, Nat cost, Text text);
+/* An internal closed value keeps its checked type and canonical JSON text. */
+const Term *term_closed(Nat position, const LType *type, const Value *value, Text printed);
 const Term *term_var(Nat position, Nat cost, Text name, Nat index);
 const Term *term_named(TermTag tag, Nat position, Nat cost, Text name, const TermTypes *types, const Terms *args);
 const Term *term_call(TermTag tag, Nat position, Nat cost, Tokens tokens, Nat end, Text name, const Term *callee,
@@ -846,6 +854,8 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
 int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left, Failure *failure);
 /* checker.c: the normal form of a side node in the scope, or 0 (D4 part C). */
 int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term **normal, Failure *failure);
+int side_normal_at(Fuel fuel, const Bindings *scope, const LType *type, const Term *node,
+                   const Term **normal, Failure *failure);
 
 #include "literals.h"
 

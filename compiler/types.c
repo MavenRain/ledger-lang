@@ -40,6 +40,7 @@ typedef struct SigmaKey SigmaKey;
 struct SigmaKey {
   Nat marker;
   Nat depth;
+  Text name;
   const SigmaKey *outer;
 };
 
@@ -47,20 +48,22 @@ struct SigmaKey {
    items. Their lexical depth is independent of the surrounding signature. */
 static Text bound_key(Nat depth) { return text_byte(0, text_byte(depth, text_one(0))); }
 
-static Text marker_key(Nat marker, const SigmaKey *scope) {
+/* The key form names a bound marker by its depth; the type name uses the
+   binder name of its Sigma. */
+static Text marker_key(Nat key, Nat marker, const SigmaKey *scope) {
   for (; scope != NULL; scope = scope->outer)
-    if (scope->marker == marker) return bound_key(scope->depth);
+    if (scope->marker == marker) return key ? bound_key(scope->depth) : scope->name;
   return marker_name(marker);
 }
 
-static Text side_key(Val side, const SigmaKey *scope) {
+static Text side_key(Nat key, Val side, const SigmaKey *scope) {
   if (scope == NULL || side.kind == VAL_CLOSED) return val_text(side);
-  if (side.kind == VAL_VAR) return marker_key(side.index, scope);
+  if (side.kind == VAL_VAR) return marker_key(key, side.index, scope);
   Nat size = term_marker_bound(side.node);
   const Term **table = arena_alloc(sizeof *table * (size + 1));
   for (Nat index = 0; index < size; index++) {
     const Term *first = term_marker_first(side.node, index);
-    table[index] = first == NULL ? NULL : term_var(first->position, 0, marker_key(index, scope), index);
+    table[index] = first == NULL ? NULL : term_var(first->position, 0, marker_key(key, index, scope), index);
   }
   return val_text((Val){.kind = VAL_TERM, .node = term_with_markers(side.node, table, size)});
 }
@@ -90,17 +93,17 @@ static Text type_text(Nat key, const LType *ty, const SigmaKey *scope) {
     case TY_UNIVERSE: return ty->level == 0 ? sType0 : sType1;
     case TY_EQ:
       return append_text(unary_type_name(sEq, type_text(key, ty->left, scope)),
-        text_byte(32, text_byte(40, append_text(key ? side_key(ty->lhs, scope) : val_text(ty->lhs),
+        text_byte(32, text_byte(40, append_text(side_key(key, ty->lhs, scope),
           text_byte(41, text_byte(32, text_byte(40,
-            append_text(key ? side_key(ty->rhs, scope) : val_text(ty->rhs), text_one(41)))))))));
+            append_text(side_key(key, ty->rhs, scope), text_one(41)))))))));
     case TY_QUERY: return unary_type_name(opsTextQuery(), type_text(key, ty->left, scope));
     case TY_ARROW:
       return text_byte(40, append_text(type_text(key, ty->left, scope), text_byte(41, text_byte(32,
         text_byte(45, text_byte(62, text_byte(32, type_text(key, ty->right, scope))))))));
     case TY_SIGMA: {
-      SigmaKey inner = {ty->level, scope == NULL ? 0 : scope->depth + 1, scope};
+      SigmaKey inner = {ty->level, scope == NULL ? 0 : scope->depth + 1, ty->name, scope};
       Text a = type_text(key, ty->left, scope);
-      Text b = type_text(key, ty->right, key ? &inner : scope);
+      Text b = type_text(key, ty->right, &inner);
       if (!key) return sigma_type_name(ty, a, b);
       return binary_type_name(sSigma, append_text(bound_key(inner.depth),
                               text_byte(32, text_byte(58, text_byte(32, a)))), b);

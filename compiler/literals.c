@@ -451,6 +451,18 @@ static const Nat kSecond_items[] = {
 };
 const Text kSecond = {kSecond_items, 6};
 
+/* "witness" */
+static const Nat kWitness_items[] = {
+  'w', 'i', 't', 'n', 'e', 's', 's',
+};
+const Text kWitness = {kWitness_items, 7};
+
+/* "payload" */
+static const Nat kPayload_items[] = {
+  'p', 'a', 'y', 'l', 'o', 'a', 'd',
+};
+const Text kPayload = {kPayload_items, 7};
+
 /* "inl" */
 static const Nat kInl_items[] = {
   'i', 'n', 'l',
@@ -652,6 +664,12 @@ static const Nat eProduct_items[] = {
   'a', ' ', 'p', 'r', 'o', 'd', 'u', 'c', 't', ' ', 't', 'y', 'p', 'e',
 };
 const Text eProduct = {eProduct_items, 33};
+
+/* "expected a Sigma type" */
+static const Nat eSigma_items[] = {
+  'e', 'x', 'p', 'e', 'c', 't', 'e', 'd', ' ', 'a', ' ', 'S', 'i', 'g', 'm', 'a', ' ', 't', 'y', 'p', 'e',
+};
+const Text eSigma = {eSigma_items, 21};
 
 /* "type is not in the declared universe" */
 static const Nat eUniverse_items[] = {

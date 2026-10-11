@@ -419,7 +419,7 @@ static int computed_side(Fuel fuel, const LType *a, const Bindings *environment,
   const Term *marked = marker_vars(node);
   /* D4 part C: a side with a marker takes its normal form (design item 5).
      close_side closes a side with no marker later, as before. */
-  if (term_marker_bound(marked) > 0 && !side_normal(fuel, scope, marked, &marked, failure)) return 0;
+  if (term_marker_bound(marked) > 0 && !side_normal_at(fuel, scope, a, marked, &marked, failure)) return 0;
   *side = term_side(marked);
   *rest = skip_atom(0, tokens);
   *left = remaining;

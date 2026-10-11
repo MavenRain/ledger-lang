@@ -84,6 +84,23 @@ test('products and both sum injections', () => {
   assert.equal(run('def a : Prod Nat Text := pair 7 "x"').instances[0].type, 'Prod (Nat) (Text)');
 });
 
+test('Sigma pack, projections on closed values and the witness and payload keys', () => {
+  const s = 'def s : Sigma (x : Nat) (Eq Nat x x) := pack 1 refl';
+  const t = 'def t : Sigma Nat Text := pack 1 "a"';
+  assert.deepEqual(run(s).instances,
+    [{ name: 's', type: 'Sigma (x : Nat) (Eq (Nat) (x) (x))', value: { witness: 1, payload: null } }]);
+  assert.deepEqual(run(t).instances, [{ name: 't', type: 'Sigma (Nat) (Text)', value: { witness: 1, payload: 'a' } }]);
+  assert.deepEqual(values(`${s} def w : Nat := witness s def p : Eq Nat 1 1 := payload s ${t} def wt : Nat := witness t def pt : Text := payload t`),
+    [{ witness: 1, payload: null }, 1, { witness: 1, payload: 'a' }, 1, 'a']);
+  assert.deepEqual(values('def one : Sigma (x : Nat) (Eq Nat x 1) := pack 1 refl'), [{ witness: 1, payload: null }]);
+  reject(`${s} def p : Eq Nat 2 2 := payload s`, /does not have the declared type/);
+  reject('def r : Nat := witness (pack 1 refl)', /expected a Sigma type/);
+  reject('def r : Nat := pack 1 refl', /expected a Sigma type/);
+  reject('def r : Sigma (x : Nat) (Eq Nat x 2) := pack 1 refl', /refl needs two equal sides/);
+  reject('def r : Nat := witness 1', /cannot infer/);
+  reject('def n : Nat := 1 def r : Nat := witness n', /expected a Sigma type/);
+});
+
 test('Kind enum constructors', () => {
   const kinds = ['Party', 'Membership', 'Commercial', 'Commitment', 'Artifact', 'Event', 'Assignment', 'Policy'];
   assert.deepEqual(values(kinds.map((kind, i) => `def k${i} : Kind := kind${kind}`).join('\n')),

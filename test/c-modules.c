@@ -130,7 +130,10 @@ static void test_term(void) {
                        term_form(TERM_FOLD, 0, 1, terms_item(n, one(n))),
                        term_form(TERM_FOLD_VALUE, 0, 1, terms_item(n, one(n))),
                        term_form(TERM_UNFOLD, 0, 1, terms_item(n, one(n))),
-                       term_form(TERM_UNFOLD_VALUE, 0, 1, terms_item(n, one(n)))};
+                       term_form(TERM_UNFOLD_VALUE, 0, 1, terms_item(n, one(n))),
+                       term_form(TERM_WITNESS, 0, 1, one(n)),
+                       term_form(TERM_PAYLOAD, 0, 1, one(n)),
+                       term_closed(0, &(LType){.tag = TY_FLAG}, &(Value){.kind = VALUE_FLAG, .flag = FLAG_YES}, text("true"))};
   Nat count = sizeof(all) / sizeof(all[0]);
   /* TERM_BODY is the last tag and is not in the array: it has no text and
      compares as its callee. */
@@ -2195,8 +2198,8 @@ static void sigma_refused(const char *source, const char *at, Text message) {
 
 /* D5 part A: the Sigma type (design items 1 to 4 and 9). The parse of both
    forms, the marker level of the binder, type_name, same_type and the
-   refusals. Part A has no pack, thus a definition of a Sigma type is
-   refused at the body (ruling R-A1). Called from main after
+   refusals. A body that is not pack is refused for a Sigma type (ruling
+   R-A1; part B adds pack, see test_d5_pack). Called from main after
    test_d4_lifts. */
 static void test_d5_type(void) {
   /* Both forms. The short form has no binder name. */
@@ -2333,6 +2336,122 @@ static void test_d5_scope(void) {
       "s\n", eTerm);
 }
 
+static const Binding *value_named(const Bindings *environment, const char *name) {
+  for (; environment != NULL; environment = environment->tail)
+    if (environment->head.kind == BIND_VALUE && same_text(environment->head.name, text(name))) return &environment->head;
+  return NULL;
+}
+
+/* D5 part B: pack against an expected Sigma type, witness and payload on a
+   closed value, the JSON keys witness and payload, and the failure
+   "expected a Sigma type" (design items 5 to 7). Called from main after
+   test_d5_type. */
+static void test_d5_pack(void) {
+  const char *source =
+      "def s : Sigma (x : Nat) (Eq Nat x x) := pack 1 refl\n"
+      "def one : Sigma (x : Nat) (Eq Nat x 1) := pack 1 refl\n"
+      "def t : Sigma Nat Text := pack 1 \"a\"\n"
+      "def w : Nat := witness s\n"
+      "def p : Eq Nat 1 1 := payload s\n"
+      "def wt : Nat := witness t\n"
+      "def pt : Text := payload t\n"
+      "def u : Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y)) := pack 1 (pack 1 refl)\n"
+      "def q : Sigma (y : Nat) (Eq Nat 1 y) := payload u\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* pack checks a, puts the value of a for x in B and checks b: `one` checks
+     refl against Eq Nat 1 1. The type text puts each argument in
+     parentheses and names a bound marker by its binder. An Eq payload
+     writes null. */
+  const Binding *s = value_named(environment, "s");
+  assert(same_text(type_name(s->type), text("Sigma (x : Nat) (Eq (Nat) (x) (x))")));
+  assert(same_text(printed(s->value), text("{\"witness\":1,\"payload\":null}")));
+  assert(same_text(printed(value_named(environment, "one")->value), text("{\"witness\":1,\"payload\":null}")));
+  const Binding *t = value_named(environment, "t");
+  assert(same_text(type_name(t->type), text("Sigma (Nat) (Text)")));
+  assert(same_text(printed(t->value), text("{\"witness\":1,\"payload\":\"a\"}")));
+
+  /* Projections on closed values: witness gives projection 1 with type A,
+     payload gives projection 2 with B where x is the witness. A nested Sigma
+     keeps its own binder. */
+  assert(same_text(printed(value_named(environment, "w")->value), text("1")));
+  assert(same_text(printed(value_named(environment, "wt")->value), text("1")));
+  assert(same_text(printed(value_named(environment, "pt")->value), text("\"a\"")));
+  const Binding *u = value_named(environment, "u");
+  assert(same_text(type_name(u->type), text("Sigma (x : Nat) (Sigma (y : Nat) (Eq (Nat) (x) (y)))")));
+  assert(same_text(printed(u->value), text("{\"witness\":1,\"payload\":{\"witness\":1,\"payload\":null}}")));
+  assert(same_text(printed(value_named(environment, "q")->value), text("{\"witness\":1,\"payload\":null}")));
+
+  /* Refusals. pack with no expected Sigma type and witness of a value that is
+     not a Sigma give the new failure; a literal argument does not synthesize
+     a type (as `first 1`). */
+  sigma_refused("def r : Nat := witness (pack 1 refl)\n", "pack", eSigma);
+  sigma_refused("def r : Nat := pack 1 refl\n", "pack", eSigma);
+  sigma_refused("def n : Nat := 1\ndef r : Nat := witness n\n", "witness n", eSigma);
+  sigma_refused("def r : Nat := witness 1\n", "1\n", eInfer);
+  sigma_refused("def r : Sigma (x : Nat) (Eq Nat x 2) := pack 1 refl\n", "refl", text("refl needs two equal sides"));
+  sigma_refused("def u : Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y)) := pack 1 (pack 2 refl)\n", "refl",
+                text("refl needs two equal sides"));
+  sigma_refused("def s : Sigma (x : Nat) (Eq Nat x x) := pack 1 refl\ndef p : Eq Nat 2 2 := payload s\n", "payload s",
+                eTerm);
+  sigma_refused("def t : Sigma Nat Text := pack 1 \"a\"\ndef wt : Text := witness t\n", "witness t", eTerm);
+
+  /* Part C: pack in a body and a projection of a parameter. */
+  sigma_refused("def f : (n : Nat) -> Sigma (x : Nat) (Eq Nat x x) := fun (n : Nat) => pack n refl\n",
+                "pack n", eTerm);
+  sigma_refused("def f : (s : Sigma Nat Text) -> Nat := fun (s : Sigma Nat Text) => witness s\n", "witness s", eTerm);
+}
+
+static void test_d5_witness_types(void) {
+  const char *source =
+      "def o : Sigma (x : Option Nat) (Eq (Option Nat) x x) := pack (some 1) refl\n"
+      "def op : Eq (Option Nat) (some 1) (some 1) := payload o\n"
+      "def f : Sigma (x : Flag) (Eq Flag x flagYes) := pack flagYes refl\n"
+      "def fp : Eq Flag flagYes flagYes := payload f\n"
+      "def l : Sigma (x : List Nat) (Eq (List Nat) x (cons 1 nil)) := pack (cons 1 nil) refl\n"
+      "def lp : Eq (List Nat) (cons 1 nil) (cons 1 nil) := payload l\n"
+      "def c : Sigma (x : Option Nat) (Eq (Prod (Option Nat) Nat) (pair x 2) (pair (some 1) 2)) := pack (some 1) refl\n"
+      "def cp : Eq (Prod (Option Nat) Nat) (pair (some 1) 2) (pair (some 1) 2) := payload c\n"
+      "def n : Sigma (x : List Nat) (Sigma (y : Nat) (Eq (Prod (List Nat) Nat) (pair x y) (pair x y))) := pack (cons 1 nil) (pack 2 refl)\n"
+      "def q : Sigma (y : Nat) (Eq (Prod (List Nat) Nat) (pair (cons 1 nil) y) (pair (cons 1 nil) y)) := payload n\n"
+      "def np : Eq (Prod (List Nat) Nat) (pair (cons 1 nil) 2) (pair (cons 1 nil) 2) := payload (payload n)\n"
+      "def proof : Eq Nat 1 1 := refl\n"
+      "def use : (n : Nat) -> (e : Eq Nat n n) -> (m : Nat) -> Nat := fun (n : Nat) (e : Eq Nat n n) (m : Nat) => m\n"
+      "def dependent : (x : Nat) -> Eq Nat (use 1 proof x) (use 1 proof x) := fun (x : Nat) => refl\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  assert(same_text(printed(value_named(environment, "o")->value), text("{\"witness\":1,\"payload\":null}")));
+  assert(same_text(printed(value_named(environment, "f")->value), text("{\"witness\":true,\"payload\":null}")));
+  assert(same_text(printed(value_named(environment, "l")->value), text("{\"witness\":[1],\"payload\":null}")));
+  sigma_refused("def f : Sigma (x : Flag) (Eq Flag x flagNo) := pack flagYes refl\n", "refl",
+                text("refl needs two equal sides"));
+  sigma_refused("def l : Sigma (x : List Nat) (Eq (List Nat) x nil) := pack (cons 1 nil) refl\n", "refl",
+                text("refl needs two equal sides"));
+}
+
+static void test_d5_equality_carrier(void) {
+  const char *source =
+      "def s : Sigma (z : Nat) (Eq Nat 1 z) := pack 1 refl\n"
+      "def u : Sigma (x : Nat) (Sigma (y : Sigma (z : Nat) (Eq Nat x z)) (Eq (Sigma (z : Nat) (Eq Nat x z)) y y)) := pack 1 (pack s refl)\n"
+      "def p : Eq (Sigma (z : Nat) (Eq Nat 1 z)) s s := payload (payload u)\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  assert(same_text(printed(value_named(environment, "p")->value), text("null")));
+  char bad[1024];
+  int size = snprintf(bad, sizeof bad, "%s%s", source,
+      "def s2 : Sigma (z : Nat) (Eq Nat 2 z) := pack 2 refl\n"
+      "def bad : Eq (Sigma (z : Nat) (Eq Nat 2 z)) s2 s2 := payload (payload u)\n");
+  assert(size > 0 && (size_t)size < sizeof bad);
+  environment = NULL;
+  assert(!check_definitions(text(bad), &environment, &failure));
+  assert(failure.position == (Nat)(strstr(strstr(bad, "def bad :"), "payload") - bad));
+  assert(same_text(failure.message, eTerm));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -2356,6 +2475,9 @@ int main(void) {
   test_d4_normal();
   test_d4_lifts();
   test_d5_type();
+  test_d5_pack();
+  test_d5_witness_types();
+  test_d5_equality_carrier();
   test_d5_scope();
   puts("C module tests passed");
   return 0;
