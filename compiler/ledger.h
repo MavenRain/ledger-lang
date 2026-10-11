@@ -132,12 +132,15 @@ typedef enum {
   TY_UNIVERSE,
   TY_EQ,
   TY_QUERY,
-  TY_ARROW
+  TY_ARROW,
+  TY_SIGMA
 } LTypeTag;
 
 /* TY_REF and TY_SCHEMA keep name. TY_UNIVERSE keeps level. TY_OPTION,
    TY_LIST, TY_QUERY and TY_EQ keep left. TY_PROD, TY_SUM and TY_ARROW keep
-   left and right. TY_EQ keeps its sides in lhs and rhs. */
+   left and right. TY_EQ keeps its sides in lhs and rhs. TY_SIGMA keeps the
+   binder name in name (empty for the short form), the marker of the binder
+   in level, A in left and B in right. */
 typedef struct LType LType;
 struct LType {
   LTypeTag tag;
@@ -381,6 +384,13 @@ int data_types(Nat at, const LType *a, Nat bt, const LType *b, const LType *resu
                Tokens *rest, Failure *failure);
 int parse_type(Fuel fuel, Nat atom, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
                Failure *failure);
+int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params *done, Tokens tokens,
+                  const LType **type, Tokens *rest, Failure *failure);
+/* program.c: the tokens after `Sigma`. done holds the earlier parameters. */
+int sigma_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **type,
+               Tokens *rest, Failure *failure);
+/* Move the markers of a closed type into a signature's parameter scope. */
+const LType *shift_type_markers(Nat offset, const LType *type);
 
 /* checker.c (S4: checker.mech lines 1..614). A checked term keeps its type
    and its value. A unary function argument keeps the parameter name and

@@ -16,6 +16,7 @@ Nat encodes_null(const LType *ty) {
     case TY_NAT: case TY_TEXT: case TY_FLAG: case TY_VALUES: case TY_ATTRS:
     case TY_KIND: case TY_HASH: case TY_REF: case TY_SCHEMA: case TY_LIST:
     case TY_PROD: case TY_SUM: case TY_UNIVERSE: case TY_QUERY: case TY_ARROW:
+    case TY_SIGMA:
       return 0;
     case TY_VALUE: case TY_OPTION: case TY_EQ:
       return 1;
@@ -35,7 +36,42 @@ static Text binary_type_name(Text head, Text a, Text b) {
   return append_text(unary_type_name(head, a), text_byte(32, text_byte(40, append_text(b, text_one(41)))));
 }
 
-Text type_name(const LType *ty) {
+typedef struct SigmaKey SigmaKey;
+struct SigmaKey {
+  Nat marker;
+  Nat depth;
+  const SigmaKey *outer;
+};
+
+/* Bound markers use a three-item name, distinct from a free marker's two
+   items. Their lexical depth is independent of the surrounding signature. */
+static Text bound_key(Nat depth) { return text_byte(0, text_byte(depth, text_one(0))); }
+
+static Text marker_key(Nat marker, const SigmaKey *scope) {
+  for (; scope != NULL; scope = scope->outer)
+    if (scope->marker == marker) return bound_key(scope->depth);
+  return marker_name(marker);
+}
+
+static Text side_key(Val side, const SigmaKey *scope) {
+  if (scope == NULL || side.kind == VAL_CLOSED) return val_text(side);
+  if (side.kind == VAL_VAR) return marker_key(side.index, scope);
+  Nat size = term_marker_bound(side.node);
+  const Term **table = arena_alloc(sizeof *table * (size + 1));
+  for (Nat index = 0; index < size; index++) {
+    const Term *first = term_marker_first(side.node, index);
+    table[index] = first == NULL ? NULL : term_var(first->position, 0, marker_key(index, scope), index);
+  }
+  return val_text((Val){.kind = VAL_TERM, .node = term_with_markers(side.node, table, size)});
+}
+
+/* `Sigma (x : A) (B)`, and `Sigma (A) (B)` for the short form. */
+static Text sigma_type_name(const LType *ty, Text a, Text b) {
+  if (ty->name.size == 0) return binary_type_name(sSigma, a, b);
+  return binary_type_name(sSigma, append_text(ty->name, text_byte(32, text_byte(58, text_byte(32, a)))), b);
+}
+
+static Text type_text(Nat key, const LType *ty, const SigmaKey *scope) {
   switch (ty->tag) {
     case TY_NAT: return sNat;
     case TY_TEXT: return sText;
@@ -47,22 +83,33 @@ Text type_name(const LType *ty) {
     case TY_HASH: return sHash();
     case TY_REF: return unary_type_name(sRef(), ty->name);
     case TY_SCHEMA: return ty->name;
-    case TY_OPTION: return unary_type_name(sOption, type_name(ty->left));
-    case TY_LIST: return unary_type_name(sList, type_name(ty->left));
-    case TY_PROD: return binary_type_name(sProd, type_name(ty->left), type_name(ty->right));
-    case TY_SUM: return binary_type_name(sSum, type_name(ty->left), type_name(ty->right));
+    case TY_OPTION: return unary_type_name(sOption, type_text(key, ty->left, scope));
+    case TY_LIST: return unary_type_name(sList, type_text(key, ty->left, scope));
+    case TY_PROD: return binary_type_name(sProd, type_text(key, ty->left, scope), type_text(key, ty->right, scope));
+    case TY_SUM: return binary_type_name(sSum, type_text(key, ty->left, scope), type_text(key, ty->right, scope));
     case TY_UNIVERSE: return ty->level == 0 ? sType0 : sType1;
     case TY_EQ:
-      return append_text(unary_type_name(sEq, type_name(ty->left)),
-        text_byte(32, text_byte(40, append_text(val_text(ty->lhs), text_byte(41, text_byte(32,
-          text_byte(40, append_text(val_text(ty->rhs), text_one(41)))))))));
-    case TY_QUERY: return unary_type_name(opsTextQuery(), type_name(ty->left));
+      return append_text(unary_type_name(sEq, type_text(key, ty->left, scope)),
+        text_byte(32, text_byte(40, append_text(key ? side_key(ty->lhs, scope) : val_text(ty->lhs),
+          text_byte(41, text_byte(32, text_byte(40,
+            append_text(key ? side_key(ty->rhs, scope) : val_text(ty->rhs), text_one(41)))))))));
+    case TY_QUERY: return unary_type_name(opsTextQuery(), type_text(key, ty->left, scope));
     case TY_ARROW:
-      return text_byte(40, append_text(type_name(ty->left), text_byte(41, text_byte(32,
-        text_byte(45, text_byte(62, text_byte(32, type_name(ty->right))))))));
+      return text_byte(40, append_text(type_text(key, ty->left, scope), text_byte(41, text_byte(32,
+        text_byte(45, text_byte(62, text_byte(32, type_text(key, ty->right, scope))))))));
+    case TY_SIGMA: {
+      SigmaKey inner = {ty->level, scope == NULL ? 0 : scope->depth + 1, scope};
+      Text a = type_text(key, ty->left, scope);
+      Text b = type_text(key, ty->right, key ? &inner : scope);
+      if (!key) return sigma_type_name(ty, a, b);
+      return binary_type_name(sSigma, append_text(bound_key(inner.depth),
+                              text_byte(32, text_byte(58, text_byte(32, a)))), b);
+    }
   }
   return text_end();
 }
+
+Text type_name(const LType *ty) { return type_text(0, ty, NULL); }
 
 /* Data types have level 0. Type 0 has level 1 and Type 1 has level 2.
    A Query type is in Type 1, so it has level 1. */
@@ -71,6 +118,7 @@ Nat type_level(const LType *ty) {
     case TY_NAT: case TY_TEXT: case TY_FLAG: case TY_VALUE: case TY_VALUES:
     case TY_ATTRS: case TY_KIND: case TY_HASH: case TY_REF: case TY_SCHEMA:
     case TY_OPTION: case TY_LIST: case TY_PROD: case TY_SUM: case TY_EQ:
+    case TY_SIGMA:
       return 0;
     case TY_UNIVERSE: return ty->level + 1;
     case TY_QUERY: case TY_ARROW: return 1;
@@ -79,8 +127,9 @@ Nat type_level(const LType *ty) {
 }
 
 /* The type grammar has unique canonical names, so equality of the names is
-   structural type equality for this subset. */
-Nat same_type(const LType *a, const LType *b) { return same_text(type_name(a), type_name(b)); }
+   structural type equality for this subset. Sigma keys retain free markers
+   and compare bound markers by lexical depth. */
+Nat same_type(const LType *a, const LType *b) { return same_text(type_text(1, a, NULL), type_text(1, b, NULL)); }
 
 static const LTypes *cons_type(const LType *head, const LTypes *tail) {
   LTypes *list = arena_alloc(sizeof *list);
@@ -139,7 +188,7 @@ static const Carrier kind_ctors[] = {
 int constructor_plan(const LType *ty, Text name, Plan *plan) {
   const LType *index;
   switch (ty->tag) {
-    case TY_NAT: case TY_UNIVERSE: case TY_EQ: case TY_ARROW:
+    case TY_NAT: case TY_UNIVERSE: case TY_EQ: case TY_ARROW: case TY_SIGMA:
       return 0;
     case TY_HASH:
       return same_text(name, sHashOf()) ? tag_plan(cons_type(&text_type, NULL), 5, sHashOf(), plan) : 0;

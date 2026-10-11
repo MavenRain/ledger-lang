@@ -307,6 +307,9 @@ const LType *subst_type(const Bindings *chosen, const LType *ty) {
   case TY_ARROW:
     return make_type(
         (LType){.tag = ty->tag, .left = subst_type(chosen, ty->left), .right = subst_type(chosen, ty->right)});
+  case TY_SIGMA:
+    return make_type((LType){.tag = TY_SIGMA, .name = ty->name, .level = ty->level,
+                             .left = subst_type(chosen, ty->left), .right = subst_type(chosen, ty->right)});
   }
   return ty;
 }
@@ -1387,21 +1390,134 @@ int instantiate_side(Fuel fuel, const Bindings *environment, const Params *param
   return 0;
 }
 
-int instantiate_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                       Tokens tokens, const LType *result, const LType **instantiated) {
-  const LType *a;
-  Val lhs;
-  Val rhs;
-  if (!sides_of(result, &a, &lhs, &rhs)) {
-    *instantiated = result;
+typedef struct SigmaMarker SigmaMarker;
+struct SigmaMarker {
+  Nat from;
+  Nat to;
+  const SigmaMarker *outer;
+};
+
+static int sigma_marker(const SigmaMarker *scope, Nat from, Nat *to) {
+  for (; scope != NULL; scope = scope->outer)
+    if (scope->from == from) {
+      *to = scope->to;
+      return 1;
+    }
+  return 0;
+}
+
+/* A local Sigma variable stays bound. Free signature variables become
+   arguments. Fresh local markers prevent those arguments from being captured. */
+static int instantiate_scoped_side(Fuel fuel, const Bindings *environment, const Params *params,
+                                   const Values *values, Tokens tokens, const SigmaMarker *scope,
+                                   Val side, Val *result) {
+  if (scope == NULL || side.kind == VAL_CLOSED)
+    return instantiate_side(fuel, environment, params, values, tokens, side, result);
+  if (side.kind == VAL_VAR) {
+    Nat to;
+    if (!sigma_marker(scope, side.index, &to))
+      return instantiate_side(fuel, environment, params, values, tokens, side, result);
+    *result = (Val){.kind = VAL_VAR, .index = to};
     return 1;
   }
-  Val x;
-  Val y;
-  if (!instantiate_side(fuel, environment, params, values, tokens, lhs, &x)) return 0;
-  if (!instantiate_side(fuel, environment, params, values, tokens, rhs, &y)) return 0;
-  *instantiated = eq_type(a, x, y);
+  Nat size = term_marker_bound(side.node);
+  const Term **table = arena_alloc(sizeof *table * (size + 1));
+  for (Nat index = 0; index < size; index++) {
+    table[index] = NULL;
+    const Term *first = term_marker_first(side.node, index);
+    if (first == NULL) continue;
+    Nat to;
+    if (sigma_marker(scope, index, &to)) {
+      table[index] = term_var(first->position, 0, marker_name(to), to);
+      continue;
+    }
+    if (checking_body(environment) != 1) continue;
+    Val argument;
+    if (!argument_side(fuel, index, environment, params, values, tokens, &argument)) return 0;
+    if (argument.kind == VAL_TERM) table[index] = argument.node;
+    else if (argument.kind == VAL_VAR)
+      table[index] = term_var(first->position, 0, marker_name(argument.index), argument.index);
+    else {
+      Token token;
+      if (!argument_token(index, params, tokens, &token) ||
+          !closed_node(index, environment, params, token, &table[index])) return 0;
+    }
+  }
+  const Term *node = term_with_markers(side.node, table, size);
+  Failure failure = {0, {NULL, 0}};
+  if (checking_body(environment) == 1 && term_marker_bound(node) > 0 &&
+      !side_normal(fuel, environment, node, &node, &failure)) return 0;
+  *result = (Val){.kind = VAL_TERM, .node = node};
   return 1;
+}
+
+static int instantiate_type(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                            Tokens tokens, const Bindings *chosen, const SigmaMarker *scope,
+                            const LType *type, const LType **instantiated) {
+  /* A supplied type already uses the caller's markers. Substituting the
+     callee's arguments into it would change its free variables. */
+  for (const Bindings *cell = chosen; cell != NULL; cell = cell->tail)
+    if (cell->head.kind == BIND_TYPE && cell->head.defined == type) {
+      *instantiated = type;
+      return 1;
+    }
+  LType copy = *type;
+  switch (type->tag) {
+  case TY_EQ:
+    if (!instantiate_type(fuel, environment, params, values, tokens, chosen, scope, type->left, &copy.left) ||
+        !instantiate_scoped_side(fuel, environment, params, values, tokens, scope, type->lhs, &copy.lhs) ||
+        !instantiate_scoped_side(fuel, environment, params, values, tokens, scope, type->rhs, &copy.rhs)) return 0;
+    if (checking_body(environment) == 1 &&
+        (!close_body_side(fuel, environment, copy.left, copy.lhs, &copy.lhs) ||
+         !close_body_side(fuel, environment, copy.left, copy.rhs, &copy.rhs))) return 0;
+    break;
+  case TY_SIGMA: {
+    if (fuel == 0) return 0;
+    if (!instantiate_type(fuel - 1, environment, params, values, tokens, chosen, scope, type->left, &copy.left)) return 0;
+    copy.level = frame_slot(environment) + type->level;
+    SigmaMarker inner = {type->level, copy.level, scope};
+    if (!instantiate_type(fuel - 1, environment, params, values, tokens, chosen, &inner, type->right, &copy.right)) return 0;
+    break;
+  }
+  case TY_OPTION:
+  case TY_LIST:
+  case TY_QUERY:
+    if (fuel == 0 || !instantiate_type(fuel - 1, environment, params, values, tokens, chosen, scope,
+                                     type->left, &copy.left)) return 0;
+    break;
+  case TY_PROD:
+  case TY_SUM:
+    if (fuel == 0 || !instantiate_type(fuel - 1, environment, params, values, tokens, chosen, scope, type->left, &copy.left) ||
+        !instantiate_type(fuel - 1, environment, params, values, tokens, chosen, scope, type->right, &copy.right)) return 0;
+    break;
+  case TY_NAT:
+  case TY_TEXT:
+  case TY_FLAG:
+  case TY_VALUE:
+  case TY_VALUES:
+  case TY_ATTRS:
+  case TY_KIND:
+  case TY_HASH:
+  case TY_REF:
+  case TY_SCHEMA:
+  case TY_UNIVERSE:
+  case TY_ARROW:
+    *instantiated = type;
+    return 1;
+  }
+  *instantiated = make_type(copy);
+  return 1;
+}
+
+int instantiate_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                       Tokens tokens, const LType *result, const LType **instantiated) {
+  return instantiate_type(fuel, environment, params, values, tokens, NULL, NULL, result, instantiated);
+}
+
+static int instantiate_specialized(Fuel fuel, const Bindings *environment, const Params *params,
+                                   const Values *values, Tokens tokens, const Bindings *chosen,
+                                   const LType *result, const LType **instantiated) {
+  return instantiate_type(fuel, environment, params, values, tokens, chosen, NULL, result, instantiated);
 }
 
 const Params *instantiate_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
@@ -1631,7 +1747,7 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
                                                              environment)
                                                 : NULL;
         const LType *instantiated = NULL;
-        int resolved = instantiate_result(more, environment, side_params(chosen, item->params), values, after_types,
+        int resolved = instantiate_specialized(more, environment, side_params(chosen, item->params), values, after_types, chosen,
                                           subst_type(chosen, item->type), &instantiated);
         const LType *applied;
         if (!close_result(more, environment, item->params, values, resolved, instantiated, &applied))
@@ -1955,7 +2071,7 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
     const Values *earlier = reverse_values_onto(NULL, seen);
     const LType *instantiated = NULL;
     int resolved =
-        instantiate_result(fuel, environment, specialized, earlier, start, subst_type(chosen, head.type), &instantiated);
+        instantiate_specialized(fuel, environment, specialized, earlier, start, chosen, subst_type(chosen, head.type), &instantiated);
     const LType *expected;
     if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected))
       return fail_at(failure, args->head->position, eTerm);
@@ -1989,7 +2105,7 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
                         &values, &spent, failure))
       return 0;
     const LType *instantiated = NULL;
-    int resolved = instantiate_result(fuel, environment, side_params(chosen, item->params), values, after_types,
+    int resolved = instantiate_specialized(fuel, environment, side_params(chosen, item->params), values, after_types, chosen,
                                       subst_type(chosen, item->type), &instantiated);
     const LType *applied;
     if (!close_result(fuel, environment, item->params, values, resolved, instantiated, &applied))
@@ -3103,7 +3219,7 @@ int dependent_arguments(Fuel fuel, Nat budget, const Bindings *chosen, const Bin
     const Values *earlier = reverse_values_onto(NULL, seen);
     const LType *instantiated = NULL;
     int resolved =
-        instantiate_result(fuel, environment, specialized, earlier, start, subst_type(chosen, head.type), &instantiated);
+        instantiate_specialized(fuel, environment, specialized, earlier, start, chosen, subst_type(chosen, head.type), &instantiated);
     const LType *expected;
     if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected))
       return fail_at(failure, first_position(tokens), eTerm);

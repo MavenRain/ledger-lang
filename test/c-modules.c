@@ -2176,6 +2176,163 @@ static void test_d4_normal(void) {
   assert(refused.position == 9 && same_text(refused.message, eTerm));
 }
 
+/* The type of source, parsed with no environment and no parameters. */
+static const LType *sigma_parsed(const char *source) {
+  const LType *type;
+  Tokens rest;
+  Failure failure = {0, {NULL, 0}};
+  assert(parse_type(1000, 0, NULL, lexed(source), &type, &rest, &failure) && rest.size == 0);
+  return type;
+}
+
+/* check_definitions refuses source at the first byte of at, with message. */
+static void sigma_refused(const char *source, const char *at, Text message) {
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(!check_definitions(text(source), &environment, &failure));
+  assert(failure.position == (Nat)(strstr(source, at) - source) && same_text(failure.message, message));
+}
+
+/* D5 part A: the Sigma type (design items 1 to 4 and 9). The parse of both
+   forms, the marker level of the binder, type_name, same_type and the
+   refusals. Part A has no pack, thus a definition of a Sigma type is
+   refused at the body (ruling R-A1). Called from main after
+   test_d4_lifts. */
+static void test_d5_type(void) {
+  /* Both forms. The short form has no binder name. */
+  const LType *binder = sigma_parsed("Sigma (x : Nat) Text");
+  assert(binder->tag == TY_SIGMA && same_text(binder->name, text("x")) && binder->level == 0);
+  assert(binder->left->tag == TY_NAT && binder->right->tag == TY_TEXT);
+  const LType *short_form = sigma_parsed("Sigma Nat Text");
+  assert(short_form->tag == TY_SIGMA && short_form->name.size == 0 && short_form->level == 0);
+  assert(short_form->left->tag == TY_NAT && short_form->right->tag == TY_TEXT);
+
+  /* The marker level of the binder: 0 at the top, 1 in a nested Sigma and
+     3 after 3 parameters. An Eq side that names the binder has its marker. */
+  const LType *nested = sigma_parsed("Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y))");
+  assert(nested->level == 0 && nested->right->tag == TY_SIGMA && nested->right->level == 1);
+  const LType *inner = nested->right->right;
+  assert(inner->tag == TY_EQ && inner->lhs.kind == VAL_VAR && inner->lhs.index == 0);
+  assert(inner->rhs.kind == VAL_VAR && inner->rhs.index == 1);
+  const char *source =
+      "def g : (a : Nat) -> (b : Nat) -> (c : Nat) -> (s : Sigma (x : Nat) (Eq Nat x c)) -> Nat := "
+      "fun (a : Nat) (b : Nat) (c : Nat) (s : Sigma (x : Nat) (Eq Nat x c)) => a\n"
+      "def f1 : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x x)) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x x)) => n\n"
+      "def f2 : (m : Nat) -> (t : Sigma (z : Nat) (Eq Nat z z)) -> Nat := "
+      "fun (m : Nat) (t : Sigma (z : Nat) (Eq Nat z z)) => m\n"
+      "def f3 : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => n\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  const LType *fourth = fun_named(environment, "g")->params->tail->tail->tail->head.type;
+  assert(fourth->tag == TY_SIGMA && fourth->level == 3 && fourth->right->tag == TY_EQ);
+  assert(fourth->right->lhs.index == 3 && fourth->right->rhs.index == 2);
+
+  /* type_name: the source binder name, and `Sigma (A) (B)` for the short
+     form. */
+  assert(same_text(type_name(binder), text("Sigma (x : Nat) (Text)")));
+  assert(same_text(type_name(short_form), text("Sigma (Nat) (Text)")));
+  assert(same_text(type_name(sigma_parsed("Sigma (p : Prod Nat Nat) (Sigma Text Nat)")),
+                   text("Sigma (p : Prod (Nat) (Nat)) (Sigma (Text) (Nat))")));
+
+  /* same_type: binder and parameter names do not count; A, B and the marker
+     of a side count. */
+  const LType *s1 = fun_named(environment, "f1")->params->tail->head.type;
+  const LType *s2 = fun_named(environment, "f2")->params->tail->head.type;
+  const LType *s3 = fun_named(environment, "f3")->params->tail->head.type;
+  assert(same_type(s1, s2) == 1 && same_type(s1, s3) == 0);
+  assert(same_type(binder, sigma_parsed("Sigma (y : Nat) Text")) == 1 && same_type(binder, short_form) == 1);
+  assert(same_type(binder, sigma_parsed("Sigma (x : Text) Text")) == 0);
+  assert(same_type(binder, sigma_parsed("Sigma (x : Nat) Nat")) == 0);
+
+  /* Refusals: Type 0 as A, a function type as A, fun in B, and the body of
+     a Sigma definition. */
+  sigma_refused("def a : Sigma (x : Type 0) Nat := 1\n", "(x", eType);
+  sigma_refused("def One : Type 0 := (n : Nat) -> Nat\ndef a : Sigma (x : One) Nat := 1\n", "One) Nat", eData);
+  sigma_refused("def a : Sigma Nat (fun x => Nat) := 1\n", "fun", eType);
+  sigma_refused("def a : Sigma Nat Nat := 1\n", "1\n", eTerm);
+}
+
+/* Sigma aliases and bound variables retain their meaning in a new scope.
+   Calls substitute free signature variables without capturing local binders. */
+static void test_d5_scope(void) {
+  const char *source =
+      "def Plain : Type 0 := Sigma Nat Nat\n"
+      "def Proof : Type 0 := Sigma (x : Nat) (Eq Nat x x)\n"
+      "def alias : (n : Nat) -> (s : Plain) -> Nat := fun (n : Nat) (s : Sigma Nat Nat) => n\n"
+      "def proofAlias : (n : Nat) -> (s : Proof) -> Nat := "
+      "fun (n : Nat) (s : Sigma (y : Nat) (Eq Nat y y)) => n\n"
+      "def nestedAlias : (s : Sigma Nat Proof) -> Nat := "
+      "fun (s : Sigma Nat (Sigma (y : Nat) (Eq Nat y y))) => 0\n"
+      "def take : (s : Proof) -> Nat := fun (s : Proof) => 0\n"
+      "def pass : (n : Nat) -> (s : Proof) -> Nat := fun (n : Nat) (s : Proof) => take s\n"
+      "def returnSigma : (s : Sigma Nat Nat) -> Sigma Nat Nat := fun (s : Sigma Nat Nat) => s\n"
+      "def polymorphic : (A : Type 0) -> (s : Sigma (x : A) (Eq A x x)) -> Nat := "
+      "fun (B : Type 0) (s : Sigma (y : B) (Eq B y y)) => 0\n"
+      "def Signature : Type 0 := (s : Proof) -> Nat\n"
+      "def prefixed : (n : Nat) -> Signature := fun (n : Nat) (s : Proof) => n\n"
+      "def dependent : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => n\n"
+      "def moved : (unused : Nat) -> (m : Nat) -> (s : Sigma (x : Nat) (Eq Nat x m)) -> Nat := "
+      "fun (unused : Nat) (m : Nat) (s : Sigma (y : Nat) (Eq Nat y m)) => dependent m s\n"
+      "def computed : (n : Nat) -> (s : Sigma (x : Nat) (Eq (Option Nat) (some x) (some n))) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq (Option Nat) (some x) (some n))) => n\n"
+      "def movedComputed : (unused : Nat) -> (m : Nat) -> "
+      "(s : Sigma (x : Nat) (Eq (Option Nat) (some x) (some m))) -> Nat := "
+      "fun (unused : Nat) (m : Nat) (s : Sigma (y : Nat) (Eq (Option Nat) (some y) (some m))) => computed m s\n"
+      "def wrapped : (n : Nat) -> (s : Option (Sigma (x : Nat) (Eq Nat x n))) -> Nat := "
+      "fun (n : Nat) (s : Option (Sigma (x : Nat) (Eq Nat x n))) => n\n"
+      "def movedWrapped : (unused : Nat) -> (m : Nat) -> (s : Option (Sigma (x : Nat) (Eq Nat x m))) -> Nat := "
+      "fun (unused : Nat) (m : Nat) (s : Option (Sigma (y : Nat) (Eq Nat y m))) => wrapped m s\n"
+      "def generic : (A : Type 0) -> (s : A) -> Nat := fun (A : Type 0) (s : A) => 0\n"
+      "def typeArgument : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => generic (Sigma (y : Nat) (Eq Nat y n)) s\n"
+      "def wrappedTypeArgument : (n : Nat) -> (s : Option (Sigma (x : Nat) (Eq Nat x n))) -> Nat := "
+      "fun (n : Nat) (s : Option (Sigma (x : Nat) (Eq Nat x n))) => "
+      "generic (Option (Sigma (y : Nat) (Eq Nat y n))) s\n"
+      "def closedComputed : (n : Nat) -> (s : Sigma Nat (Eq (Option Nat) (some n) (some 1))) -> Nat := "
+      "fun (n : Nat) (s : Sigma Nat (Eq (Option Nat) (some n) (some 1))) => n\n"
+      "def closeArgument : (s : Sigma Nat (Eq (Option Nat) (some 1) (some 1))) -> Nat := "
+      "fun (s : Sigma Nat (Eq (Option Nat) (some 1) (some 1))) => closedComputed 1 s\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  const LType *alias = fun_named(environment, "proofAlias")->params->tail->head.type;
+  assert(alias->level == 1 && alias->right->lhs.index == 1 && alias->right->rhs.index == 1);
+  const LType *nested = fun_named(environment, "nestedAlias")->params->head.type->right;
+  assert(nested->level == 1 && nested->right->lhs.index == 1 && nested->right->rhs.index == 1);
+  assert(same_type(alias, fun_named(environment, "take")->params->head.type));
+  assert(same_type(sigma_parsed("Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y))"),
+                   sigma_parsed("Sigma (a : Nat) (Sigma (b : Nat) (Eq Nat b a))")) == 0);
+
+  /* The original call accepted a proof relative to m as a proof relative
+     to 1. The final argument must be refused. */
+  sigma_refused(
+      "def f : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => n\n"
+      "def g : (m : Nat) -> (s : Sigma (x : Nat) (Eq Nat x m)) -> Nat := "
+      "fun (m : Nat) (s : Sigma (x : Nat) (Eq Nat x m)) => f 1 s\n", "s\n", eTerm);
+  /* m has the callee's local binder marker before substitution. It must
+     remain free, distinct from the Sigma binder. */
+  sigma_refused(
+      "def f : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => n\n"
+      "def g : (unused : Nat) -> (m : Nat) -> (s : Sigma (x : Nat) (Eq Nat x x)) -> Nat := "
+      "fun (unused : Nat) (m : Nat) (s : Sigma (x : Nat) (Eq Nat x x)) => f m s\n", "s\n", eTerm);
+  sigma_refused(
+      "def f : (n : Nat) -> (s : Sigma (x : Nat) (Eq (Option Nat) (some x) (some n))) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq (Option Nat) (some x) (some n))) => n\n"
+      "def g : (m : Nat) -> (s : Sigma (x : Nat) (Eq (Option Nat) (some x) (some m))) -> Nat := "
+      "fun (m : Nat) (s : Sigma (x : Nat) (Eq (Option Nat) (some x) (some m))) => f 1 s\n", "s\n", eTerm);
+  sigma_refused(
+      "def generic : (A : Type 0) -> (s : A) -> Nat := fun (A : Type 0) (s : A) => 0\n"
+      "def g : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Nat := "
+      "fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => generic (Sigma (y : Nat) (Eq Nat y 1)) s\n",
+      "s\n", eTerm);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -2198,6 +2355,8 @@ int main(void) {
   test_d4_option_literals();
   test_d4_normal();
   test_d4_lifts();
+  test_d5_type();
+  test_d5_scope();
   puts("C module tests passed");
   return 0;
 }

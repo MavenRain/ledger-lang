@@ -191,16 +191,17 @@ static int named_signature(const Bindings *environment, Tokens tokens, Signature
 
 /* The type of a parameter can also be the name of a function type that has
    no type parameter. The argument of this parameter is a function. */
-static int parameter_type(Fuel fuel, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
-                          Failure *failure) {
+static int parameter_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens,
+                          const LType **type, Tokens *rest, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   if (mark_of(tokens) == 40) {
     Tokens inside;
-    if (!parameter_type(fuel - 1, environment, drop_token(tokens), type, &inside, failure)) return 0;
+    if (!parameter_type(fuel - 1, environment, done, drop_token(tokens), type, &inside, failure)) return 0;
     return close_parsed(inside, rest, failure);
   }
   Signature found;
-  if (!named_signature(environment, tokens, &found)) return parse_type(fuel, 0, environment, tokens, type, rest, failure);
+  if (!named_signature(environment, tokens, &found))
+    return parse_type_in(fuel, 0, environment, done, tokens, type, rest, failure);
   if (has_type_param(found.params)) return fail_at(failure, first_position(tokens), eData);
   *type = arrow_type(found.params, found.result);
   *rest = drop_token(tokens);
@@ -250,17 +251,45 @@ static Val shift_eq_side(Nat offset, Val side) {
   return side;
 }
 
-static const LType *shift_eq_result(Nat offset, const LType *result) {
-  const LType *a;
-  Val lhs;
-  Val rhs;
-  if (!sides_of(result, &a, &lhs, &rhs)) return result;
-  return eq_type(a, shift_eq_side(offset, lhs), shift_eq_side(offset, rhs));
+/* The markers of a type move by offset: the sides of each Eq and the binder
+   of each Sigma, also inside a type former. */
+const LType *shift_type_markers(Nat offset, const LType *result) {
+  switch (result->tag) {
+  case TY_NAT:
+  case TY_TEXT:
+  case TY_FLAG:
+  case TY_VALUE:
+  case TY_VALUES:
+  case TY_ATTRS:
+  case TY_KIND:
+  case TY_HASH:
+  case TY_REF:
+  case TY_SCHEMA:
+  case TY_UNIVERSE:
+  case TY_ARROW:
+    return result;
+  case TY_OPTION:
+  case TY_LIST:
+  case TY_QUERY:
+    return make_type((LType){.tag = result->tag, .left = shift_type_markers(offset, result->left)});
+  case TY_PROD:
+  case TY_SUM:
+    return make_type((LType){.tag = result->tag, .left = shift_type_markers(offset, result->left),
+                             .right = shift_type_markers(offset, result->right)});
+  case TY_EQ:
+    return eq_type(shift_type_markers(offset, result->left), shift_eq_side(offset, result->lhs),
+                   shift_eq_side(offset, result->rhs));
+  case TY_SIGMA:
+    return make_type((LType){.tag = TY_SIGMA, .name = result->name, .level = offset + result->level,
+                             .left = shift_type_markers(offset, result->left),
+                             .right = shift_type_markers(offset, result->right)});
+  }
+  return result;
 }
 
 static const Params *shift_eq_params(Nat offset, const Params *params) {
   if (params == NULL) return NULL;
-  return param_cons((Param){params->head.name, shift_eq_result(offset, params->head.type)},
+  return param_cons((Param){params->head.name, shift_type_markers(offset, params->head.type)},
                     shift_eq_params(offset, params->tail));
 }
 
@@ -425,7 +454,7 @@ static int eq_result(Fuel fuel, const Bindings *environment, const Params *done,
                      Tokens *rest, Failure *failure) {
   const LType *a;
   Tokens after_type;
-  if (!parse_type(fuel, 1, environment, tokens, &a, &after_type, failure)) return 0;
+  if (!parse_type_in(fuel, 1, environment, done, tokens, &a, &after_type, failure)) return 0;
   if (type_level(a) != 0) return fail_at(failure, first_position(tokens), eData);
   Val lhs;
   Val rhs;
@@ -437,13 +466,59 @@ static int eq_result(Fuel fuel, const Bindings *environment, const Params *done,
   return 1;
 }
 
+/* A of `Sigma (x : A) B` or of the short form `Sigma A B`. The short form
+   has no binder name. */
+static int sigma_domain(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, Text *name,
+                        const LType **a, Tokens *rest, Failure *failure) {
+  Tokens inside;
+  *name = text_end();
+  if (starts_param(tokens) != 1) return parse_type_in(fuel, 1, environment, done, tokens, a, rest, failure);
+  if (!name_of(drop_token(tokens), name)) return fail_at(failure, first_position(tokens), eType);
+  return parse_type_in(fuel, 0, environment, done, drop_token(drop_token(drop_token(tokens))), a, &inside, failure)
+    && close_parsed(inside, rest, failure);
+}
+
+/* B of a Sigma type: a data type, `(Eq A y z)` or a Sigma type. done holds
+   the binder, so an Eq side can name it. */
+static int sigma_body(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **b,
+                      Tokens *rest, Failure *failure) {
+  Tokens inside;
+  if (mark_of(tokens) == 40 && is_word(sEq, drop_token(tokens)) == 1)
+    return eq_result(fuel, environment, done, drop_token(drop_token(tokens)), b, &inside, failure)
+      && close_parsed(inside, rest, failure);
+  if (!parse_type_in(fuel, 1, environment, done, tokens, b, rest, failure)) return 0;
+  if (type_level(*b) != 0) return fail_at(failure, first_position(tokens), eType);
+  return 1;
+}
+
+/* `Sigma (x : A) B` and `Sigma A B` (D5 design items 2 and 3). A is a data
+   type. The binder takes the next marker after the earlier parameters, also
+   in the short form. */
+int sigma_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **type,
+               Tokens *rest, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  Fuel more = fuel - 1;
+  Text name;
+  const LType *a;
+  Tokens after_a;
+  if (!sigma_domain(more, environment, done, tokens, &name, &a, &after_a, failure)) return 0;
+  if (type_level(a) != 0 || a->tag == TY_EQ) return fail_at(failure, first_position(tokens), eType);
+  const Params *inner = param_cons((Param){name, a}, done);
+  const Bindings *scope =
+    starts_param(tokens) == 1 ? bind_params(param_cons((Param){name, a}, NULL), NULL, environment) : environment;
+  const LType *b;
+  if (!sigma_body(more, scope, inner, after_a, &b, rest, failure)) return 0;
+  *type = make_type((LType){.tag = TY_SIGMA, .name = name, .level = param_count(done), .left = a, .right = b});
+  return 1;
+}
+
 /* The type of a parameter. A proof parameter `(e : Eq A x y)` can name
    earlier value parameters of type A as its sides (step D2b), also inside a
    computed side (step D4b). */
 static int param_declared(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens,
                           const LType **type, Tokens *rest, Failure *failure) {
   if (is_word(sEq, tokens) == 1) return eq_result(fuel, environment, done, drop_token(tokens), type, rest, failure);
-  return parameter_type(fuel, environment, tokens, type, rest, failure);
+  return parameter_type(fuel, environment, done, tokens, type, rest, failure);
 }
 
 static int parse_param(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, Param *item,
@@ -484,7 +559,7 @@ static int parse_signature(Fuel fuel, const Bindings *environment, const Params 
         return fail_at(failure, first_position(tokens), eTypeParam);
       Nat offset = param_count(done);
       *found = (Signature){reverse_params_onto(shift_eq_params(offset, named.params), done),
-                           shift_eq_result(offset, named.result)};
+                           shift_type_markers(offset, named.result)};
       *rest = drop_token(tokens);
       return 1;
     }
@@ -493,7 +568,7 @@ static int parse_signature(Fuel fuel, const Bindings *environment, const Params 
       *found = (Signature){reverse_params_onto(NULL, done), result};
       return 1;
     }
-    if (!parse_type(more, 0, environment, tokens, &result, rest, failure)) return 0;
+    if (!parse_type_in(more, 0, environment, done, tokens, &result, rest, failure)) return 0;
     if (type_level(result) != 0) return fail_at(failure, first_position(tokens), eData);
     *found = (Signature){reverse_params_onto(NULL, done), result};
     return 1;
