@@ -31,6 +31,9 @@ The plan adds neutral values in two stages:
    with its position, or a neutral term applied to values. The checker
    evaluates types into `Val` and compares them by read-back
    (normalization by evaluation). The sides of `tyEq` become `Val` values.
+   D4 does this for the sides of `tyEq` with no new `Val` kind: a computed
+   side keeps a syntax tree in normal form, and two sides compare by these
+   trees. Types still compare by their names.
 
 ## Steps
 
@@ -50,7 +53,7 @@ The plan adds neutral values in two stages:
   such a position is a parameter of the body, which gives the neutral side
   of that parameter, or a literal or a name, which gives its JSON text. So
   `fun (n : Nat) => f n` proves `Eq Nat n n`. A parenthesized argument at
-  such a position is refused until D4. An application in an inline function
+  such a position was refused until D4. An application in an inline function
   or a fold step, through `either`, as a partial application or through a
   bound function parameter is still refused.
 - D2b (done). A proof parameter `(e : Eq A x y)` can name earlier value
@@ -74,8 +77,9 @@ The plan adds neutral values in two stages:
   `Eq (Option Nat) (some 3) (some 3)`.
   In a definition body the argument at such a position must be a parameter
   of the body until D4c. A computed side is refused in a signature with a type
-  parameter, with a function parameter, with the name of an earlier
-  definition and with `fun`.
+  parameter, when it names a function parameter, or with `fun`. A function
+  parameter elsewhere in the signature is allowed. A side with the name of
+  an earlier definition was refused until D4.
 - D4b (done). The type of a proof parameter can have a computed side, as in
   `(e : Eq (Option Nat) (some n) (some m))`. An application evaluates these
   sides with the earlier arguments. Then it checks the proof argument. The
@@ -87,30 +91,61 @@ The plan adds neutral values in two stages:
   evaluated to a closed value, so `fun (m : Nat) => f 3` proves
   `Eq (Option Nat) (some 3) (some 3)`. A side that keeps a marker keeps the
   argument node, so `pf m 1` proves
-  `Eq (Prod Nat Nat) (pair m 1) (pair m 1)`. Such a side does not evaluate
-  the name of an earlier definition, so with
-  `def one : Nat := 1`, `pf m one` does not prove `(pair m 1)`. A
-  parenthesized argument is still refused.
+  `Eq (Prod Nat Nat) (pair m 1) (pair m 1)`. Until D4, such a side did not
+  evaluate the name of an earlier definition, so with
+  `def one : Nat := 1`, `pf m one` did not prove `(pair m 1)`, and a
+  parenthesized argument was refused.
 - D3 (syntax tree done). The checker checks a body once into a `Term` and
   keeps its tokens as a fallback. Applications try the term evaluator;
   body evaluation can still fall back to parsing the tokens. The work
-  budget and JSON output stay the same. General neutral evaluation and
-  read-back remain planned for D4. A computed side keeps only its `Term`
+  budget and JSON output stay the same. D4 adds neutral evaluation and
+  read-back for computed sides. A computed side keeps only its `Term`
   node, with a marker variable for each parameter. Computed sides compare with
   `same_term`; shifting and renaming markers walk the tree. `close_side`
   evaluates the tree with `eval_term` and refuses an unknown answer without
-  replaying tokens. Remaining token uses include:
+  replaying tokens. These token uses remain after D4:
   - `synth_term`, `eval_apply` and `apply_body` (`compiler/checker.c`):
     body evaluation can fall back to `parse_term`.
   - `unary_of`, `stepper_argument` and the inline, partial and bound
     callback helpers (`compiler/checker.c`): parser routes for structure
     forms and folds keep token-only `TERM_BODY` carriers, which
     `apply_body` parses again.
-  - `mark_side` and `marker_bindings` (`compiler/program.c`): the parse
-    input of a computed side.
-- D4. Computed sides. A side can be any term, such as `(natAdd n 1)` or
-  `(some n)`. The checker evaluates it to a `Val`, which can be neutral.
-  Two sides are equal when their read-backs are equal.
+  - `mark_side` and `marker_bindings` (`compiler/program.c`) and
+    `body_term_side` (`compiler/checker.c`): the parse input of a computed
+    side and of a parenthesized argument in a body. A `Val` keeps no
+    tokens.
+- D4 (done). Computed sides. A side can be a term of value parameters,
+  literals, constructor forms, names of earlier definitions and
+  applications of earlier definitions, such as `(natAdd n 1)` or
+  `(pair n one)`. The checker evaluates the side to a normal form and keeps
+  it as the syntax tree of a `valTerm`. A normal form is a parameter, a
+  literal, a constructor form of normal forms, or a neutral application: an
+  earlier definition applied to normal forms, with a parameter in an
+  argument. Two sides are equal when their normal forms are equal. The
+  checker evaluates a side when it makes the definition and again after an
+  application renames the markers. A side with no parameter left becomes a
+  closed value. A closed name evaluates, so with `def one : Nat := 1`,
+  `pf m one` proves `(pair m 1)`. If the side of `p1` is `(pair n one)`,
+  `p1 m` proves `(pair m 1)` and `p1 3` proves `(pair 3 1)`.
+  D4 does not unfold a definition, so `refl` does not prove
+  `Eq Nat (natAdd 1 n) (natAdd n 1)`. The work budget of a closed part
+  stays 1, so a closed application of an earlier definition does not
+  close: `(pair n (inc 3))` keeps the node `(inc 3)` and does not become a
+  pair of numbers. If the side of `f` is `(some (inc n))`, `f 3` does not
+  prove `Eq (Option Nat) (some 3) (some 3)`.
+  In a definition body, a parenthesized argument at the position of a
+  neutral side gives its normal form to the side. The application puts the
+  node of the argument in place of the marker. So
+  `fun (m : Nat) => e (natAdd m 1)` proves
+  `Eq Nat (natAdd m 1) (natAdd m 1)`, and `pf m (one)` proves
+  `(pair m 1)`. A group around a parameter stays a group, so `pf (m) 1`
+  does not prove `(pair m 1)`. A parenthesized argument gets its type from
+  the type arguments: with `polyProof : (A : Type 0) -> (n : A) -> Eq A n n`,
+  `polyProof Nat (identity m)` proves `Eq Nat (identity m) (identity m)`,
+  and `polyProof Text (identity m)` is refused.
+  A computed side is still refused with `fun`, in a signature with a type
+  parameter, or when it names a function parameter. A signature can have a
+  function parameter that the side does not name.
 - D5. Sigma. `Sigma (x : A) B` with `pack`, `witness` and `payload`. B can
   name x, also in an `Eq`. An instance of a Sigma type is the JSON object of
   its witness and payload, as `SPEC.md` gives.

@@ -19,7 +19,7 @@ not complete the M0 milestone in `SPEC.md`.
   of a data type A. The compiler compares them by their JSON encoding. An
   equality type is only the type of a definition, and proofs are not
   instances. `symm` and `trans` synthesize their types like `first`.
-- Dependent equality results, steps D1, D2, D2b, D3, D3a, D4a, D4b and D4c
+- Dependent equality results, steps D1, D2, D2b, D3, D3a, D4a, D4b, D4c and D4
   of `docs/DEPENDENT-TYPES.md`. A function type can end in `Eq A x y`, and
   a side can be the name of a value parameter of type A. Such a side is
   neutral. The definition checks the body with the neutral sides, so `refl`
@@ -32,14 +32,17 @@ not complete the M0 milestone in `SPEC.md`.
   argument with the sides of the earlier arguments. The syntax tree
   portion of D3 is done: the checker checks a body once into a `Term`,
   and applications try its evaluator with token fallbacks (see step D3
-  in `docs/DEPENDENT-TYPES.md`). General neutral evaluation and read-back
-  remain planned for D4. Step D3a: a side is a
+  in `docs/DEPENDENT-TYPES.md`). Step D3a: a side is a
   closed, neutral or computed value, and `refl` and `trans` compare sides
   the same way. Step D4a: a side can be an atom of constructor forms and
   literals that names a value parameter, such as `(some n)` (a computed
   side). Step D4b: the type of a proof parameter can hold a computed side.
   Step D4c: in a definition body, the argument for a computed side can be a
-  parameter of the body, a literal or a name.
+  parameter of the body, a literal or a name. Step D4: a computed side can
+  also name earlier definitions and apply them, such as `(natAdd n 1)`.
+  The checker keeps the side as a syntax tree in normal form and compares
+  sides by these trees. It does not unfold a definition. In a definition
+  body, the argument for a side can also be a parenthesized term.
 - Functions: function types `(x : A) -> B` over data types,
   `fun` with flat or curried binders, and saturated application. The
   definition checks the body once. Each application evaluates the body again
@@ -157,9 +160,9 @@ not complete the M0 milestone in `SPEC.md`.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types. `docs/DEPENDENT-TYPES.md` gives the plan
-   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b and D4c and the
-   syntax tree portion of D3 are done. Its general neutral value domain
-   and the computed-side evaluation and read-back of D4 remain.
+   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c and D4 and
+   the syntax tree portion of D3 are done. Body evaluation keeps token
+   fallbacks (step D3), and steps D5 to D7 remain.
 2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
    needs the dependent function types of item 1. Until then the type parser
    refuses this name with `this type belongs to a later milestone`.
@@ -224,11 +227,13 @@ original meaning.
   function with a type parameter is not a function argument. A partial
   application that gives its type arguments is. A data type cannot depend on a value parameter. Only a side of an
   equality result can name one, as the whole side or inside an atom of
-  constructor forms and literals such as `(some n)` (step D4a). An application of a
+  constructor forms and literals such as `(some n)` (step D4a), or of names
+  and applications of earlier definitions such as `(natAdd n 1)` (step D4).
+  An application of a
   function with such a result replaces each neutral side with the side of
   its argument (step D2). In a definition body such an argument is a
-  parameter of the body, a literal or a name, also for a computed side (step
-  D4c). The type of a proof parameter
+  parameter of the body, a literal, a name or a parenthesized term, also for
+  a computed side (steps D4c and D4). The type of a proof parameter
   can name earlier value parameters the same way, also inside a computed
   side (steps D2b and D4b). Partial
   applications of such a function are refused. The name of a
