@@ -158,16 +158,43 @@ int project(Nat position, Nat index, Typed found, Tokens tokens, Typed *result, 
   return 1;
 }
 
-/* D5 part B (design item 5): substitute a typed closed witness at level.
-   A side with no marker left closes on its node, as for a D4 side. */
-static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat level, Typed found, Val side,
-                    Val *result) {
+/* D5 part C (design item 8): the node of a witness for a marker. A closed
+   witness (VAL_CLOSED) gives the printed value of found, a body parameter
+   its marker and a neutral term its node in marker form. */
+static int witness_node(Fuel fuel, Nat position, Typed found, Val witness, const Term **node) {
+  switch (witness.kind) {
+  case VAL_CLOSED: {
+    Val closed;
+    if (!printed_side(fuel, found.value, &closed)) return 0;
+    *node = term_closed(position, found.type, found.value, closed.text);
+    return 1;
+  }
+  case VAL_VAR: *node = term_var(position, 0, marker_name(witness.index), witness.index); return 1;
+  case VAL_TERM: *node = witness.node; return 1;
+  }
+  return 0;
+}
+
+/* D5 part B (design item 5): substitute a typed witness at level. Part C
+   (design item 8): witness is the side form of the witness. A VAL_CLOSED
+   witness puts the value of found. A side with no marker left closes on its
+   node, as for a D4 side. */
+static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat level, Typed found, Val witness,
+                    Val side, Val *result) {
   *result = side;
   switch (side.kind) {
   case VAL_CLOSED: return 1;
   case VAL_VAR: {
     if (side.index != level) return 1;
-    return printed_side(fuel, found.value, result);
+    switch (witness.kind) {
+    case VAL_CLOSED: return printed_side(fuel, found.value, result);
+    case VAL_VAR: *result = witness; return 1;
+    case VAL_TERM:
+      *result = witness;
+      if (term_marker_bound(witness.node) > 0) return 1;
+      return close_side(fuel, environment, a, witness, result);
+    }
+    return 0;
   }
   case VAL_TERM: {
     Nat size = term_marker_bound(side.node);
@@ -175,9 +202,7 @@ static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat 
     if (first == NULL) return 1;
     const Term **table = arena_alloc(sizeof *table * (size + 1));
     for (Nat index = 0; index < size; index++) table[index] = NULL;
-    Val closed;
-    if (!printed_side(fuel, found.value, &closed)) return 0;
-    table[level] = term_closed(first->position, found.type, found.value, closed.text);
+    if (!witness_node(fuel, first->position, found, witness, &table[level])) return 0;
     const Term *node = term_with_markers(side.node, table, size);
     *result = (Val){.kind = VAL_TERM, .node = node};
     if (term_marker_bound(node) > 0) return 1;
@@ -189,28 +214,29 @@ static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat 
 
 /* D5 part B (design items 5 and 7): B with the value of a for the marker at
    level, in each Eq of B. A nested Sigma has its own level, thus its marker
-   stays. The walk has the form of instantiate_type and uses its fuel. */
+   stays. The walk has the form of instantiate_type and uses its fuel. Part C
+   (design item 8): witness is the side form of a (see put_side). */
 static int put_marker(Fuel fuel, const Bindings *environment, const LType *type, Nat level, Typed found,
-                      const LType **result) {
+                      Val witness, const LType **result) {
   if (fuel == 0) return 0;
   Fuel more = fuel - 1;
   LType copy = *type;
   switch (type->tag) {
   case TY_EQ:
-    if (!put_marker(more, environment, type->left, level, found, &copy.left) ||
-        !put_side(more, environment, copy.left, level, found, type->lhs, &copy.lhs) ||
-        !put_side(more, environment, copy.left, level, found, type->rhs, &copy.rhs)) return 0;
+    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left) ||
+        !put_side(more, environment, copy.left, level, found, witness, type->lhs, &copy.lhs) ||
+        !put_side(more, environment, copy.left, level, found, witness, type->rhs, &copy.rhs)) return 0;
     break;
   case TY_OPTION:
   case TY_LIST:
   case TY_QUERY:
-    if (!put_marker(more, environment, type->left, level, found, &copy.left)) return 0;
+    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left)) return 0;
     break;
   case TY_SIGMA:
   case TY_PROD:
   case TY_SUM:
-    if (!put_marker(more, environment, type->left, level, found, &copy.left) ||
-        !put_marker(more, environment, type->right, level, found, &copy.right)) return 0;
+    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left) ||
+        !put_marker(more, environment, type->right, level, found, witness, &copy.right)) return 0;
     break;
   case TY_NAT:
   case TY_TEXT:
@@ -232,17 +258,27 @@ static int put_marker(Fuel fuel, const Bindings *environment, const LType *type,
 }
 
 /* D5 part B (design item 7): witness and payload of a closed Sigma value.
-   payload has B with the value of witness for the marker. A neutral Sigma
-   value (a parameter in a body) is part C. */
-static int project_sigma(Fuel fuel, const Bindings *environment, Nat position, Nat index, Typed found, Tokens tokens,
-                         Typed *result, Tokens *rest, Failure *failure) {
+   payload has B with the value of witness for the marker. Part C (design
+   item 8): a neutral Sigma value (a parameter in a body) gives a neutral
+   projection with the null value, and payload has B with the side of
+   `witness s` for the marker (neutral_witness on the argument tokens). With
+   no argument tokens (eval_synth), a neutral payload is refused. */
+static int neutral_witness(Fuel fuel, const Bindings *environment, const LType *a, Nat position, Tokens argument,
+                           Val *side);
+
+static int project_sigma(Fuel fuel, const Bindings *environment, Nat position, Nat index, Typed found,
+                         Tokens argument, Tokens tokens, Typed *result, Tokens *rest, Failure *failure) {
   if (found.type->tag != TY_SIGMA) return fail_at(failure, position, eSigma);
-  if (found.value->kind != VALUE_ATTRS) return fail_at(failure, position, eTerm);
+  Nat neutral = found.value->kind != VALUE_ATTRS ? 1 : 0;
+  Val side = {.kind = VAL_CLOSED};
+  if (neutral == 1 && index == 2 && !neutral_witness(fuel, environment, found.type->left, position, argument, &side))
+    return fail_at(failure, position, eTerm);
   const LType *b = found.type->left;
+  const Value *witness = neutral == 1 ? &null_value : project_value(1, found.value);
   if (index == 2 && !put_marker(fuel, environment, found.type->right, found.type->level,
-                              (Typed){found.type->left, project_value(1, found.value)}, &b))
+                              (Typed){found.type->left, witness}, side, &b))
     return fail_at(failure, position, eSigma);
-  *result = (Typed){b, project_value(index, found.value)};
+  *result = (Typed){b, neutral == 1 ? &null_value : project_value(index, found.value)};
   *rest = tokens;
   return 1;
 }
@@ -1302,6 +1338,22 @@ int printed_side(Fuel fuel, const Value *value, Val *side) {
   return 1;
 }
 
+/* The tokens already name markers in scope, either from a signature or
+   from the renaming of body parameters in body_term_side. */
+static int marked_term_side(Fuel fuel, const Bindings *scope, const LType *a, Tokens tokens, Val *side) {
+  const Value *value;
+  const Term *node = NULL;
+  Tokens after;
+  Nat remaining;
+  Failure failure = {0, {NULL, 0}};
+  if (!parse_term(fuel, 1, 1, a, scope, tokens, &value, &after, &remaining, &node, &failure)) return 0;
+  if (node == NULL) return 0;
+  const Term *marked = marker_vars(node);
+  if (!side_normal_at(fuel, scope, a, marked, &marked, &failure)) return 0;
+  *side = (Val){.kind = VAL_TERM, .node = marked};
+  return 1;
+}
+
 /* D4 part D (Q-D4-7 lift 1): a parenthesized argument in a body gives a
    VAL_TERM side of type a. As in a computed side, each body parameter of
    the atom becomes the marker of its body level, bound to null with the
@@ -1324,17 +1376,28 @@ static int body_term_side(Fuel fuel, const Bindings *environment, const LType *a
     }
     items[at] = head;
   }
-  const Value *value;
-  const Term *node = NULL;
-  Tokens after;
-  Nat remaining;
-  Failure failure = {0, {NULL, 0}};
-  if (!parse_term(fuel, 1, 1, a, scope, (Tokens){items, size}, &value, &after, &remaining, &node, &failure)) return 0;
-  if (node == NULL) return 0;
-  const Term *marked = marker_vars(node);
-  if (!side_normal_at(fuel, scope, a, marked, &marked, &failure)) return 0;
-  *side = (Val){.kind = VAL_TERM, .node = marked};
-  return 1;
+  return marked_term_side(fuel, scope, a, (Tokens){items, size}, side);
+}
+
+/* D5 part C (design item 8): the side of `witness s` for the argument
+   tokens of s. The tokens ( witness s ) take the path of a parenthesized
+   argument in a body (body_term_side), thus the side has the form of a
+   declared side `(witness s)`. A signature already names its markers and
+   has no body-level frame, so its tokens use marked_term_side directly. */
+static int neutral_witness(Fuel fuel, const Bindings *environment, const LType *a, Nat position, Tokens argument,
+                           Val *side) {
+  if (argument.size == 0) return 0;
+  Nat size = argument.size + 3;
+  Token *items = arena_alloc(sizeof *items * size);
+  items[0] = (Token){.kind = TOKEN_PUNCTUATION, .position = position, .number = 40, .text = text_end()};
+  items[1] = (Token){.kind = TOKEN_IDENTIFIER, .position = position, .text = switness};
+  for (Nat at = 0; at < argument.size; at++) items[at + 2] = argument.items[at];
+  items[size - 1] = (Token){.kind = TOKEN_PUNCTUATION, .position = position, .number = 41, .text = text_end()};
+  Nat found = 0;
+  Nat index = 0;
+  if (body_level(switness, environment, &found, &index))
+    return body_term_side(fuel, environment, a, (Tokens){items, size}, side);
+  return marked_term_side(fuel, environment, a, (Tokens){items, size}, side);
 }
 
 int argument_text(Fuel fuel, const Bindings *environment, const LType *a, const Value *value, Tokens tokens, Val *side) {
@@ -1916,7 +1979,8 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
                                     : NULL);
     if (form > 5)
       return with_term(lift_parsed(spent,
-                                   project_sigma(more, environment, head.position, form - 5, found, after, typed, rest,
+                                   project_sigma(more, environment, head.position, form - 5, found,
+                                                 (Tokens){tail.items, tail.size - after.size}, after, typed, rest,
                                                  failure),
                                    left),
                        term, term != NULL ? form_term(form == 6 ? TERM_WITNESS : TERM_PAYLOAD, head.position,
@@ -1940,16 +2004,17 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
 }
 
 /* D5 part B (design items 5 and 6): pack a b checks only against an expected
-   Sigma type, on closed values (a body is part C). It checks a against A,
-   puts the value of a for the marker in B, and checks b against that B. The
-   value is the object of witness and payload. An Eq payload is null (refl). */
+   Sigma type. It checks a against A, puts a for the marker in B, and checks b
+   against that B. The value is the object of witness and payload. An Eq
+   payload is null (refl). Part C (design item 8): a is put as its side form
+   (argument_text). In a body, a body parameter or a parenthesized term thus
+   stays in marker form, not a printed null value. */
 static int pack_term(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected,
                      const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest, Nat *left,
                      const Term **term, Failure *failure) {
   if (fuel == 0) return 0;
   Fuel more = fuel - 1;
   if (expected->tag != TY_SIGMA) return fail_at(failure, position, eSigma);
-  if (checking_body(environment) == 1) return fail_at(failure, position, eTerm);
   if (atom == 1) return fail_at(failure, position, eParen);
   const Value *witness;
   Tokens after;
@@ -1958,8 +2023,12 @@ static int pack_term(Fuel fuel, Nat budget, Nat atom, Nat position, const LType 
   if (!parse_term(more, budget, 1, expected->left, environment, tokens, &witness, &after, &spent,
                   want_term(term, &first), failure))
     return 0;
+  Val side;
+  if (!argument_text(more, environment, expected->left, witness, (Tokens){tokens.items, tokens.size - after.size},
+                     &side))
+    return fail_at(failure, position, eTerm);
   const LType *b;
-  if (!put_marker(more, environment, expected->right, expected->level, (Typed){expected->left, witness}, &b))
+  if (!put_marker(more, environment, expected->right, expected->level, (Typed){expected->left, witness}, side, &b))
     return fail_at(failure, position, eSigma);
   const Value *payload;
   Tokens later;
@@ -2956,7 +3025,7 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
     return lift_parsed(spent,
                        project_sigma(more, environment, term->position, term->tag == TERM_WITNESS ? 1 : 2, found,
-                                     no_tokens, typed, &rest, failure),
+                                     no_tokens, no_tokens, typed, &rest, failure),
                        left);
   case TERM_SYMM:
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
@@ -3560,7 +3629,10 @@ int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term *
     return 1;
   }
   int applied = node->tag == TERM_APPLY && (node->callee == NULL || node->callee->tag == TERM_NAME);
-  if (node->tag != TERM_CONSTRUCT && !applied) return fail_at(failure, node->position, eTerm);
+  /* D5 part C: projections of a neutral Sigma value stay nodes, as an
+     application with a marker does. A payload can itself be a Sigma. */
+  int projected = node->tag == TERM_WITNESS || node->tag == TERM_PAYLOAD;
+  if (node->tag != TERM_CONSTRUCT && !applied && !projected) return fail_at(failure, node->position, eTerm);
   const Terms *args;
   if (!normal_args(more, scope, node->args, &args, failure)) return 0;
   *normal = with_args(node, args);

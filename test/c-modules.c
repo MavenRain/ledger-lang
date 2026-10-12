@@ -2397,11 +2397,104 @@ static void test_d5_pack(void) {
   sigma_refused("def s : Sigma (x : Nat) (Eq Nat x x) := pack 1 refl\ndef p : Eq Nat 2 2 := payload s\n", "payload s",
                 eTerm);
   sigma_refused("def t : Sigma Nat Text := pack 1 \"a\"\ndef wt : Text := witness t\n", "witness t", eTerm);
+}
 
-  /* Part C: pack in a body and a projection of a parameter. */
-  sigma_refused("def f : (n : Nat) -> Sigma (x : Nat) (Eq Nat x x) := fun (n : Nat) => pack n refl\n",
-                "pack n", eTerm);
-  sigma_refused("def f : (s : Sigma Nat Text) -> Nat := fun (s : Sigma Nat Text) => witness s\n", "witness s", eTerm);
+/* D5 part C: projections on neutral Sigma values (design item 8). pack in a
+   body, witness and payload of a parameter, refl against a declared side
+   `witness s`, and pack of the projections of a parameter. A neutral value
+   does not prove a false Eq: the refusals are at the body, not at the
+   declared type. Called from main after test_d5_pack. */
+static void test_d5_neutral(void) {
+  const char *source =
+      "def f : (n : Nat) -> Sigma (x : Nat) (Eq Nat x x) := fun (n : Nat) => pack n refl\n"
+      "def g : (s : Sigma Nat Text) -> Nat := fun (s : Sigma Nat Text) => witness s\n"
+      "def a : (s : Sigma (x : Nat) (Eq Nat x x)) -> Eq Nat (witness s) (witness s) :=\n"
+      "  fun (s : Sigma (x : Nat) (Eq Nat x x)) => refl\n"
+      "def b : (s : Sigma (x : Nat) (Eq Nat x x)) -> Eq Nat (witness s) (witness s) :=\n"
+      "  fun (s : Sigma (x : Nat) (Eq Nat x x)) => payload s\n"
+      "def e : (n : Nat) -> Sigma (x : Nat) (Eq Nat x n) := fun (n : Nat) => pack n refl\n"
+      "def r : (s : Sigma (x : Nat) (Eq Nat x x)) -> Sigma (x : Nat) (Eq Nat x x) :=\n"
+      "  fun (s : Sigma (x : Nat) (Eq Nat x x)) => pack (witness s) (payload s)\n"
+      "def h : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Eq Nat (witness s) n :=\n"
+      "  fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => payload s\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* A side of B with the marker in an application: the witness node of a
+     body parameter (pack n refl) and of `witness s` (payload s). */
+  const char *applied_pack =
+      "def id : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def k : (n : Nat) -> Sigma (x : Nat) (Eq Nat (id x) (id x)) := fun (n : Nat) => pack n refl\n";
+  const char *applied_payload =
+      "def id : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def q : (s : Sigma (x : Nat) (Eq Nat (id x) (id x))) -> Eq Nat (id (witness s)) (id (witness s)) :=\n"
+      "  fun (s : Sigma (x : Nat) (Eq Nat (id x) (id x))) => payload s\n";
+  const Bindings *pack_environment = NULL;
+  assert(check_definitions(text(applied_pack), &pack_environment, &failure));
+  const Bindings *payload_environment = NULL;
+  assert(check_definitions(text(applied_payload), &payload_environment, &failure));
+
+  /* Two parameters s and t: `witness s` and `witness t` are different
+     sides. pack m refl puts m for x, thus refl needs Eq Nat m n. */
+  sigma_refused("def f : (s : Sigma (x : Nat) (Eq Nat x x)) -> (t : Sigma (x : Nat) (Eq Nat x x)) ->\n"
+                "  Eq Nat (witness s) (witness t) :=\n"
+                "  fun (s : Sigma (x : Nat) (Eq Nat x x)) (t : Sigma (x : Nat) (Eq Nat x x)) => refl\n",
+                "refl\n", text("refl needs two equal sides"));
+  sigma_refused("def f : (s : Sigma (x : Nat) (Eq Nat x x)) -> (t : Sigma (x : Nat) (Eq Nat x x)) ->\n"
+                "  Eq Nat (witness s) (witness t) :=\n"
+                "  fun (s : Sigma (x : Nat) (Eq Nat x x)) (t : Sigma (x : Nat) (Eq Nat x x)) => payload s\n",
+                "payload s", eTerm);
+  sigma_refused("def f : (m : Nat) -> (n : Nat) -> Sigma (x : Nat) (Eq Nat x n) := fun (m : Nat) (n : Nat) => pack m refl\n",
+                "refl\n", text("refl needs two equal sides"));
+  sigma_refused("def f : (s : Sigma (x : Nat) (Eq Nat x x)) -> (t : Sigma (x : Nat) (Eq Nat x x)) ->\n"
+                "  Sigma (x : Nat) (Eq Nat x x) :=\n"
+                "  fun (s : Sigma (x : Nat) (Eq Nat x x)) (t : Sigma (x : Nat) (Eq Nat x x)) =>\n"
+                "  pack (witness s) (payload t)\n",
+                "payload t", eTerm);
+}
+
+/* Nested neutral payloads remain nodes in computed equality sides. */
+static void test_d5_nested_neutral(void) {
+  const char *source =
+      "def payloadProof : (s : Sigma Nat Nat) -> Eq Nat (payload s) (payload s) :=\n"
+      "  fun (s : Sigma Nat Nat) => refl\n"
+      "def S : Type 0 := Sigma Nat (Sigma (x : Nat) (Eq Nat x x))\n"
+      "def extract : (s : S) -> Eq Nat (witness (payload s)) (witness (payload s)) :=\n"
+      "  fun (s : S) => payload (payload s)\n"
+      "def copy : (s : S) -> Sigma (x : Nat) (Eq Nat x x) :=\n"
+      "  fun (s : S) => pack (witness (payload s)) (payload (payload s))\n"
+      "def linked : (s : Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y))) ->\n"
+      "  Eq Nat (witness s) (witness (payload s)) :=\n"
+      "  fun (s : Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y))) => payload (payload s)\n"
+      "def s : S := pack 0 (pack 7 refl)\n"
+      "def p : Eq Nat 7 7 := extract s\n"
+      "def t : Sigma (x : Nat) (Eq Nat x x) := copy s\n"
+      "def u : Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y)) := pack 9 (pack 9 refl)\n"
+      "def q : Eq Nat 9 9 := linked u\n"
+      "def v : Sigma Nat Nat := pack 1 2\n"
+      "def vp : Eq Nat 2 2 := payloadProof v\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  assert(same_text(printed(value_named(environment, "t")->value), text("{\"witness\":7,\"payload\":null}")));
+  assert(same_text(printed(value_named(environment, "p")->value), text("null")));
+  assert(same_text(printed(value_named(environment, "q")->value), text("null")));
+  assert(same_text(printed(value_named(environment, "vp")->value), text("null")));
+
+  const char *distinct =
+      "def f : (s : Sigma Nat (Sigma (x : Nat) (Eq Nat x x))) ->\n"
+      "  (t : Sigma Nat (Sigma (x : Nat) (Eq Nat x x))) ->\n"
+      "  Eq Nat (witness (payload s)) (witness (payload t)) :=\n"
+      "  fun (s : Sigma Nat (Sigma (x : Nat) (Eq Nat x x)))\n"
+      "      (t : Sigma Nat (Sigma (x : Nat) (Eq Nat x x))) => ";
+  char refused[1024];
+  int length = snprintf(refused, sizeof refused, "%srefl\n", distinct);
+  assert(length > 0 && (size_t)length < sizeof refused);
+  sigma_refused(refused, "refl\n", text("refl needs two equal sides"));
+  length = snprintf(refused, sizeof refused, "%spayload (payload s)\n", distinct);
+  assert(length > 0 && (size_t)length < sizeof refused);
+  sigma_refused(refused, "payload (payload s)\n", eTerm);
 }
 
 static void test_d5_witness_types(void) {
@@ -2476,6 +2569,8 @@ int main(void) {
   test_d4_lifts();
   test_d5_type();
   test_d5_pack();
+  test_d5_neutral();
+  test_d5_nested_neutral();
   test_d5_witness_types();
   test_d5_equality_carrier();
   test_d5_scope();

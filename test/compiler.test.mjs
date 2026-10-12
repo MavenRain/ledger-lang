@@ -101,6 +101,23 @@ test('Sigma pack, projections on closed values and the witness and payload keys'
   reject('def n : Nat := 1 def r : Nat := witness n', /expected a Sigma type/);
 });
 
+test('Sigma projections on neutral values: pack in a body, witness and payload of a parameter', () => {
+  const S = 'Sigma (x : Nat) (Eq Nat x x)';
+  const twin = `def f : (s : ${S}) -> (t : ${S}) ->`;
+  const r = `def r : (s : ${S}) -> ${S} := fun (s : ${S}) => pack (witness s) (payload s)`;
+  assert.deepEqual(run(`def f : (n : Nat) -> ${S} := fun (n : Nat) => pack n refl`).instances, []);
+  assert.deepEqual(run('def g : (s : Sigma Nat Text) -> Nat := fun (s : Sigma Nat Text) => witness s').instances, []);
+  assert.deepEqual(run(`def a : (s : ${S}) -> Eq Nat (witness s) (witness s) := fun (s : ${S}) => refl`).instances, []);
+  assert.deepEqual(run(`def b : (s : ${S}) -> Eq Nat (witness s) (witness s) := fun (s : ${S}) => payload s`).instances, []);
+  assert.deepEqual(run(`def h : (n : Nat) -> (s : Sigma (x : Nat) (Eq Nat x n)) -> Eq Nat (witness s) n := fun (n : Nat) (s : Sigma (x : Nat) (Eq Nat x n)) => payload s`).instances, []);
+  assert.deepEqual(values(`${r} def s : ${S} := pack 1 refl def t : ${S} := r s`),
+    [{ witness: 1, payload: null }, { witness: 1, payload: null }]);
+  reject(`${twin} Eq Nat (witness s) (witness t) := fun (s : ${S}) (t : ${S}) => refl`, /refl needs two equal sides/);
+  reject(`${twin} Eq Nat (witness s) (witness t) := fun (s : ${S}) (t : ${S}) => payload s`, /does not have the declared type/);
+  reject(`${twin} ${S} := fun (s : ${S}) (t : ${S}) => pack (witness s) (payload t)`, /does not have the declared type/);
+  reject('def f : (m : Nat) -> (n : Nat) -> Sigma (x : Nat) (Eq Nat x n) := fun (m : Nat) (n : Nat) => pack m refl', /refl needs two equal sides/);
+});
+
 test('Kind enum constructors', () => {
   const kinds = ['Party', 'Membership', 'Commercial', 'Commitment', 'Artifact', 'Event', 'Assignment', 'Policy'];
   assert.deepEqual(values(kinds.map((kind, i) => `def k${i} : Kind := kind${kind}`).join('\n')),
