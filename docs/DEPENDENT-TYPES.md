@@ -103,7 +103,7 @@ The plan adds neutral values in two stages:
   node, with a marker variable for each parameter. Computed sides compare with
   `same_term`; shifting and renaming markers walk the tree. `close_side`
   evaluates the tree with `eval_term` and refuses an unknown answer without
-  replaying tokens. These token uses remain after D5:
+  replaying tokens. These token uses remain after D6:
   - `synth_term`, `eval_apply` and `apply_body` (`compiler/checker.c`):
     body evaluation can fall back to `parse_term`.
   - `unary_of`, `stepper_argument` and the inline, partial and bound
@@ -117,6 +117,10 @@ The plan adds neutral values in two stages:
   - `pack_term` and `neutral_witness` (`compiler/checker.c`, D5): the
     argument tokens of `pack` and of a projection give the side of the
     witness, as for a parenthesized argument in a body.
+  - `eval_synth` (`compiler/checker.c`, D6): the `TERM_TRANSPORT` node
+    keeps the source tokens of the motive. Each evaluation parses the
+    motive again in the scope of the application, so a type parameter or a
+    value parameter of the body gets its argument.
 - D4 (done). Computed sides. A side can be a term of value parameters,
   literals, constructor forms, names of earlier definitions and
   applications of earlier definitions, such as `(natAdd n 1)` or
@@ -182,9 +186,29 @@ The plan adds neutral values in two stages:
   A closed witness substitutes its JSON encoding for x in B, including
   a record witness. In a function body, a parameter or a projection stays
   as a neutral side.
-- D6. `transport` and `cong`. `cong f e` gives `Eq B (f x) (f y)` from
-  `e : Eq A x y`. `transport P e t` moves `t : P x` to `P y`. Both need the
-  value domain of D3 and the computed sides of D4.
+- D6 (done). `cong` and `transport`. `cong f e` proves
+  `Eq B (f x) (f y)` from `e : Eq A x y`. f is the name of an earlier
+  definition with one data parameter, and its result type B is a data type
+  that does not name the parameter. Else the checker gives "cong needs a
+  function with one data parameter". A and B come from e and f, so
+  `cong f refl` gives "cannot infer the type of this term". The sides are
+  computed sides (D4). An application with a parameter marker stays
+  neutral. A closed `Nat` side evaluates f and keeps the JSON encoding of
+  its result. `cong` is a proof.
+  `transport (z : A) B e t` checks t against B with x for z. Its type is B
+  with y for z, and its value is the value of t, so
+  `def u : Option Nat := transport (z : Nat) (Option Nat) pf (some 1)`
+  writes `{"name":"u","type":"Option (Nat)","value":1}`. The motive has
+  the binder form of D5. B can name z and the type and value parameters
+  of the function body, and B can be a Sigma type. If A is not the type of
+  e, the checker gives "the parameter type does not match the equality
+  type". If e is not an equality, it gives "expected an equality proof".
+  A t that does not check against B with x, or a declared type other than
+  B with y, gives "term does not have the declared type". A closed side of
+  e keeps only its JSON text, and the compiler has no JSON reader. Thus a
+  closed side of a type other than `Nat` gives the same refusal in both
+  forms. A neutral side gives null for z. A named family `P` in place of
+  the motive moves to D7 or a later step.
 - D7. `ReadPath` (STATUS item 2). It has a type parameter and a `Query`
   parameter, and `Query` is an indexed family in `Type 1`. The type parser
   then accepts the name, and a definition of type `ReadPath` is a function

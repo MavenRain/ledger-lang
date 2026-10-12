@@ -25,6 +25,13 @@ not complete the M0 milestone in `SPEC.md`.
   body, a projection is neutral, and `payload s` has B with `(witness s)`
   for x. An instance is `{"witness": a, "payload": b}`. An `Eq` payload
   writes null.
+- `cong` and `transport`, step D6 of `docs/DEPENDENT-TYPES.md`.
+  `cong f e` proves `Eq B (f x) (f y)` from `e : Eq A x y`, where f is an
+  earlier definition with one data parameter and a data result that does
+  not name the parameter. `cong` is a proof and is not an instance.
+  `transport (z : A) B e t` checks t against B with x for z. Its type is B
+  with y for z, and its value is the value of t. In both forms, a closed
+  side of e must have the type `Nat`.
 - Dependent equality results, steps D1, D2, D2b, D3, D3a, D4a, D4b, D4c and D4
   of `docs/DEPENDENT-TYPES.md`. A function type can end in `Eq A x y`, and
   a side can be the name of a value parameter of type A. Such a side is
@@ -166,10 +173,10 @@ not complete the M0 milestone in `SPEC.md`.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types. `docs/DEPENDENT-TYPES.md` gives the plan
-   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c, D4 and D5 and
-   the syntax tree portion of D3 are done. D5 adds Sigma checking and
-   evaluation and `Eq` inside Sigma. Body evaluation keeps token
-   fallbacks (step D3), and steps D6 and D7 remain.
+   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c, D4, D5 and D6
+   and the syntax tree portion of D3 are done. D5 adds Sigma checking and
+   evaluation and `Eq` inside Sigma. D6 adds `cong` and `transport`. Body
+   evaluation keeps token fallbacks (step D3), and step D7 remains.
 2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
    needs the dependent function types of item 1. Until then the type parser
    refuses this name with `this type belongs to a later milestone`.

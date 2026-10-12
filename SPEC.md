@@ -51,6 +51,11 @@ is in `Type 1`, so a definition of a Query type is not an instance.
 equal when their values have the same JSON encoding. A proof has no runtime
 content, so a definition of an `Eq` type is not an instance.
 
+`transport (z : A) B e t` takes a proof `e : Eq A x y` and a term `t` of
+type `B` with `x` for `z`. Its type is `B` with `y` for `z`, and its value
+is the value of `t`. The motive `(z : A) B` has the binder form of
+`Sigma (x : A) B`.
+
 `(x : A) -> B` is the type of a function. A function has no JSON encoding, so
 a function type is not a data type. An application `f a` checks `a` against
 `A` and evaluates the body of `f` with `x` bound to the value of `a`.
