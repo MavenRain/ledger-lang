@@ -512,6 +512,22 @@ int sigma_type(Fuel fuel, const Bindings *environment, const Params *done, Token
   return 1;
 }
 
+/* A Query type is in Type 1. Thus a function type with a Query parameter or a
+   Query result is in Type 1, as a function type with a type parameter
+   (step D7a). This also applies through function parameter types. */
+static Nat query_in_type(const LType *type) {
+  if (is_query_type(type) == 1) return 1;
+  return is_arrow_type(type) == 1 && (query_in_type(type->left) == 1 || query_in_type(type->right) == 1);
+}
+
+static Nat has_query_param(const Params *params) {
+  return params != NULL && (query_in_type(params->head.type) == 1 || has_query_param(params->tail) == 1);
+}
+
+static Nat has_query_type(Signature found) {
+  return has_query_param(found.params) == 1 || is_query_type(found.result) == 1;
+}
+
 /* The type of a parameter. A proof parameter `(e : Eq A x y)` can name
    earlier value parameters of type A as its sides (step D2b), also inside a
    computed side (step D4b). */
@@ -529,7 +545,9 @@ static int parse_param(Fuel fuel, const Bindings *environment, const Params *don
   const LType *type;
   Tokens after;
   if (!param_declared(fuel, environment, done, declared, &type, &after, failure)) return 0;
-  if (!(is_arrow_type(type) == 1 || type_level(type) == 0 || same_type(type, &universe_zero) == 1))
+  /* A Query type `Query T` is a parameter type (step D7a). */
+  if (!(is_arrow_type(type) == 1 || type_level(type) == 0 || same_type(type, &universe_zero) == 1
+        || is_query_type(type) == 1))
     return fail_at(failure, first_position(declared), eData);
   *item = (Param){name, type};
   return close_parsed(after, rest, failure);
@@ -569,7 +587,8 @@ static int parse_signature(Fuel fuel, const Bindings *environment, const Params 
       return 1;
     }
     if (!parse_type_in(more, 0, environment, done, tokens, &result, rest, failure)) return 0;
-    if (type_level(result) != 0) return fail_at(failure, first_position(tokens), eData);
+    /* The result can also be a Query type (step D7a). */
+    if (type_level(result) != 0 && is_query_type(result) != 1) return fail_at(failure, first_position(tokens), eData);
     *found = (Signature){reverse_params_onto(NULL, done), result};
     return 1;
   }
@@ -696,7 +715,7 @@ static int parse_definition(Fuel fuel, Nat budget, const Bindings *environment, 
   if (starts_arrow(fuel, environment, after_assign) == 1) {
     Signature found;
     if (!parse_signature(fuel, environment, NULL, after_assign, &found, rest, failure)) return 0;
-    if (type_level(type) != 1 + has_type_param(found.params))
+    if (type_level(type) != 1 + (has_type_param(found.params) == 1 || has_query_type(found) == 1))
       return fail_at(failure, first_position(after_assign), eUniverse);
     *item = (Binding){.kind = BIND_ARROW, .name = name, .type = found.result, .params = found.params};
     *left = spent;

@@ -2771,6 +2771,85 @@ static void test_d6_transport_scope(void) {
   assert(same_text(printed(parsed.value), printed(evaluated.value)));
 }
 
+/* D7 part A: a Query type is a parameter type and a result type. A function
+   type with a Query parameter or a Query result is in Type 1. */
+#define D7_ASK                                                 \
+  "def deal : Ref kindCommercial := refTo (hashOf \"deal\")\n" \
+  "def ask : Query Flag := queryAmountReconciled deal\n"
+#define D7_F "def f : (q : Query Flag) -> Query Flag := fun (q : Query Flag) => q\n"
+#define D7_G "def g : (T : Type 0) -> (q : Query T) -> Query T := fun (T : Type 0) (q : Query T) => q\n"
+
+static void test_d7_query_param(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  const Binding *item;
+  const Binding *ask;
+  assert(check_definitions(text(D7_F D7_G), &environment, &failure));
+  assert(lookup(text("g"), environment, &item) && item->params != NULL && item->params->tail != NULL);
+  /* The signature keeps the type parameter T in TY_QUERY.left by its name;
+     instantiate_type replaces it at an application. */
+  const LType *query = item->params->tail->head.type;
+  assert(query->tag == TY_QUERY && query->left->tag == TY_SCHEMA);
+  assert(same_text(query->left->name, item->params->head.name) && same_type(item->type, query));
+
+  environment = NULL;
+  assert(check_definitions(text(D7_ASK D7_F "def a2 : Query Flag := f ask\n"), &environment, &failure));
+  assert(lookup(text("ask"), environment, &ask) && lookup(text("a2"), environment, &item));
+  assert(same_type(item->type, ask->type));
+  environment = NULL;
+  assert(check_definitions(text(D7_ASK D7_G "def a3 : Query Flag := g Flag ask\n"), &environment, &failure));
+  assert(lookup(text("ask"), environment, &ask) && lookup(text("a3"), environment, &item));
+  assert(same_type(item->type, ask->type));
+
+  const char *a4 = D7_ASK D7_F "def a4 : Query Verdict := f ask\n";
+  environment = NULL;
+  assert(!check_definitions(text(a4), &environment, &failure));
+  assert(failure.position == (Nat)(strstr(strstr(a4, "def a4 :"), "f ask") - a4) && same_text(failure.message, eTerm));
+  sigma_refused(D7_ASK D7_G "def a5 : Query Verdict := g Flag ask\n", "g Flag ask", eTerm);
+
+  environment = NULL;
+  assert(check_definitions(text("def F : Type 1 := (q : Query Flag) -> Flag\n"
+                                "def F1 : Type 1 := (n : Nat) -> Query Flag\n"),
+                           &environment, &failure));
+  assert(lookup(text("F"), environment, &item) && item->kind == BIND_ARROW && is_query_type(item->params->head.type));
+  assert(lookup(text("F1"), environment, &item) && item->kind == BIND_ARROW && is_query_type(item->type));
+  sigma_refused("def F0 : Type 0 := (q : Query Flag) -> Flag", "(q", eUniverse);
+  /* The level of F comes from the rule of parse_definition, not from
+     type_level of TY_ARROW (1 for each arrow). A Query parameter type is in
+     Type 1. */
+  assert(lookup(text("F"), environment, &item) && type_level(item->params->head.type) == 1);
+
+  sigma_refused("def h : (x : Option (Query Flag)) -> Nat := fun (x : Option (Query Flag)) => 1", "(Query", eData);
+  sigma_refused("def k : (x : Type 1) -> Nat := fun (x : Type 1) => 1", "Type 1", eData);
+}
+
+static void test_d7_query_universe(void) {
+  sigma_refused("def F : Type 1 := (q : Query Flag) -> Flag\n"
+                "def H : Type 0 := (f : F) -> Nat\n", "(f", eUniverse);
+  sigma_refused("def F : Type 1 := (n : Nat) -> Query Flag\n"
+                "def H : Type 0 := (f : F) -> Nat\n", "(f", eUniverse);
+  sigma_refused("def F : Type 1 := (q : Query Flag) -> Flag\n"
+                "def H : Type 1 := (f : F) -> Nat\n"
+                "def J : Type 0 := (h : H) -> Nat\n", "(h", eUniverse);
+
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text("def F : Type 1 := (q : Query Flag) -> Flag\n"
+                                "def G : Type 1 := (n : Nat) -> Query Flag\n"
+                                "def H : Type 1 := (f : F) -> Nat\n"
+                                "def I : Type 1 := (f : G) -> Nat\n"
+                                "def J : Type 1 := (h : H) -> Nat\n"
+                                "def Alias : Type 1 := J\n"
+                                "def Tail : Type 1 := (n : Nat) -> H\n"
+                                "def Data : Type 0 := (n : Nat) -> Flag\n"
+                                "def HigherData : Type 0 := (f : Data) -> Nat\n"),
+                           &environment, &failure));
+}
+
+#undef D7_ASK
+#undef D7_F
+#undef D7_G
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -2805,6 +2884,8 @@ int main(void) {
   test_d6_cong_closed_body();
   test_d6_transport();
   test_d6_transport_scope();
+  test_d7_query_param();
+  test_d7_query_universe();
   puts("C module tests passed");
   return 0;
 }

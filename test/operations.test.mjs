@@ -193,6 +193,27 @@ test('Query takes one data type and is a Type 1 type', () => {
   reject(`${ask}\ndef same : Eq (Query Flag) ask ask := refl`);
 });
 
+test('A Query type is a parameter type', () => {
+  const deal = 'def deal : Ref kindCommercial := refTo (hashOf "deal")';
+  const ask = `${deal}\ndef ask : Query Flag := queryAmountReconciled deal`;
+  const instance = { name: 'deal', type: 'Ref (kindCommercial)', value: { kind: 'kindCommercial', hash: 'deal' } };
+  const f = 'def f : (q : Query Flag) -> Query Flag := fun (q : Query Flag) => q';
+  const g = 'def g : (T : Type 0) -> (q : Query T) -> Query T := fun (T : Type 0) (q : Query T) => q';
+  assert.deepEqual(accept(f), []);
+  assert.deepEqual(accept(g), []);
+  assert.deepEqual(accept(`${ask}\n${f}\ndef a2 : Query Flag := f ask`), [instance]);
+  assert.deepEqual(accept(`${ask}\n${g}\ndef a3 : Query Flag := g Flag ask`), [instance]);
+  assert.deepEqual(accept('def F : Type 1 := (q : Query Flag) -> Flag'), []);
+  assert.match(JSON.stringify(reject(`${ask}\n${f}\ndef a4 : Query Verdict := f ask`)), /term does not have the declared type/);
+  assert.match(JSON.stringify(reject(`${ask}\n${g}\ndef a5 : Query Verdict := g Flag ask`)),
+    /term does not have the declared type/);
+  assert.match(JSON.stringify(reject('def F0 : Type 0 := (q : Query Flag) -> Flag')), /type is not in the declared universe/);
+  for (const source of ['def h : (x : Option (Query Flag)) -> Nat := fun (x : Option (Query Flag)) => 1',
+    'def k : (x : Type 1) -> Nat := fun (x : Type 1) => 1']) {
+    assert.match(JSON.stringify(reject(source)), /expected a data type/, source);
+  }
+});
+
 test('ReadPath is a type of a later milestone', () => {
   for (const type of ['ReadPath', 'List ReadPath', 'Option ReadPath']) {
     assert.match(JSON.stringify(reject(`def x : ${type} := nil`)), /this type belongs to a later milestone/, type);

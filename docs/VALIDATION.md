@@ -230,8 +230,12 @@ More cases cover the `Log` alias, the later-milestone refusal of
 The Query slice adds one case for each of the 29 `Query` constructors. Each
 case checks the answer type, the argument types and the arity, and it checks
 that the value is not an instance. One more case covers the universe of a
-Query type and its refusal as an argument of a type former, a parameter type
-and a result type.
+Query type and its refusal as an argument of a type former. The Query
+function case covers concrete and polymorphic Query parameters and results,
+answer type mismatches and the universe of a function with a Query
+parameter. The C module tests also cover Query results and nested function
+parameter types: these function types require `Type 1`, while function
+types containing only data types remain in `Type 0`.
 
 The function type slice adds `test/paths.test.mjs` with 20 cases. They cover
 a type definition of a function type, the name as the type of a function

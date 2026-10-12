@@ -386,10 +386,14 @@ A Query constructor checks only against the Query type of its answer type.
 Another answer type stops the compiler with
 `this constructor gives a Query of another answer type`. A definition of a
 Query type is not an instance. A Query type is not an argument of a type
-former, a parameter type or a result type.
+former. A Query type can be a function parameter or result. Such a function
+type is in `Type 1`, including when a Query occurs inside the type of a
+function parameter.
 
 ```
 def isReconciled : Query Flag := queryAmountReconciled deal
+def keepQuery : (q : Query Flag) -> Query Flag := fun (q : Query Flag) => q
+def kept : Query Flag := keepQuery isReconciled
 ```
 
 `WritePath` is the function type `(log : Log) -> (write : Write) -> Step`.

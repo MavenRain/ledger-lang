@@ -106,7 +106,9 @@ not complete the M0 milestone in `SPEC.md`.
 - `Query T` is the indexed `Query` family of `core/ops.def` as a `Type 1`
   type. The compiler checks each of the 29 constructors against its answer
   type. A Query value is not an instance. A Query type is not an argument of
-  a type former, a parameter type or a result type.
+  a type former. A Query type can be a function parameter or result. A
+  function type containing a Query parameter or result, also inside the
+  type of a function parameter, is in `Type 1`.
 - Function types in type definitions. A type definition in `Type 0` names a
   function type without type parameters. The name stands for the function
   type as the type of a function definition, in another type definition,
