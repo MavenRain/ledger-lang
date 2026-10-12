@@ -140,6 +140,7 @@ Nat same_term(const Term *left, const Term *right) {
     case TERM_PAYLOAD:
     case TERM_SYMM:
     case TERM_TRANS:
+    case TERM_CONG:
     case TERM_EITHER:
     case TERM_PURE:
     case TERM_MAP:
@@ -175,6 +176,7 @@ static Text term_keyword(TermTag tag) {
     case TERM_PAYLOAD: return spayload;
     case TERM_SYMM: return ssymm;
     case TERM_TRANS: return strans;
+    case TERM_CONG: return scong;
     case TERM_EITHER: return seither;
     case TERM_PURE: return spure;
     case TERM_MAP: return smap;
@@ -250,6 +252,7 @@ static void emit_term(TextBuilder *builder, const Term *term) {
     case TERM_PAYLOAD:
     case TERM_SYMM:
     case TERM_TRANS:
+    case TERM_CONG:
     case TERM_EITHER:
     case TERM_PURE:
     case TERM_MAP:

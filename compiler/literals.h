@@ -115,6 +115,8 @@ extern const Text eData;
 extern const Text eRefl;
 extern const Text eProof;
 extern const Text eTrans;
+extern const Text eCong;
+extern const Text eMatch;
 extern const Text eFun;
 extern const Text eBudget;
 extern const Text eStructure;

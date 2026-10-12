@@ -277,3 +277,30 @@ test('inline bodies can still capture closed proof parameters', () => {
     ' fun (e : Eq Nat 0 0) => apply (fun (m : Nat) => symm e)' +
     ' def proof : Eq Nat 0 0 := f refl' + k), kOut);
 });
+
+// D6 part A: cong f e. inc is the identity (delta P1): the language has no +.
+const d6Inc = 'def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n';
+const d6Pf = 'def pf : Eq Nat 1 1 := refl\n';
+const d6Body = (sides, term) =>
+  d6Inc + `def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> Eq Nat ${sides} :=` +
+  ` fun (x : Nat) (y : Nat) (e : Eq Nat x y) => ${term}`;
+
+test('D6 part A: cong on a neutral and on a closed equality proof', () => {
+  assert.deepEqual(instances(d6Body('(inc x) (inc y)', 'cong inc e')), []);
+  assert.deepEqual(instances(d6Body('(inc y) (inc x)', 'symm (cong inc e)')), []);
+  assert.deepEqual(instances(d6Inc + d6Pf + 'def c : Eq Nat (inc 1) (inc 1) := cong inc pf'), []);
+});
+
+test('D6 part A: cong refusals', () => {
+  reject(d6Body('(inc x) (inc x)', 'cong inc e'), typeError, 'cong');
+  reject(d6Inc + 'def c : Eq Nat (inc 1) (inc 1) := cong inc refl', 'cannot infer the type of this term', 'refl');
+  reject(d6Inc + d6Pf + 'def c : Eq Nat (inc 1) (inc 1) := cong 1 pf',
+    'cong needs a function with one data parameter', '1 pf');
+  reject(d6Inc + 'def one : Nat := 1\ndef c : Eq Nat (inc 1) (inc 1) := cong inc one',
+    'expected an equality proof', 'cong');
+  reject('def len : (t : Text) -> Nat := fun (t : Text) => 1\n' + d6Pf +
+    'def c : Eq Nat (len "a") (len "a") := cong len pf', 'the parameter type does not match the equality type', 'cong');
+  // Delta D1: json.c has no reader, thus a closed e on Text is refused.
+  reject('def tx : (t : Text) -> Text := fun (t : Text) => t\ndef tp : Eq Text "a" "a" := refl\n' +
+    'def c : Eq Text (tx "a") (tx "a") := cong tx tp', typeError, 'cong');
+});

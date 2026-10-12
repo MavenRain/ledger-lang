@@ -293,9 +293,11 @@ int check_synthesized(Nat position, const LType *expected, Typed found, Tokens t
 
 /* Forms that synthesize a type from one argument: 1 first, 2 second,
    3 symm, 6 witness and 7 payload (D5 part B). The form 4 trans takes two
-   arguments, and 5 either takes three. */
+   arguments, and 5 either takes three. The form 8 cong (D6 part A) takes a
+   name and one argument. */
 Nat synth_form(Text name) {
   if (same_text(name, seither)) return 5;
+  if (same_text(name, scong)) return 8;
   if (same_text(name, ssymm)) return 3;
   if (same_text(name, strans)) return 4;
   if (same_text(name, switness)) return 6;
@@ -368,6 +370,96 @@ int trans_proof(Nat position, Typed left, Typed right, Tokens tokens, Typed *res
   if (!sides_of(right.type, &b, &u, &z)) return fail_at(failure, position, eProof);
   if (!(same_type(a, b) && same_val(y, u))) return fail_at(failure, position, eTrans);
   *result = (Typed){eq_type(a, x, z), &null_value};
+  *rest = tokens;
+  return 1;
+}
+
+/* D6 part A (design item 3): the f of cong is the name of an earlier
+   definition with one data parameter and a data result. A data result
+   cannot name the parameter. */
+static Nat cong_data(const LType *type) {
+  return type->tag != TY_EQ && type->tag != TY_ARROW && type->tag != TY_SIGMA && type->tag != TY_UNIVERSE;
+}
+
+static int cong_function(Nat position, Text name, const Bindings *environment, const Binding **function,
+                         Failure *failure) {
+  if (!lookup(name, environment, function)) return fail_at(failure, position, eUnknown);
+  const Binding *item = *function;
+  if (item->kind != BIND_FUN || item->params == NULL || has_type_param(item->params)) return fail_at(failure, position, eCong);
+  if (item->params->tail != NULL) return fail_at(failure, position, eCong);
+  if (!cong_data(item->params->head.type) || !cong_data(item->type)) return fail_at(failure, position, eCong);
+  return 1;
+}
+
+/* D6 part A (design items 5 and 8): the argument node of a side (f x). A
+   closed x of type Nat gives a number node. A marker and a node give their
+   witness node. */
+static int cong_argument(Fuel fuel, Nat position, const LType *a, Val side, const Term **argument, Failure *failure) {
+  switch (side.kind) {
+  case VAL_CLOSED: {
+    if (a->tag != TY_NAT) return fail_at(failure, position, eTerm);
+    Nat number = 0;
+    for (Nat index = 0; index < side.text.size; index++) number = number * 10 + (side.text.items[index] - '0');
+    *argument = term_number(position, 0, number);
+    return 1;
+  }
+  case VAL_VAR:
+  case VAL_TERM: return witness_node(fuel, position, (Typed){a, &null_value}, side, argument);
+  }
+  return 0;
+}
+
+/* A marker-free side needs real evaluation even during body checking.
+   Keep named bindings in scope, but remove the unnamed checking frames. */
+static const Bindings *cong_closed_environment(const Bindings *environment) {
+  if (checking_body(environment) != 1) return environment;
+  const Bindings *kept = NULL;
+  for (const Bindings *cell = environment; cell != NULL; cell = cell->tail)
+    if (cell->head.name.size != 0) kept = bindings_item(cell->head, kept);
+  return reverse_bindings_onto(NULL, kept);
+}
+
+/* The side (f x) of cong is a TERM_GROUP of a TERM_APPLY node, in the form
+   of the parse of a declared side (f x). A side with a marker takes its
+   normal form. A side with no marker closes with eval_term on the budget of
+   the cong term, not with close_side: close_side has budget 1, and the body
+   of f needs more (delta P2). A value that does not print is eTerm. */
+static int cong_side(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const Binding *function,
+                     const LType *a, Val side, Val *result, Nat *left, Failure *failure) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  const Term *argument;
+  if (!cong_argument(more, position, a, side, &argument, failure)) return 0;
+  const Term *call = term_call(TERM_APPLY, position, 0, (Tokens){NULL, 0}, 0, function->name,
+                               term_named(TERM_NAME, position, 0, function->name, NULL, NULL), NULL,
+                               terms_item(argument, NULL));
+  const Term *node = term_form(TERM_GROUP, position, 0, terms_item(call, NULL));
+  if (term_marker_bound(node) == 0) {
+    const Value *value;
+    if (!eval_term(more, budget, function->type, cong_closed_environment(environment), node, &value, left, failure))
+      return 0;
+    return printed_side(more, value, result) ? 1 : fail_at(failure, position, eTerm);
+  }
+  if (!side_normal_at(more, environment, function->type, node, &node, failure)) return 0;
+  *result = (Val){.kind = VAL_TERM, .node = node};
+  *left = budget;
+  return 1;
+}
+
+/* D6 part A (design items 4 and 5): cong f e. e has the type Eq A x y, and
+   f has one parameter of type A and the result type B. The result type is
+   Eq B (f x) (f y). The value is the proof value of symm and trans. The
+   budget after e is shared by both sides, and the remaining budget is returned. */
+static int cong_proof(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const Binding *function,
+                      Typed found, Tokens tokens, Typed *result, Tokens *rest, Nat *left, Failure *failure) {
+  const LType *a;
+  Val x, y, fx, fy;
+  if (!sides_of(found.type, &a, &x, &y)) return fail_at(failure, position, eProof);
+  if (!same_type(function->params->head.type, a)) return fail_at(failure, position, eMatch);
+  Nat spent;
+  if (!cong_side(fuel, budget, environment, position, function, a, x, &fx, &spent, failure)) return 0;
+  if (!cong_side(fuel, spent, environment, position, function, a, y, &fy, left, failure)) return 0;
+  *result = (Typed){eq_type(function->type, fx, fy), &null_value};
   *rest = tokens;
   return 1;
 }
@@ -1969,6 +2061,25 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
     if (atom == 1) return fail_at(failure, head.position, eParen);
     if (form == 5)
       return either_term(more, budget, head.position, environment, tail, typed, rest, left, term, failure);
+    if (form == 8) {
+      /* D6 part A (design items 3 and 4): read f before e. */
+      if (tail.size == 0 || tail.items[0].kind != TOKEN_IDENTIFIER)
+        return fail_at(failure, tail.size == 0 ? head.position : tail.items[0].position, eCong);
+      Token name = tail.items[0];
+      const Binding *function;
+      if (!cong_function(name.position, name.text, environment, &function, failure)) return 0;
+      const Term *proof = NULL;
+      if (!synth_term(more, budget, 1, environment, (Tokens){tail.items + 1, tail.size - 1}, &found, &after, &spent,
+                      want_term(term, &proof), failure))
+        return 0;
+      return with_term(
+          cong_proof(more, spent, environment, head.position, function, found, after, typed, rest, left, failure),
+          term,
+          term != NULL ? form_term(TERM_CONG, head.position,
+                                   terms_item(term_named(TERM_NAME, name.position, 0, name.text, NULL, NULL),
+                                              terms_item(proof, NULL)))
+                       : NULL);
+    }
     const Term *first = NULL;
     if (!synth_term(more, budget, 1, environment, tail, &found, &after, &spent, want_term(term, &first), failure))
       return 0;
@@ -2405,6 +2516,7 @@ static int eval_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings
   case TERM_PAYLOAD:
   case TERM_SYMM:
   case TERM_TRANS:
+  case TERM_CONG:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -2522,6 +2634,7 @@ static int eval_partial_unary(Fuel fuel, Nat budget, const LType *wanted, const 
   case TERM_PAYLOAD:
   case TERM_SYMM:
   case TERM_TRANS:
+  case TERM_CONG:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -2668,6 +2781,7 @@ static int eval_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, 
   case TERM_PAYLOAD:
   case TERM_SYMM:
   case TERM_TRANS:
+  case TERM_CONG:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -2806,6 +2920,7 @@ static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *ex
   case TERM_PAYLOAD:
   case TERM_SYMM:
   case TERM_TRANS:
+  case TERM_CONG:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -3030,6 +3145,14 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   case TERM_SYMM:
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
     return lift_parsed(spent, symm_proof(term->position, found, no_tokens, typed, &rest, failure), left);
+  case TERM_CONG: {
+    const Term *name = first_arg(term);
+    const Binding *function;
+    if (!cong_function(name->position, name->name, environment, &function, failure)) return 0;
+    if (!eval_synth(more, budget, environment, second_arg(term), &found, &spent, failure)) return 0;
+    return cong_proof(more, spent, environment, term->position, function, found, no_tokens, typed, &rest, left,
+                      failure);
+  }
   case TERM_TRANS: {
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
     Typed other;
@@ -3080,6 +3203,7 @@ static Nat arrow_tag(const Term *term) {
   case TERM_PAYLOAD:
   case TERM_SYMM:
   case TERM_TRANS:
+  case TERM_CONG:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -3303,6 +3427,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_PAYLOAD:
   case TERM_SYMM:
   case TERM_TRANS:
+  case TERM_CONG:
   case TERM_EITHER: {
     /* checked_synth: synth_term at fuel - 1, then the check of the type. */
     Typed found;

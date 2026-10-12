@@ -122,6 +122,7 @@ static void test_term(void) {
                        term_form(TERM_SECOND, 0, 1, one(n)),
                        term_form(TERM_SYMM, 0, 1, one(n)),
                        term_form(TERM_TRANS, 0, 1, terms_item(n, one(n))),
+                       term_form(TERM_CONG, 0, 1, terms_item(n, one(n))),
                        term_form(TERM_EITHER, 0, 1, terms_item(n, terms_item(n, one(n)))),
                        term_form(TERM_PURE, 0, 1, one(n)),
                        term_form(TERM_MAP, 0, 1, terms_item(n, one(n))),
@@ -2545,6 +2546,123 @@ static void test_d5_equality_carrier(void) {
   assert(same_text(failure.message, eTerm));
 }
 
+/* D6 part A: cong f e (design items 3 to 5 and 8). synth form 8. A neutral
+   e: the built sides (inc x) and (inc y) against the parsed sides, symm of
+   cong, and cong in a group. A closed e. The refusals: the built side
+   (inc y) against the parsed side (inc x) gives eTerm. Then eInfer, eCong
+   (no name, two parameters), eUnknown, eProof, eMatch, and eTerm for a
+   closed e on Text (delta D1). Called from main after test_d5_scope. */
+static void test_d6_cong(void) {
+  assert(synth_form(text("cong")) == 8);
+  const char *source =
+      "def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> Eq Nat (inc x) (inc y) :=\n"
+      "  fun (x : Nat) (y : Nat) (e : Eq Nat x y) => cong inc e\n"
+      "def g : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> Eq Nat (inc y) (inc x) :=\n"
+      "  fun (x : Nat) (y : Nat) (e : Eq Nat x y) => symm (cong inc e)\n"
+      "def h : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> Eq Nat (inc x) (inc y) :=\n"
+      "  fun (x : Nat) (y : Nat) (e : Eq Nat x y) => (cong inc e)\n"
+      "def pf : Eq Nat 1 1 := refl\n"
+      "def c : Eq Nat (inc 1) (inc 1) := cong inc pf\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+
+  sigma_refused("def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+                "def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> Eq Nat (inc x) (inc x) :=\n"
+                "  fun (x : Nat) (y : Nat) (e : Eq Nat x y) => cong inc e\n",
+                "cong inc e", eTerm);
+  sigma_refused("def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+                "def c : Eq Nat (inc 1) (inc 1) := cong inc refl\n",
+                "refl", eInfer);
+  sigma_refused("def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+                "def pf : Eq Nat 1 1 := refl\n"
+                "def c : Eq Nat (inc 1) (inc 1) := cong 1 pf\n",
+                "1 pf", eCong);
+  sigma_refused("def add : (m : Nat) -> (n : Nat) -> Nat := fun (m : Nat) (n : Nat) => m\n"
+                "def pf : Eq Nat 1 1 := refl\n"
+                "def c : Eq Nat (add 1 1) (add 1 1) := cong add pf\n",
+                "add pf", eCong);
+  sigma_refused("def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+                "def pf : Eq Nat 1 1 := refl\n"
+                "def c : Eq Nat (inc 1) (inc 1) := cong nope pf\n",
+                "nope pf", eUnknown);
+  sigma_refused("def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+                "def one : Nat := 1\n"
+                "def c : Eq Nat (inc 1) (inc 1) := cong inc one\n",
+                "cong inc one", eProof);
+  sigma_refused("def len : (t : Text) -> Nat := fun (t : Text) => 1\n"
+                "def pf : Eq Nat 1 1 := refl\n"
+                "def c : Eq Nat (len \"a\") (len \"a\") := cong len pf\n",
+                "cong len pf", eMatch);
+  sigma_refused("def tx : (t : Text) -> Text := fun (t : Text) => t\n"
+                "def tp : Eq Text \"a\" \"a\" := refl\n"
+                "def c : Eq Text (tx \"a\") (tx \"a\") := cong tx tp\n",
+                "cong tx tp", eTerm);
+}
+
+/* Closed congruence sides share the caller's remaining body budget on
+   both the token path and the captured term path. */
+static void test_d6_cong_budget(void) {
+  const char *source =
+      "def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def pf : Eq Nat 1 1 := refl\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  Tokens tokens, rest;
+  assert(lex(512, text("cong inc pf"), &tokens, &failure));
+  Typed found;
+  Nat left;
+  const Term *term = NULL;
+  assert(synth_term(512, 3, 0, environment, tokens, &found, &rest, &left, &term, &failure));
+  assert(rest.size == 1 && rest.items[0].kind == TOKEN_PUNCTUATION && rest.items[0].number == 0 && left == 1);
+  Typed evaluated;
+  assert(eval_synth(512, 3, environment, term, &evaluated, &left, &failure));
+  assert(left == 1 && same_type(found.type, evaluated.type));
+  const Value *value;
+  assert(eval_term(512, 3, found.type, environment, term, &value, &left, &failure));
+  assert(left == 1 && value->kind == VALUE_NULL);
+  for (Nat budget = 1; budget <= 2; budget++) {
+    failure = (Failure){0, {NULL, 0}};
+    assert(!synth_term(512, budget, 0, environment, tokens, &evaluated, &rest, &left, NULL, &failure));
+    assert(same_text(failure.message, eBudget));
+    failure = (Failure){0, {NULL, 0}};
+    assert(!eval_synth(512, budget, environment, term, &evaluated, &left, &failure));
+    assert(same_text(failure.message, eBudget));
+    failure = (Failure){0, {NULL, 0}};
+    assert(!eval_term(512, budget, found.type, environment, term, &value, &left, &failure));
+    assert(same_text(failure.message, eBudget));
+  }
+}
+
+/* A marker-free congruence side needs its real value during body checking,
+   including when the other side is neutral. */
+static void test_d6_cong_closed_body(void) {
+  const char *sources[] = {
+      "def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def pf : Eq Nat 1 1 := refl\n"
+      "def f : (n : Nat) -> Eq Nat 1 1 := fun (n : Nat) => cong inc pf\n"
+      "def q : Eq Nat 1 1 := f 0\n",
+      "def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def lift : (x : Nat) -> (e : Eq Nat x 1) -> Eq Nat (inc x) 1 := "
+      "fun (x : Nat) (e : Eq Nat x 1) => cong inc e\n",
+      "def two : (n : Nat) -> Nat := fun (n : Nat) => 2\n"
+      "def pf : Eq Nat 1 1 := refl\n"
+      "def f : (n : Nat) -> Eq Nat 2 2 := fun (n : Nat) => cong two pf\n"
+      "def q : Eq Nat 2 2 := f 0\n",
+  };
+  for (Nat index = 0; index < sizeof sources / sizeof sources[0]; index++) {
+    const Bindings *environment = NULL;
+    Failure failure = {0, {NULL, 0}};
+    assert(check_definitions(text(sources[index]), &environment, &failure));
+  }
+  sigma_refused("def two : (n : Nat) -> Nat := fun (n : Nat) => 2\n"
+                "def pf : Eq Nat 1 1 := refl\n"
+                "def f : (n : Nat) -> Eq Nat 1 1 := fun (n : Nat) => cong two pf\n",
+                "cong two pf", eTerm);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -2574,6 +2692,9 @@ int main(void) {
   test_d5_witness_types();
   test_d5_equality_carrier();
   test_d5_scope();
+  test_d6_cong();
+  test_d6_cong_budget();
+  test_d6_cong_closed_body();
   puts("C module tests passed");
   return 0;
 }

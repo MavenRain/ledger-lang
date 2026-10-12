@@ -706,6 +706,22 @@ static const Nat eTrans_items[] = {
 };
 const Text eTrans = {eTrans_items, 33};
 
+/* "cong needs a function with one data parameter" */
+static const Nat eCong_items[] = {
+  'c', 'o', 'n', 'g', ' ', 'n', 'e', 'e', 'd', 's', ' ', 'a', ' ', 'f', 'u', 'n', 'c', 't', 'i',
+  'o', 'n', ' ', 'w', 'i', 't', 'h', ' ', 'o', 'n', 'e', ' ', 'd', 'a', 't', 'a', ' ', 'p', 'a',
+  'r', 'a', 'm', 'e', 't', 'e', 'r',
+};
+const Text eCong = {eCong_items, 45};
+
+/* "the parameter type does not match the equality type" */
+static const Nat eMatch_items[] = {
+  't', 'h', 'e', ' ', 'p', 'a', 'r', 'a', 'm', 'e', 't', 'e', 'r', ' ', 't', 'y', 'p', 'e', ' ',
+  'd', 'o', 'e', 's', ' ', 'n', 'o', 't', ' ', 'm', 'a', 't', 'c', 'h', ' ', 't', 'h', 'e', ' ',
+  'e', 'q', 'u', 'a', 'l', 'i', 't', 'y', ' ', 't', 'y', 'p', 'e',
+};
+const Text eMatch = {eMatch_items, 51};
+
 /* "expected fun with the declared parameters" */
 static const Nat eFun_items[] = {
   'e', 'x', 'p', 'e', 'c', 't', 'e', 'd', ' ', 'f', 'u', 'n', ' ', 'w', 'i', 't', 'h', ' ', 't',

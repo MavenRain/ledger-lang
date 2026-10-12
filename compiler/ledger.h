@@ -745,6 +745,7 @@ typedef enum {
   TERM_SECOND,
   TERM_SYMM,
   TERM_TRANS,
+  TERM_CONG,
   TERM_EITHER,
   TERM_PURE,
   TERM_MAP,
