@@ -103,7 +103,7 @@ The plan adds neutral values in two stages:
   node, with a marker variable for each parameter. Computed sides compare with
   `same_term`; shifting and renaming markers walk the tree. `close_side`
   evaluates the tree with `eval_term` and refuses an unknown answer without
-  replaying tokens. These token uses remain after D4:
+  replaying tokens. These token uses remain after D5:
   - `synth_term`, `eval_apply` and `apply_body` (`compiler/checker.c`):
     body evaluation can fall back to `parse_term`.
   - `unary_of`, `stepper_argument` and the inline, partial and bound
@@ -114,6 +114,9 @@ The plan adds neutral values in two stages:
     `body_term_side` (`compiler/checker.c`): the parse input of a computed
     side and of a parenthesized argument in a body. A `Val` keeps no
     tokens.
+  - `pack_term` and `neutral_witness` (`compiler/checker.c`, D5): the
+    argument tokens of `pack` and of a projection give the side of the
+    witness, as for a parenthesized argument in a body.
 - D4 (done). Computed sides. A side can be a term of value parameters,
   literals, constructor forms, names of earlier definitions and
   applications of earlier definitions, such as `(natAdd n 1)` or
@@ -146,9 +149,39 @@ The plan adds neutral values in two stages:
   A computed side is still refused with `fun`, in a signature with a type
   parameter, or when it names a function parameter. A signature can have a
   function parameter that the side does not name.
-- D5. Sigma. `Sigma (x : A) B` with `pack`, `witness` and `payload`. B can
-  name x, also in an `Eq`. An instance of a Sigma type is the JSON object of
-  its witness and payload, as `SPEC.md` gives.
+- D5 (done). Sigma. In `Sigma (x : A) B`, B can name the binder x, also in
+  an `Eq` side. The short form `Sigma A B` has no binder. `pack a b` checks
+  only against an expected Sigma type, also in a function body. It checks a
+  against A, puts the value of a for x in B and checks b against that B.
+  Thus `def one : Sigma (x : Nat) (Eq Nat x 1) := pack 1 refl` checks, and
+  `fun (n : Nat) => pack n refl` has the type
+  `(n : Nat) -> Sigma (x : Nat) (Eq Nat x n)`. `witness s` has the type A.
+  `payload s` has B with the witness for x. On a closed value, a projection
+  gives the value. If `u` is `pack 1 (pack 1 refl)` of the type
+  `Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat x y))`, `payload u` has the
+  type `Sigma (y : Nat) (Eq Nat 1 y)`. On a parameter of a function body, a
+  projection gives the null value, and `payload s` has B with `(witness s)`
+  for x. Thus for `s : Sigma (x : Nat) (Eq Nat x x)`, `payload s` proves
+  `Eq Nat (witness s) (witness s)`, and `pack (witness s) (payload s)` has
+  the type of s. A declared side can name a projection of a parameter, as
+  in `Eq Nat (payload s) (payload s)` for `s : Sigma Nat Nat`. A
+  projection can be nested, as in `witness (payload s)`. A neutral value
+  does not prove a false `Eq`: for two parameters s and t, `refl` does not
+  prove `Eq Nat (witness s) (witness t)`.
+  An instance of a Sigma type is the JSON object
+  `{"witness": a, "payload": b}` (`SPEC.md`). An `Eq` payload writes null.
+  The "type" text puts each argument in parentheses and names x by its
+  binder, as in `Sigma (x : Nat) (Eq (Nat) (x) (x))`. The short form
+  writes `Sigma (Nat) (Text)`.
+  `pack` with no expected Sigma type, and a projection of a value that is
+  not a Sigma, give "expected a Sigma type". A literal argument, as in
+  `witness 1`, does not synthesize its type, as for `first`. A projection
+  with a different type, such as `payload s` for `Eq Nat 2 2` when the
+  witness of s is 1, gives "term does not have the declared type". A
+  `refl` payload for unequal sides gives "refl needs two equal sides".
+  A closed witness substitutes its JSON encoding for x in B, including
+  a record witness. In a function body, a parameter or a projection stays
+  as a neutral side.
 - D6. `transport` and `cong`. `cong f e` gives `Eq B (f x) (f y)` from
   `e : Eq A x y`. `transport P e t` moves `t : P x` to `P y`. Both need the
   value domain of D3 and the computed sides of D4.

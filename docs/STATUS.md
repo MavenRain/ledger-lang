@@ -16,9 +16,15 @@ not complete the M0 milestone in `SPEC.md`.
 - `first` and `second`. Their argument synthesizes its type: an earlier
   definition, a projection, or one of these in parentheses.
 - Equality types `Eq A x y` with `refl`, `symm`, and `trans`. Sides are atoms
-  of a data type A. The compiler compares them by their JSON encoding. An
-  equality type is only the type of a definition, and proofs are not
-  instances. `symm` and `trans` synthesize their types like `first`.
+  of a data type A. The compiler compares them by their JSON encoding.
+  Definitions of an equality type are proofs and are not instances.
+  `symm` and `trans` synthesize their types like `first`.
+- Sigma types, step D5 of `docs/DEPENDENT-TYPES.md`: `Sigma (x : A) B` and
+  the short form `Sigma A B`, with `pack`, `witness` and `payload`. `pack`
+  checks only against an expected Sigma type. On a parameter of a function
+  body, a projection is neutral, and `payload s` has B with `(witness s)`
+  for x. An instance is `{"witness": a, "payload": b}`. An `Eq` payload
+  writes null.
 - Dependent equality results, steps D1, D2, D2b, D3, D3a, D4a, D4b, D4c and D4
   of `docs/DEPENDENT-TYPES.md`. A function type can end in `Eq A x y`, and
   a side can be the name of a value parameter of type A. Such a side is
@@ -160,9 +166,10 @@ not complete the M0 milestone in `SPEC.md`.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types. `docs/DEPENDENT-TYPES.md` gives the plan
-   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c and D4 and
-   the syntax tree portion of D3 are done. Body evaluation keeps token
-   fallbacks (step D3), and steps D5 to D7 remain.
+   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c, D4 and D5 and
+   the syntax tree portion of D3 are done. D5 adds Sigma checking and
+   evaluation and `Eq` inside Sigma. Body evaluation keeps token
+   fallbacks (step D3), and steps D6 and D7 remain.
 2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
    needs the dependent function types of item 1. Until then the type parser
    refuses this name with `this type belongs to a later milestone`.
