@@ -294,10 +294,12 @@ int check_synthesized(Nat position, const LType *expected, Typed found, Tokens t
 /* Forms that synthesize a type from one argument: 1 first, 2 second,
    3 symm, 6 witness and 7 payload (D5 part B). The form 4 trans takes two
    arguments, and 5 either takes three. The form 8 cong (D6 part A) takes a
-   name and one argument. */
+   name and one argument. The form 9 transport (D6 part B) takes a motive
+   and two arguments. */
 Nat synth_form(Text name) {
   if (same_text(name, seither)) return 5;
   if (same_text(name, scong)) return 8;
+  if (same_text(name, stransport)) return 9;
   if (same_text(name, ssymm)) return 3;
   if (same_text(name, strans)) return 4;
   if (same_text(name, switness)) return 6;
@@ -391,6 +393,13 @@ static int cong_function(Nat position, Text name, const Bindings *environment, c
   return 1;
 }
 
+/* The number of the canonical JSON text of a closed Nat side. */
+static Nat side_number(Text text) {
+  Nat number = 0;
+  for (Nat index = 0; index < text.size; index++) number = number * 10 + (text.items[index] - '0');
+  return number;
+}
+
 /* D6 part A (design items 5 and 8): the argument node of a side (f x). A
    closed x of type Nat gives a number node. A marker and a node give their
    witness node. */
@@ -398,9 +407,7 @@ static int cong_argument(Fuel fuel, Nat position, const LType *a, Val side, cons
   switch (side.kind) {
   case VAL_CLOSED: {
     if (a->tag != TY_NAT) return fail_at(failure, position, eTerm);
-    Nat number = 0;
-    for (Nat index = 0; index < side.text.size; index++) number = number * 10 + (side.text.items[index] - '0');
-    *argument = term_number(position, 0, number);
+    *argument = term_number(position, 0, side_number(side.text));
     return 1;
   }
   case VAL_VAR:
@@ -462,6 +469,46 @@ static int cong_proof(Fuel fuel, Nat budget, const Bindings *environment, Nat po
   *result = (Typed){eq_type(function->type, fx, fy), &null_value};
   *rest = tokens;
   return 1;
+}
+
+/* D6 part B (design item 8, delta B-D2): the typed value of a side of e for
+   put_marker. A closed side of type Nat gives its number. A closed side of
+   another type has no value and gives eTerm, as for cong. A marker and a
+   node give null, as for a neutral Sigma witness. */
+static int transport_found(Nat position, const LType *a, Val side, Typed *found, Failure *failure) {
+  switch (side.kind) {
+  case VAL_CLOSED:
+    if (a->tag != TY_NAT) return fail_at(failure, position, eTerm);
+    *found = (Typed){a, nat_value(side_number(side.text))};
+    return 1;
+  case VAL_VAR:
+  case VAL_TERM: *found = (Typed){a, &null_value}; return 1;
+  }
+  return 0;
+}
+
+/* D6 part B (design items 6 and 7): B of the motive (z : A') B with a side
+   of e for the marker of z, on the pack path (put_marker). */
+static int transport_type(Fuel fuel, const Bindings *environment, Nat position, const LType *motive, Val side,
+                          const LType **result, Failure *failure) {
+  Typed found;
+  if (!transport_found(position, motive->left, side, &found, failure)) return 0;
+  if (!put_marker(fuel, environment, motive->right, motive->level, found, side, result))
+    return fail_at(failure, position, eSigma);
+  return 1;
+}
+
+/* D6 part B (design items 7 and 8): transport (z : A') B e t. e has the type
+   Eq A x y, and A' must be A. t checks against B with x for z. The result
+   type is B with y for z. A neutral e and a closed e use this one path. */
+static int transport_types(Fuel fuel, const Bindings *environment, Nat position, const LType *motive, Typed found,
+                           const LType **bx, const LType **by, Failure *failure) {
+  const LType *a;
+  Val x, y;
+  if (!sides_of(found.type, &a, &x, &y)) return fail_at(failure, position, eProof);
+  if (!same_type(motive->left, a)) return fail_at(failure, position, eMatch);
+  return transport_type(fuel, environment, position, motive, x, bx, failure) &&
+         transport_type(fuel, environment, position, motive, y, by, failure);
 }
 
 /* The definition of a function checks its body once, with null for each
@@ -1847,6 +1894,18 @@ static const Term *form_term(TermTag tag, Nat position, const Terms *args) {
   return terms_built(args) == 1 ? term_form(tag, position, 0, args) : NULL;
 }
 
+/* D6 part B (delta B-D3): TERM_TRANSPORT keeps the motive as its one term
+   type (the type and its source tokens), and e and t in args. */
+static const Term *transport_term(Nat position, const LType *motive, Tokens source, const Term *proof,
+                                  const Term *value) {
+  const Terms *args = terms_item(proof, terms_item(value, NULL));
+  return terms_built(args) == 1
+             ? term_named(TERM_TRANSPORT, position, 0, stransport,
+                          term_types_item((TermType){.position = position, .type = motive, .source = source}, NULL),
+                          args)
+             : NULL;
+}
+
 /* The tag of the structure form 2 map, 3 bind or 4 filter. */
 static TermTag structure_tag(Nat form) {
   switch (form) {
@@ -2079,6 +2138,29 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
                                    terms_item(term_named(TERM_NAME, name.position, 0, name.text, NULL, NULL),
                                               terms_item(proof, NULL)))
                        : NULL);
+    }
+    if (form == 9) {
+      /* D6 part B (design items 6 and 7): the motive (z : A') B, then e, then t. */
+      const LType *motive;
+      Tokens proof_tokens;
+      if (!sigma_type(more, environment, body_params(environment), tail, &motive, &proof_tokens, failure)) return 0;
+      const Term *proof = NULL;
+      if (!synth_term(more, budget, 1, environment, proof_tokens, &found, &after, &spent, want_term(term, &proof),
+                      failure))
+        return 0;
+      const LType *bx, *by;
+      if (!transport_types(more, environment, head.position, motive, found, &bx, &by, failure)) return 0;
+      const Value *value;
+      Tokens later;
+      Nat used;
+      const Term *second = NULL;
+      if (!parse_term(more, spent, 1, bx, environment, after, &value, &later, &used, want_term(term, &second), failure))
+        return 0;
+      return with_term(worked_typed((Typed){by, value}, later, used, typed, rest, left), term,
+                       term != NULL ? transport_term(head.position, motive,
+                                                     (Tokens){tail.items, tail.size - proof_tokens.size}, proof,
+                                                     second)
+                                    : NULL);
     }
     const Term *first = NULL;
     if (!synth_term(more, budget, 1, environment, tail, &found, &after, &spent, want_term(term, &first), failure))
@@ -2517,6 +2599,7 @@ static int eval_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings
   case TERM_SYMM:
   case TERM_TRANS:
   case TERM_CONG:
+  case TERM_TRANSPORT:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -2635,6 +2718,7 @@ static int eval_partial_unary(Fuel fuel, Nat budget, const LType *wanted, const 
   case TERM_SYMM:
   case TERM_TRANS:
   case TERM_CONG:
+  case TERM_TRANSPORT:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -2782,6 +2866,7 @@ static int eval_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, 
   case TERM_SYMM:
   case TERM_TRANS:
   case TERM_CONG:
+  case TERM_TRANSPORT:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -2921,6 +3006,7 @@ static int eval_partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *ex
   case TERM_SYMM:
   case TERM_TRANS:
   case TERM_CONG:
+  case TERM_TRANSPORT:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -3153,6 +3239,26 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
     return cong_proof(more, spent, environment, term->position, function, found, no_tokens, typed, &rest, left,
                       failure);
   }
+  case TERM_TRANSPORT: {
+    /* D6 part B (design items 8 and 9): one path for a neutral and a closed
+       e. The value is the value of t. */
+    if (term->types == NULL) return 0;
+    /* Resolve the motive in this application scope, where the function's
+       value and type parameters can differ from the checked body. */
+    const LType *motive;
+    Tokens motive_rest;
+    if (!sigma_type(more, environment, body_params(environment), term->types->head.source,
+                    &motive, &motive_rest, failure))
+      return 0;
+    const LType *bx, *by;
+    if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure) ||
+        !transport_types(more, environment, term->position, motive, found, &bx, &by, failure))
+      return 0;
+    const Value *value;
+    Nat used;
+    if (!eval_term(more, spent, bx, environment, second_arg(term), &value, &used, failure)) return 0;
+    return eval_typed((Typed){by, value}, used, typed, left);
+  }
   case TERM_TRANS: {
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
     Typed other;
@@ -3204,6 +3310,7 @@ static Nat arrow_tag(const Term *term) {
   case TERM_SYMM:
   case TERM_TRANS:
   case TERM_CONG:
+  case TERM_TRANSPORT:
   case TERM_EITHER:
   case TERM_PURE:
   case TERM_MAP:
@@ -3428,6 +3535,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_SYMM:
   case TERM_TRANS:
   case TERM_CONG:
+  case TERM_TRANSPORT:
   case TERM_EITHER: {
     /* checked_synth: synth_term at fuel - 1, then the check of the type. */
     Typed found;

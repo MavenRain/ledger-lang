@@ -304,3 +304,30 @@ test('D6 part A: cong refusals', () => {
   reject('def tx : (t : Text) -> Text := fun (t : Text) => t\ndef tp : Eq Text "a" "a" := refl\n' +
     'def c : Eq Text (tx "a") (tx "a") := cong tx tp', typeError, 'cong');
 });
+
+// D6 part B: transport (z : A) B e t. The type text of Option Nat in an
+// instance is "Option (Nat)" (delta B-D1).
+const d6Motive = (pSide, resultSide) =>
+  d6Inc + 'def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) ->' +
+  ` (p : Eq Nat (inc ${pSide}) 3) -> Eq Nat (inc ${resultSide}) 3 :=` +
+  ` fun (x : Nat) (y : Nat) (e : Eq Nat x y) (p : Eq Nat (inc ${pSide}) 3) =>` +
+  ' transport (z : Nat) (Eq Nat (inc z) 3) e p';
+
+test('D6 part B: transport on a closed and on a neutral equality proof', () => {
+  assert.deepEqual(instances(d6Pf + 'def u : Option Nat := transport (z : Nat) (Option Nat) pf (some 1)'),
+    [{ name: 'u', type: 'Option (Nat)', value: 1 }]);
+  assert.deepEqual(instances(d6Motive('x', 'y')), []);
+  assert.deepEqual(instances('def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) ->' +
+    ' (s : Sigma (w : Nat) (Eq Nat w x)) -> Sigma (w : Nat) (Eq Nat w y) :=' +
+    ' fun (x : Nat) (y : Nat) (e : Eq Nat x y) (s : Sigma (w : Nat) (Eq Nat w x)) =>' +
+    ' transport (z : Nat) (Sigma (w : Nat) (Eq Nat w z)) e s'), []);
+});
+
+test('D6 part B: transport refusals', () => {
+  reject(d6Pf + 'def u : Option Nat := transport (z : Text) (Option Nat) pf (some 1)',
+    'the parameter type does not match the equality type', 'transport');
+  reject(d6Motive('y', 'y'), typeError, 'p');
+  reject(d6Motive('x', 'x'), typeError, 'transport');
+  reject('def one : Nat := 1\ndef u : Option Nat := transport (z : Nat) (Option Nat) one (some 1)',
+    'expected an equality proof', 'transport');
+});

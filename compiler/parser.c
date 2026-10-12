@@ -158,7 +158,7 @@ static int former_two(Fuel more, LTypeTag tag, const Bindings *environment, cons
 
 /* Type arguments and inline annotations in a checked body can name its
    parameters. Slots retain their marker positions, including shadowed names. */
-static const Params *body_params(const Bindings *environment) {
+const Params *body_params(const Bindings *environment) {
   if (checking_body(environment) != 1) return NULL;
   Nat count = 0;
   for (const Bindings *cell = environment; cell != NULL; cell = cell->tail)

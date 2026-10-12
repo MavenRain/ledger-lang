@@ -389,6 +389,9 @@ int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params
 /* program.c: the tokens after `Sigma`. done holds the earlier parameters. */
 int sigma_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **type,
                Tokens *rest, Failure *failure);
+/* parser.c: the parameters of the body in check, for a type in a term
+   position (D6 part B, the motive of transport). */
+const Params *body_params(const Bindings *environment);
 /* Move the markers of a closed type into a signature's parameter scope. */
 const LType *shift_type_markers(Nat offset, const LType *type);
 
@@ -746,6 +749,7 @@ typedef enum {
   TERM_SYMM,
   TERM_TRANS,
   TERM_CONG,
+  TERM_TRANSPORT,
   TERM_EITHER,
   TERM_PURE,
   TERM_MAP,
@@ -772,7 +776,8 @@ typedef enum {
    TERM_FUN keeps the
    binders in types and the body as the one item of args. TERM_GROUP keeps
    the inner term as the one item of args. TERM_REFL and the keyword forms
-   keep their arguments in args, in source order. TERM_BODY keeps the body
+   keep their arguments in args, in source order. TERM_TRANSPORT also keeps
+   its motive as the one item of types. TERM_BODY keeps the body
    term in callee (NULL when parse_term built no term); its position is the
    first body token. tokens is a view into the token array of the lexer:
    the argument span on TERM_APPLY and TERM_PARTIAL (the tokens after the

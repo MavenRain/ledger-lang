@@ -123,6 +123,7 @@ static void test_term(void) {
                        term_form(TERM_SYMM, 0, 1, one(n)),
                        term_form(TERM_TRANS, 0, 1, terms_item(n, one(n))),
                        term_form(TERM_CONG, 0, 1, terms_item(n, one(n))),
+                       term_form(TERM_TRANSPORT, 0, 1, terms_item(n, one(n))),
                        term_form(TERM_EITHER, 0, 1, terms_item(n, terms_item(n, one(n)))),
                        term_form(TERM_PURE, 0, 1, one(n)),
                        term_form(TERM_MAP, 0, 1, terms_item(n, one(n))),
@@ -2663,6 +2664,113 @@ static void test_d6_cong_closed_body(void) {
                 "cong two pf", eTerm);
 }
 
+/* D6 part B: transport (z : A) B e t. The synth form 9; the motive parse and
+   the marker level of z (0 at the top, 3 after 3 parameters); the check of t
+   against B with x; the result type B with y; the value of t; the refusals.
+   Called from main after test_d6_cong_closed_body. */
+static void test_d6_transport(void) {
+  assert(synth_form(text("transport")) == 9);
+  const char *source =
+      "def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def pf : Eq Nat 1 1 := refl\n"
+      "def q : Eq Nat 1 1 := refl\n"
+      "def g : (a : Nat) -> (b : Nat) -> (c : Nat) -> Nat := fun (a : Nat) (b : Nat) (c : Nat) => a\n"
+      "def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> (p : Eq Nat (inc x) 3) -> Eq Nat (inc y) 3 :=\n"
+      "  fun (x : Nat) (y : Nat) (e : Eq Nat x y) (p : Eq Nat (inc x) 3) =>\n"
+      "  transport (z : Nat) (Eq Nat (inc z) 3) e p\n"
+      "def t : Eq Nat 1 1 := transport (z : Nat) (Eq Nat z 1) pf q\n"
+      "def h : (a : Nat) -> (b : Nat) -> (c : Nat) -> Eq Nat 1 1 :=\n"
+      "  fun (a : Nat) (b : Nat) (c : Nat) => transport (z : Nat) (Eq Nat z 1) pf q\n"
+      "def u : Option Nat := transport (z : Nat) (Option Nat) pf (some 1)\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* The motive parse. The marker of z is at level 0 at the top and at level 3
+     after the 3 parameters of g. */
+  Tokens tokens, rest;
+  const LType *motive = NULL;
+  assert(lex(512, text("(z : Nat) (Eq Nat z 1) pf q"), &tokens, &failure));
+  assert(sigma_type(512, environment, NULL, tokens, &motive, &rest, &failure));
+  assert(motive->tag == TY_SIGMA && same_text(motive->name, text("z")) && motive->level == 0);
+  assert(motive->left->tag == TY_NAT && motive->right->tag == TY_EQ && rest.size == 3);
+  assert(motive->right->lhs.kind == VAL_VAR && motive->right->lhs.index == 0);
+  assert(sigma_type(512, environment, fun_named(environment, "g")->params, tokens, &motive, &rest, &failure));
+  assert(motive->tag == TY_SIGMA && motive->level == 3);
+  assert(motive->right->lhs.kind == VAL_VAR && motive->right->lhs.index == 3);
+
+  /* On a closed e, the result has the type B with y and the value of t (some
+     1), not the value of e. */
+  assert(lex(512, text("transport (z : Nat) (Option Nat) pf (some 1)"), &tokens, &failure));
+  Typed found;
+  Nat left;
+  const Term *term = NULL;
+  assert(synth_term(512, 512, 0, environment, tokens, &found, &rest, &left, &term, &failure));
+  assert(found.type->tag == TY_OPTION && rest.size == 1);
+  Typed evaluated;
+  assert(eval_synth(512, 512, environment, term, &evaluated, &left, &failure));
+  assert(same_type(found.type, evaluated.type));
+  const Value *value;
+  assert(eval_term(512, 512, found.type, environment, term, &value, &left, &failure));
+  assert(found.value != NULL && found.value->kind != VALUE_NULL);
+  assert(found.value->kind == value->kind && found.value->number == value->number);
+
+  /* t with the type B with y is refused at t. A declared result B with x is
+     refused at transport. A motive on Text with e on Nat gives eMatch. */
+  sigma_refused("def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+                "def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> (p : Eq Nat (inc y) 3) -> Eq Nat (inc y) 3 :=\n"
+                "  fun (x : Nat) (y : Nat) (e : Eq Nat x y) (p : Eq Nat (inc y) 3) =>\n"
+                "  transport (z : Nat) (Eq Nat (inc z) 3) e p\n",
+                "p\n", eTerm);
+  sigma_refused("def inc : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+                "def f : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> (p : Eq Nat (inc x) 3) -> Eq Nat (inc x) 3 :=\n"
+                "  fun (x : Nat) (y : Nat) (e : Eq Nat x y) (p : Eq Nat (inc x) 3) =>\n"
+                "  transport (z : Nat) (Eq Nat (inc z) 3) e p\n",
+                "transport", eTerm);
+  sigma_refused("def pf : Eq Nat 1 1 := refl\n"
+                "def u : Option Nat := transport (z : Text) (Option Nat) pf (some 1)\n",
+                "transport", eMatch);
+}
+
+/* Transport motives resolve the free value and type parameters of each
+   application, including motives with a nested Sigma binder. */
+static void test_d6_transport_scope(void) {
+  const char *source =
+      "def f : (x : Nat) -> (p : Eq Nat x x) -> Eq Nat x x :=\n"
+      "  fun (x : Nat) (p : Eq Nat x x) => transport (z : Nat) (Eq Nat z x) p p\n"
+      "def q : Eq Nat 1 1 := refl\n"
+      "def r : Eq Nat 1 1 := f 1 q\n"
+      "def move : (A : Type 0) -> (e : Eq Nat 1 1) -> (a : A) -> A :=\n"
+      "  fun (A : Type 0) (e : Eq Nat 1 1) (a : A) => transport (z : Nat) A e a\n"
+      "def n : Nat := move Nat q 11\n"
+      "def t : Text := move Text q \"hello\"\n"
+      "def g : (x : Nat) -> (p : Eq Nat x x) -> Sigma (w : Nat) (Eq Nat w x) :=\n"
+      "  fun (x : Nat) (p : Eq Nat x x) =>\n"
+      "  transport (z : Nat) (Sigma (w : Nat) (Eq Nat w z)) p (pack x p)\n"
+      "def s : Sigma (w : Nat) (Eq Nat w 1) := g 1 q\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  const Binding *item;
+  assert(lookup(text("n"), environment, &item));
+  assert(same_text(printed(item->value), text("11")));
+  assert(lookup(text("t"), environment, &item));
+  assert(same_text(printed(item->value), text("\"hello\"")));
+
+  /* The parsed application and the node path must agree after the body
+     parameters have been replaced by closed arguments. */
+  Tokens tokens, rest;
+  const Term *term = NULL;
+  Typed parsed, evaluated;
+  Nat left;
+  assert(lex(512, text("f 1 q"), &tokens, &failure));
+  assert(synth_term(512, 512, 0, environment, tokens, &parsed, &rest, &left, &term, &failure));
+  assert(rest.size == 1);
+  assert(eval_synth(512, 512, environment, term, &evaluated, &left, &failure));
+  assert(same_type(parsed.type, evaluated.type));
+  assert(same_text(printed(parsed.value), printed(evaluated.value)));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -2695,6 +2803,8 @@ int main(void) {
   test_d6_cong();
   test_d6_cong_budget();
   test_d6_cong_closed_body();
+  test_d6_transport();
+  test_d6_transport_scope();
   puts("C module tests passed");
   return 0;
 }

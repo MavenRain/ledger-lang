@@ -141,6 +141,7 @@ Nat same_term(const Term *left, const Term *right) {
     case TERM_SYMM:
     case TERM_TRANS:
     case TERM_CONG:
+    case TERM_TRANSPORT:
     case TERM_EITHER:
     case TERM_PURE:
     case TERM_MAP:
@@ -177,6 +178,7 @@ static Text term_keyword(TermTag tag) {
     case TERM_SYMM: return ssymm;
     case TERM_TRANS: return strans;
     case TERM_CONG: return scong;
+    case TERM_TRANSPORT: return stransport;
     case TERM_EITHER: return seither;
     case TERM_PURE: return spure;
     case TERM_MAP: return smap;
@@ -263,6 +265,11 @@ static void emit_term(TextBuilder *builder, const Term *term) {
     case TERM_UNFOLD:
     case TERM_UNFOLD_VALUE:
       emit_token(builder, TOKEN_IDENTIFIER, 0, term_keyword(term->tag));
+      emit_terms(builder, term->args);
+      return;
+    case TERM_TRANSPORT:
+      emit_token(builder, TOKEN_IDENTIFIER, 0, term_keyword(term->tag));
+      emit_types(builder, term->types);
       emit_terms(builder, term->args);
       return;
   }
