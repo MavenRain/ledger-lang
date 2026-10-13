@@ -223,8 +223,8 @@ The operation slice adds `test/operations.test.mjs`. It reads
 of the 48 constructors of the 12 `Type 0` operation families it checks the
 field names, field order, argument types and arity, and it rejects a surplus
 argument, a missing argument, a wrong argument type and a wrong `Ref` index.
-More cases cover the `Log` alias, the later-milestone refusal of
-`ReadPath`, the 93 reserved operation names, and the literal output of
+More cases cover the `Log` alias, the refusal of `ReadPath` as a data
+type, the 93 reserved operation names, and the literal output of
 `examples/operations.ledger`.
 
 The Query slice adds one case for each of the 29 `Query` constructors. Each
@@ -241,11 +241,21 @@ The function type slice adds `test/paths.test.mjs` with 20 cases. They cover
 a type definition of a function type, the name as the type of a function
 definition, in another type definition and at the end of a longer function
 type, the `Type 0` universe, the refusal as a data type and as a term,
-`WritePath` in each of these positions, the refusal of `ReadPath`, and the
+`WritePath` in each of these positions, and the
 literal steps of `examples/paths.ledger`. Additional cases cover grouping
 of function type names and complete arrow types, the 511-parenthesis
 boundary, parameter shadowing, universe and data type restrictions, and
 missing closing parentheses. This slice has no mutation run.
+
+The `ReadPath` slice (step D7) changes the `ReadPath` cases of
+`test/paths.test.mjs`. They cover the type definitions
+`def R : Type 1 := ReadPath` and `(head : Hash) -> ReadPath`, the refusal in
+`Type 0`, the refusal of `def r : ReadPath := nil`, the body
+`r Flag log ask`, and the refusal of a type argument after a value argument.
+The C function `test_d7_read_path` covers the signature, the universe, the
+parameter type, the application and the reserved name. More C cases cover
+renamed type parameters, `ReadPath` forwarding, free and bound type names,
+and unknown-type diagnostics.
 
 The nested application slice adds `test/nested.test.mjs` with 10 cases. They
 cover an application in a function body, a structure form that applies such

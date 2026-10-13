@@ -126,7 +126,7 @@ definition. The checking budget of the definition limits the JSON size of
 each side. See [examples/equality.ledger](examples/equality.ledger).
 
 A function definition has a type `(x : A) -> B`. A value parameter has a
-data type or a named function type without type parameters. The result has
+data type or a named function type, also one with type parameters. The result has
 a data type, and `B` cannot refer to a value parameter. The one exception
 is an equality result `Eq A x y`: a side can be the name of a value
 parameter of type `A`, or an atom that applies constructor forms to value
@@ -240,6 +240,18 @@ type parameter in the position of an argument, as in `id Nat 4` or
 no constructor makes a term of it. A binder can give a new name to a type
 parameter. A type definition of a function type with a type parameter is in
 `Type 1`. See [examples/poly.ledger](examples/poly.ledger).
+
+A named function type with a type parameter can be a parameter type. The
+body applies the parameter with the type arguments first. Two function types
+that differ only in the names of their type parameters are the same type, so
+`same` is an argument for the parameter `h` of type `P`:
+
+```
+def P : Type 1 := (A : Type 0) -> (x : A) -> A
+def same : (B : Type 0) -> (y : B) -> B := fun (B : Type 0) (y : B) => y
+def use : (h : P) -> Nat := fun (h : P) => h Nat 1
+def n : Nat := use same
+```
 
 A type definition can name a function type without type parameters in
 `Type 0`. The name then stands for the function type: as the type of a
@@ -406,9 +418,23 @@ def refuse : WritePath :=
   fun (log : Log) (write : Write) => makeStep log (outcomeDenied none nil)
 ```
 
-`ReadPath` is a reserved name. It has a type parameter, so it needs
-dependent function types. As a type, it stops the compiler with
-`this type belongs to a later milestone`. The compiler does not run the
+`ReadPath` is the function type
+`(answer : Type 0) -> (log : Log) -> (query : Query answer) -> answer`.
+It has a type parameter, so it is in `Type 1`. A type definition in
+`Type 1` can name it, a parameter can have it, and a longer function type
+can end with it after value parameters, as in `(head : Hash) -> ReadPath`.
+An application of a `ReadPath` parameter gives the answer type first. A type
+argument after a value argument is not read in M0: the compiler reads it as
+a term and stops with `unknown name or constructor`. `ReadPath` and
+`WritePath` are reserved definition names.
+
+```
+def Reader : Type 1 := (head : Hash) -> ReadPath
+def lift : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Flag :=
+  fun (r : ReadPath) (log : Log) (ask : Query Flag) => r Flag log ask
+```
+
+The compiler does not run the
 write path or the read path. `compiler/schema.c` and
 `compiler/operations.c` take the constructor and field data from
 `core/schema.def` and `core/ops.def` when the compiler is built.

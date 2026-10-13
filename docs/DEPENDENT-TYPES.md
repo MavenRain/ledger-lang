@@ -1,7 +1,8 @@
 # Dependent types plan
 
 This plan covers items 1 and 2 of "Remaining M0 work" in `STATUS.md`:
-dependent function types, Sigma, `transport`, `cong`, and `ReadPath`. Each
+dependent function types, Sigma, `transport`, `cong`, `Query` parameters
+and `ReadPath`. Each
 step is one slice with its own tests. Each step keeps all earlier tests.
 
 ## Starting model (before D1)
@@ -209,10 +210,18 @@ The plan adds neutral values in two stages:
   closed side of a type other than `Nat` gives the same refusal in both
   forms. A neutral side gives null for z. A named family `P` in place of
   the motive moves to D7 or a later step.
-- D7. `ReadPath` (STATUS item 2). It has a type parameter and a `Query`
-  parameter, and `Query` is an indexed family in `Type 1`. The type parser
-  then accepts the name, and a definition of type `ReadPath` is a function
-  of the program, like `WritePath`.
+- D7 (done). `Query` parameters and `ReadPath` (STATUS item 2). A function
+  parameter can have the type `Query T`, also with a type parameter `T`.
+  `ReadPath` is the function type
+  `(answer : Type 0) -> (log : Log) -> (query : Query answer) -> answer`
+  in `Type 1`. A definition of type `ReadPath` is a function of the
+  program, like `WritePath`, and writes no instance. A parameter can have a
+  named function type with a type parameter, and an application
+  `r Flag log ask` gives the type arguments first. A named signature at the
+  end of a longer function type can bring its type parameter after value
+  parameters, as in `(head : Hash) -> ReadPath`. A type argument after a
+  value argument stays refused (an M0 limit). Two function types that
+  differ only in the names of their type parameters are the same type.
 
 ## Limits that stay
 

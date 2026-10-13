@@ -114,6 +114,12 @@ not complete the M0 milestone in `SPEC.md`.
   type as the type of a function definition, in another type definition,
   and at the end of a longer function type. `WritePath` is the built-in function type
   `(log : Log) -> (write : Write) -> Step`.
+- `ReadPath` is the built-in function type
+  `(answer : Type 0) -> (log : Log) -> (query : Query answer) -> answer` in
+  `Type 1` (step D7). A type definition in `Type 1` can name it, a parameter
+  can have it, and a longer function type can end with it after value
+  parameters, as in `(head : Hash) -> ReadPath`. `ReadPath` and `WritePath`
+  are reserved definition names.
 - Named function parameters, including grouped aliases and `WritePath`.
   An argument names a function or another function parameter of the same
   type, or partially applies a function by binding its leading parameters.
@@ -125,8 +131,10 @@ not complete the M0 milestone in `SPEC.md`.
   data type. The body is checked once against the result type of the form,
   with the binder bound to null, and keeps the scope of the form.
   The parameter keeps the argument's definition scope and can be
-  applied, forwarded, or used by a structure or algebra form. Function
-  types with type parameters cannot be parameter types.
+  applied, forwarded, or used by a structure or algebra form. A named
+  function type with a type parameter can be a parameter type, and an
+  application of the parameter gives the type arguments first. A function
+  type with a type parameter that has no name cannot be a parameter type.
 
 - Type parameters. A function type can start with type parameters
   `(A : Type 0)`. The types of the later parameters and the result type can
@@ -134,7 +142,9 @@ not complete the M0 milestone in `SPEC.md`.
   with an opaque type for each type parameter. An application gives one data
   type for each type parameter, and the checker replaces all type parameters
   in one step. A binder can give a new name to a type parameter. A type
-  definition of a function type with a type parameter is in `Type 1`.
+  definition of a function type with a type parameter is in `Type 1`. Two
+  function types that differ only in the names of their type parameters are
+  the same type.
 - Inline functions of `fold` and `unfold`. The function of `fold` or
   `unfold`, and each of the five functions of a fold over `Value`, can be
   `(fun (x : A) .. => body)`. The binders give the parameter types. The form
@@ -175,13 +185,13 @@ not complete the M0 milestone in `SPEC.md`.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types. `docs/DEPENDENT-TYPES.md` gives the plan
-   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c, D4, D5 and D6
-   and the syntax tree portion of D3 are done. D5 adds Sigma checking and
-   evaluation and `Eq` inside Sigma. D6 adds `cong` and `transport`. Body
-   evaluation keeps token fallbacks (step D3), and step D7 remains.
-2. Add `ReadPath`. It has a type parameter and a `Query` parameter, so it
-   needs the dependent function types of item 1. Until then the type parser
-   refuses this name with `this type belongs to a later milestone`.
+   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c, D4, D5, D6 and
+   D7 and the syntax tree portion of D3 are done. D5 adds Sigma checking and
+   evaluation and `Eq` inside Sigma. D6 adds `cong` and `transport`. D7 adds
+   `Query` parameters and `ReadPath`. Body evaluation keeps token fallbacks
+   (step D3).
+2. `ReadPath` is done (step D7). It is a function type in `Type 1`. The
+   compiler does not run the read path of M2.
 3. Extend diagnostics with declaration context and improve source/output
    budgets as measurements justify changes.
 
@@ -237,11 +247,16 @@ M1 remains the write path, entry hashes, and record projection. M2 remains
 the indexed read path. The core files and full specification retain their
 original meaning.
 
-- Type parameters come before the value parameters. A type argument is in
+- Type parameters come before the value parameters. Only a named function
+  type at the end of a longer function type, such as `ReadPath`, brings its
+  type parameter after value parameters. An application gives the type
+  arguments first: a type argument after a value argument is read as a term
+  and stops with `unknown name or constructor`. A type argument is in
   the position of an argument, so a type former such as `Prod Nat Nat` needs
   parentheses. The checker does not infer a type argument. The name of a
-  function with a type parameter is not a function argument. A partial
-  application that gives its type arguments is. A data type cannot depend on a value parameter. Only a side of an
+  function with a type parameter is a function argument only for a
+  parameter of a named function type with a type parameter. A partial
+  application that gives its type arguments is a function argument. A data type cannot depend on a value parameter. Only a side of an
   equality result can name one, as the whole side or inside an atom of
   constructor forms and literals such as `(some n)` (step D4a), or of names
   and applications of earlier definitions such as `(natAdd n 1)` (step D4).

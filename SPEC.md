@@ -65,13 +65,22 @@ a function type is not a data type. An application `f a` checks `a` against
 A type definition can name a function type of data types:
 `def Rule : Type 0 := (count : Nat) -> Flag`. The name stands for the
 function type, also at the end of a longer function type. `WritePath` is
-the function type `(log : Log) -> (write : Write) -> Step`.
+the function type `(log : Log) -> (write : Write) -> Step`. `ReadPath` is
+the function type
+`(answer : Type 0) -> (log : Log) -> (query : Query answer) -> answer`. It
+has a type parameter, so it is in `Type 1`. `ReadPath` and `WritePath` are
+reserved definition names.
 
 A function type can start with type parameters: `(A : Type 0) -> (x : A) -> A`.
-Each type parameter comes before the value parameters. The types of the
+Each type parameter comes before the value parameters. Only a named function
+type at the end of a longer function type brings its type parameter after
+value parameters, as in `(head : Hash) -> ReadPath`. The types of the
 later parameters and the result type can use its name. A function type with
-a type parameter is in `Type 1`. An application `f T a` gives one data type
-`T` for each type parameter, then the value arguments. The checker replaces
+a type parameter is in `Type 1`. Two function types that differ only in the
+names of their type parameters are the same type. An application `f T a`
+gives one data type `T` for each type parameter, then the value arguments.
+In M0 a type argument after a value argument is not read: the checker reads
+it as a term. The checker replaces
 all type parameters with the type arguments in one step. The type of a type
 parameter is opaque in the body of the function, so the body is correct for
 each type argument. A data type that depends on a value parameter is later
@@ -114,7 +123,10 @@ parenthesized inline `fun`. Its body is checked at the partial application
 and keeps the scope of the partial application.
 The body of the function can apply the parameter, pass it to another function, or give
 it to `map`, `bind`, `filter`, `either`, `fold` and `unfold`.
-A function type with a type parameter is not a parameter type.
+A named function type with a type parameter, such as `ReadPath`, is also a
+parameter type. The body applies the parameter with the type arguments
+first. A function type with a type parameter that has no name is not a
+parameter type.
 
 ## 4. Structures
 
@@ -202,6 +214,8 @@ Encoding rules:
   hashes. Each record that an entry creates is an instance. Its final state
   is its projection at the end of the log, with the projected fields filled.
 - M2: the read path. `read : ReadPath` answers each `Query` from the log.
+  M0 checks `ReadPath` as a function type. The compiler does not run the
+  read path.
 
 ## 7. Milestones
 
