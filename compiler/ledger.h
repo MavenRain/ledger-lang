@@ -332,6 +332,7 @@ const LTypes *plan_arguments(const Plan *selected);
 Text type_name(const LType *ty);
 Nat type_level(const LType *ty);
 Nat same_type(const LType *a, const LType *b);
+Nat same_declared_type(const LType *a, const LType *b);
 int constructor_plan(const LType *ty, Text name, Plan *plan);
 Nat is_query_type(const LType *ty);
 const Params *arrow_params(const LType *ty);
@@ -719,8 +720,8 @@ Text error_text(Nat position, Text message);
 
 /* A type as the source writes it inside a Term. A binder of fun keeps its
    name; a type argument keeps an empty name. type is the resolved type and
-   source keeps the tokens of the type for the printer. A list of term
-   types; NULL is the end. */
+   source keeps the tokens of the type for the printer (the motive of
+   TERM_TRANSPORT has no source). A list of term types; NULL is the end. */
 typedef struct {
   Text name;
   Nat position;
@@ -782,7 +783,8 @@ typedef enum {
    binders in types and the body as the one item of args. TERM_GROUP keeps
    the inner term as the one item of args. TERM_REFL and the keyword forms
    keep their arguments in args, in source order. TERM_TRANSPORT also keeps
-   its motive as the one item of types. TERM_BODY keeps the body
+   its motive as the one item of types: the LType of the check, with the
+   parameters of the body as markers. TERM_BODY keeps the body
    term in callee (NULL when parse_term built no term); its position is the
    first body token. tokens is a view into the token array of the lexer:
    the argument span on TERM_APPLY and TERM_PARTIAL (the tokens after the
@@ -839,6 +841,7 @@ const Term *term_call(TermTag tag, Nat position, Nat cost, Tokens tokens, Nat en
 const Term *term_fun(Nat position, Nat cost, Tokens tokens, const TermTypes *binders, const Term *body);
 const Term *term_form(TermTag tag, Nat position, Nat cost, const Terms *args);
 Nat same_term(const Term *left, const Term *right);
+const Term *bare_term(const Term *term);
 Nat same_terms(const Terms *left, const Terms *right);
 Text term_text(const Term *term);
 /* The term with each marker name as a variable node (D3-s9 part A). */

@@ -213,8 +213,9 @@ static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat 
 }
 
 /* D5 part B (design items 5 and 7): B with the value of a for the marker at
-   level, in each Eq of B. A nested Sigma has its own level, thus its marker
-   stays. The walk has the form of instantiate_type and uses its fuel. Part C
+   level, in each Eq of B. A nested Sigma binds its level in its right type,
+   including when a type argument reuses an outer marker index. The walk has
+   the form of instantiate_type and uses its fuel. Part C
    (design item 8): witness is the side form of a (see put_side). */
 static int put_marker(Fuel fuel, const Bindings *environment, const LType *type, Nat level, Typed found,
                       Val witness, const LType **result) {
@@ -233,6 +234,10 @@ static int put_marker(Fuel fuel, const Bindings *environment, const LType *type,
     if (!put_marker(more, environment, type->left, level, found, witness, &copy.left)) return 0;
     break;
   case TY_SIGMA:
+    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left)) return 0;
+    if (type->level != level &&
+        !put_marker(more, environment, type->right, level, found, witness, &copy.right)) return 0;
+    break;
   case TY_PROD:
   case TY_SUM:
     if (!put_marker(more, environment, type->left, level, found, witness, &copy.left) ||
@@ -285,7 +290,7 @@ static int project_sigma(Fuel fuel, const Bindings *environment, Nat position, N
 
 int check_synthesized(Nat position, const LType *expected, Typed found, Tokens tokens, const Value **value,
                       Tokens *rest, Failure *failure) {
-  if (!same_type(expected, found.type)) return fail_at(failure, position, eTerm);
+  if (!same_declared_type(expected, found.type)) return fail_at(failure, position, eTerm);
   *value = found.value;
   *rest = tokens;
   return 1;
@@ -588,6 +593,25 @@ const LType *subst_type(const Bindings *chosen, const LType *ty) {
                              .left = subst_type(chosen, ty->left), .right = subst_type(chosen, ty->right)});
   }
   return ty;
+}
+
+/* D8 part C (design item 13): the motive of a transport in the scope of an
+   application. A type parameter gives its type argument (subst_type). A value
+   parameter of slot s gives its value for the marker s - 1 (put_marker, the
+   project_sigma form). A type parameter also has a slot, thus the walk skips
+   each binding that is not a value. In a checking body the markers stay. */
+static int application_motive(Fuel fuel, const Bindings *environment, Nat position, const LType *motive,
+                              const LType **result, Failure *failure) {
+  *result = motive;
+  if (checking_body(environment) == 1) return 1;
+  *result = subst_type(environment, motive);
+  for (const Bindings *cell = environment; cell != NULL; cell = cell->tail) {
+    if (cell->head.slot == 0 || cell->head.kind != BIND_VALUE) continue;
+    if (!put_marker(fuel, environment, *result, cell->head.slot - 1, (Typed){cell->head.type, cell->head.value},
+                    (Val){.kind = VAL_CLOSED}, result))
+      return fail_at(failure, position, eSigma);
+  }
+  return 1;
 }
 
 /* The value parameters of a function, with the type arguments in place of
@@ -1958,14 +1982,14 @@ static const Term *form_term(TermTag tag, Nat position, const Terms *args) {
 }
 
 /* D6 part B (delta B-D3): TERM_TRANSPORT keeps the motive as its one term
-   type (the type and its source tokens), and e and t in args. */
-static const Term *transport_term(Nat position, const LType *motive, Tokens source, const Term *proof,
-                                  const Term *value) {
+   type, and e and t in args. D8 part C (design item 12): the motive is the
+   LType of the check, with the parameters of the body as markers. It has no
+   source tokens. */
+static const Term *transport_term(Nat position, const LType *motive, const Term *proof, const Term *value) {
   const Terms *args = terms_item(proof, terms_item(value, NULL));
   return terms_built(args) == 1
              ? term_named(TERM_TRANSPORT, position, 0, stransport,
-                          term_types_item((TermType){.position = position, .type = motive, .source = source}, NULL),
-                          args)
+                          term_types_item((TermType){.position = position, .type = motive}, NULL), args)
              : NULL;
 }
 
@@ -2219,10 +2243,7 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
       if (!parse_term(more, spent, 1, bx, environment, after, &value, &later, &used, want_term(term, &second), failure))
         return 0;
       return with_term(worked_typed((Typed){by, value}, later, used, typed, rest, left), term,
-                       term != NULL ? transport_term(head.position, motive,
-                                                     (Tokens){tail.items, tail.size - proof_tokens.size}, proof,
-                                                     second)
-                                    : NULL);
+                       term != NULL ? transport_term(head.position, motive, proof, second) : NULL);
     }
     const Term *first = NULL;
     if (!synth_term(more, budget, 1, environment, tail, &found, &after, &spent, &first, failure))
@@ -2352,7 +2373,7 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
     if (lookup(head.text, environment, &item)) {
       switch (item->kind) {
       case BIND_VALUE:
-        if (proof_in_scope(item->name, item->type, environment) && same_type(expected, item->type))
+        if (proof_in_scope(item->name, item->type, environment) && same_declared_type(expected, item->type))
           return with_term(worked_value(item->value, tail, budget, value, rest, left), term,
                            term != NULL ? value_term(head.position, item, environment) : NULL);
         return fail_at(failure, head.position, eTerm);
@@ -3368,13 +3389,10 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
     /* D6 part B (design items 8 and 9): one path for a neutral and a closed
        e. The value is the value of t. */
     if (term->types == NULL) return 0;
-    /* Resolve the motive in this application scope, where the function's
-       value and type parameters can differ from the checked body. */
+    /* D8 part C (design item 13): the motive is the LType of the check. Put
+       the type and value arguments of this application scope in it. */
     const LType *motive;
-    Tokens motive_rest;
-    if (!sigma_type(more, 1, environment, body_params(environment), term->types->head.source,
-                    &motive, &motive_rest, &spent, failure))
-      return 0;
+    if (!application_motive(more, environment, term->position, term->types->head.type, &motive, failure)) return 0;
     const LType *bx, *by;
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure) ||
         !transport_types(more, environment, term->position, motive, found, &bx, &by, failure))
@@ -3538,7 +3556,7 @@ static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, cons
   switch (item->kind) {
   case BIND_VALUE:
     /* The test of the token path: eTerm at the name (D3-s8 U5). */
-    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1)
+    if (!proof_in_scope(item->name, item->type, environment) || same_declared_type(expected, item->type) != 1)
       return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
   case BIND_TYPE:
@@ -3568,7 +3586,7 @@ static int eval_construct_name(Fuel fuel, Nat budget, const LType *expected, con
   case BIND_VALUE:
     if (term->args != NULL) return 0;
     /* The test of the token path: eTerm at the name (D3-s8 U5). */
-    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1)
+    if (!proof_in_scope(item->name, item->type, environment) || same_declared_type(expected, item->type) != 1)
       return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
   case BIND_TYPE:
@@ -3623,7 +3641,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
   case TERM_STRING:
     return same_type(expected, &text_type) == 1 && eval_worked(text_value(term->name), budget, value, left);
   case TERM_CLOSED:
-    if (!same_type(expected, term->closed->type)) return fail_at(failure, term->position, eTerm);
+    if (!same_declared_type(expected, term->closed->type)) return fail_at(failure, term->position, eTerm);
     return eval_worked(term->closed->value, budget, value, left);
   case TERM_GROUP: return eval_term(more, budget, expected, environment, first_arg(term), value, left, failure);
   case TERM_VAR:
@@ -3633,7 +3651,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
     int found = term->tag == TERM_VAR ? var_binding(term, environment, &item) : lookup(term->name, environment, &item);
     if (!found || item->kind != BIND_VALUE) return 0;
     /* The test of the token path: eTerm at the name (D3-s8 U5). */
-    if (!proof_in_scope(item->name, item->type, environment) || same_type(expected, item->type) != 1)
+    if (!proof_in_scope(item->name, item->type, environment) || same_declared_type(expected, item->type) != 1)
       return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
   }
@@ -3908,7 +3926,8 @@ static int normal_typed_args(Fuel fuel, const Bindings *scope, const LTypes *typ
 
 /* Closed constructor arguments use the same typed constants as substituted
    witnesses. This also canonicalizes a closed data name inside an open side.
-   Grouped markers match the bare variables used in argument sides.
+   A group around a variable stays a group, thus refl keeps (n) different
+   from n. The declared-type check compares it as the variable (D-C1).
    Applications with markers remain applications, as in side_normal. */
 int side_normal_at(Fuel fuel, const Bindings *scope, const LType *type, const Term *node,
                    const Term **normal, Failure *failure) {
@@ -3917,7 +3936,7 @@ int side_normal_at(Fuel fuel, const Bindings *scope, const LType *type, const Te
   if (node->tag == TERM_GROUP) {
     const Term *inner;
     if (!side_normal_at(more, scope, type, first_arg(node), &inner, failure)) return 0;
-    *normal = inner->tag == TERM_VAR || inner->tag == TERM_NUMBER || inner->tag == TERM_STRING ||
+    *normal = inner->tag == TERM_NUMBER || inner->tag == TERM_STRING ||
               inner->tag == TERM_CLOSED
                   ? inner : with_args(node, terms_item(inner, NULL));
     return 1;
@@ -3993,7 +4012,7 @@ int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term *
   if (node->tag == TERM_GROUP) {
     const Term *inner;
     if (!side_normal(more, scope, node->args->head, &inner, failure)) return 0;
-    if (inner->tag == TERM_VAR || inner->tag == TERM_NUMBER || inner->tag == TERM_STRING || inner->tag == TERM_CLOSED) {
+    if (inner->tag == TERM_NUMBER || inner->tag == TERM_STRING || inner->tag == TERM_CLOSED) {
       *normal = inner;
       return 1;
     }

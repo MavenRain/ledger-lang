@@ -3202,6 +3202,126 @@ static void test_d8_grouped_sides(void) {
   }
 }
 
+/* D-C1 (USER ruling 3): a group around a variable that is a full side stays
+   a different side for refl. */
+static void test_d8_side_groups(void) {
+  const char *refused[] = {
+      "def g : (n : Nat) -> Eq Nat (n) n := fun (n : Nat) => refl\n",
+      "def g : (n : Nat) -> Eq Nat ((n)) (n) := fun (n : Nat) => refl\n"};
+  for (size_t at = 0; at < sizeof refused / sizeof *refused; at++) {
+    Text output;
+    Failure failure = {0};
+    assert(!compile_program(text(refused[at]), &output, &failure));
+    assert(same_text(failure.message, eRefl));
+  }
+}
+
+/* A parsed proof keeps its declared-type compatibility when evaluated. */
+static void test_d8_declared_evaluation(void) {
+  const char *source =
+      "def g : (m : Nat) -> (p : Eq Nat (m) (m)) -> Eq Nat m m := "
+      "fun (m : Nat) (p : Eq Nat (m) (m)) => p\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text(source), &environment, &failure));
+  const Binding *function = fun_named(environment, "g");
+  Bindings body = {.head = body_marker(2), .tail = bind_params(function->params, NULL, environment)};
+  const Binding *proof;
+  assert(lookup(text("p"), &body, &proof));
+  const Term *node = function->term->callee;
+  assert(node != NULL && node->tag == TERM_VAR);
+  const Value *value;
+  Nat left;
+  assert(eval_term(512, 512, function->type, &body, function->term, &value, &left, &failure));
+  assert(same_text(printed(value), text("null")));
+
+  /* The name and constructor views use the same declared-type check. */
+  Term named = *node;
+  named.tag = TERM_NAME;
+  assert(eval_term(512, 512, function->type, &body, &named, &value, &left, &failure));
+  named.tag = TERM_CONSTRUCT;
+  assert(eval_term(512, 512, function->type, &body, &named, &value, &left, &failure));
+  const Term *closed = term_closed(node->position, proof->type, proof->value, text("null"));
+  assert(eval_term(512, 512, function->type, &body, closed, &value, &left, &failure));
+
+  /* A value of function type reaches eval_name_argument. */
+  LType expected = {.tag = TY_ARROW, .left = function->type, .right = function->type};
+  LType actual = {.tag = TY_ARROW, .left = proof->type, .right = proof->type};
+  Bindings higher = {.head = {.kind = BIND_VALUE, .name = text("h"), .type = &actual, .value = proof->value},
+                     .tail = &body};
+  const Term *name = term_named(TERM_NAME, 0, 0, text("h"), NULL, NULL);
+  assert(eval_term(512, 512, &expected, &higher, name, &value, &left, &failure));
+}
+
+/* The type of the node path of a call. It must be the type of the parsed
+   call. */
+static Typed motive_call(const Bindings *environment, const char *call) {
+  Tokens tokens, rest;
+  const Term *term = NULL;
+  Typed parsed, evaluated;
+  Nat left;
+  Failure failure = {0, {NULL, 0}};
+  assert(lex(512, text(call), &tokens, &failure));
+  assert(synth_term(512, 512, 0, environment, tokens, &parsed, &rest, &left, &term, &failure));
+  assert(rest.size == 1);
+  assert(eval_synth(512, 512, environment, term, &evaluated, &left, &failure));
+  assert(same_type(parsed.type, evaluated.type));
+  assert(same_text(printed(parsed.value), printed(evaluated.value)));
+  return evaluated;
+}
+
+/* D8 part C (test_d8_transport_motive in the test plan): the motive of
+   TERM_TRANSPORT is the LType of the check with markers and no source, and
+   eval_synth puts the type and value arguments of an application in it. */
+static void test_d8_motive(void) {
+  const char *source =
+      "def f : (x : Nat) -> (p : Eq Nat x x) -> Eq Nat x x :=\n"
+      "  fun (x : Nat) (p : Eq Nat x x) => transport (z : Nat) (Eq Nat z x) p p\n"
+      "def q : Eq Nat 1 1 := refl\n"
+      "def move : (A : Type 0) -> (e : Eq Nat 1 1) -> (a : A) -> A :=\n"
+      "  fun (A : Type 0) (e : Eq Nat 1 1) (a : A) => transport (z : Nat) A e a\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+
+  /* The body of f is the TERM_TRANSPORT. Its motive has no source: Sigma
+     (z : Nat) (Eq Nat z x), with z at marker 2 and x at marker 0. */
+  const Term *body = fun_named(environment, "f")->term;
+  assert(body->tag == TERM_BODY && body->callee != NULL);
+  const Term *node = body->callee;
+  assert(node->tag == TERM_TRANSPORT && node->types != NULL && node->types->tail == NULL);
+  const TermType *motive = &node->types->head;
+  assert(motive->source.size == 0);
+  assert(motive->type->tag == TY_SIGMA && motive->type->level == 2);
+  const LType *equality = motive->type->right;
+  assert(equality->tag == TY_EQ);
+  assert(equality->lhs.kind == VAL_VAR && equality->lhs.index == 2);
+  assert(equality->rhs.kind == VAL_VAR && equality->rhs.index == 0);
+
+  /* A type parameter: the node path gives Nat, not the schema A. */
+  Typed moved = motive_call(environment, "move Nat q 11");
+  assert(moved.type->tag == TY_NAT);
+
+  /* Bound Sigma markers in a type argument can share indices with the
+     function parameters and the transport binder. They remain bound. */
+  Typed nested = motive_call(environment,
+      "move (Sigma (u : Nat) (Sigma (v : Nat) (Eq Nat u v))) q (pack 1 (pack 1 refl))");
+  assert(nested.type->tag == TY_SIGMA && nested.type->right->tag == TY_SIGMA);
+  assert(nested.type->right->right->lhs.kind == VAL_VAR && nested.type->right->right->lhs.index == 0);
+  assert(nested.type->right->right->rhs.kind == VAL_VAR && nested.type->right->right->rhs.index == 1);
+  Typed deep = motive_call(environment,
+      "move (Sigma (u : Nat) (Sigma (v : Nat) (Sigma (w : Nat) (Sigma (r : Nat) (Eq Nat u r))))) "
+      "q (pack 1 (pack 2 (pack 3 (pack 1 refl))))");
+  assert(deep.type->right->right->right->right->rhs.kind == VAL_VAR);
+  assert(deep.type->right->right->right->right->rhs.index == 3);
+
+  /* A value parameter: the node path gives Eq Nat 1 1 with closed sides. */
+  Typed proved = motive_call(environment, "f 1 q");
+  assert(proved.type->tag == TY_EQ);
+  assert(proved.type->lhs.kind == VAL_CLOSED && same_text(proved.type->lhs.text, text("1")));
+  assert(proved.type->rhs.kind == VAL_CLOSED && same_text(proved.type->rhs.text, text("1")));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3242,6 +3362,9 @@ int main(void) {
   test_d7_type_names();
   test_d8_sides();
   test_d8_grouped_sides();
+  test_d8_side_groups();
+  test_d8_declared_evaluation();
+  test_d8_motive();
   puts("C module tests passed");
   return 0;
 }

@@ -56,7 +56,16 @@ static Text marker_key(Nat key, Nat marker, const SigmaKey *scope) {
   return marker_name(marker);
 }
 
-static Text side_key(Nat key, Val side, const SigmaKey *scope) {
+/* Key 2 is the key of the declared-type check (D-C1): a side that is a group
+   around a variable is the variable. */
+static Val bare_side(Val side) {
+  if (side.kind != VAL_TERM) return side;
+  const Term *node = bare_term(side.node);
+  return node->tag == TERM_VAR ? (Val){.kind = VAL_VAR, .index = node->index} : (Val){.kind = VAL_TERM, .node = node};
+}
+
+static Text side_key(Nat key, Val given, const SigmaKey *scope) {
+  Val side = key == 2 ? bare_side(given) : given;
   if (scope == NULL || side.kind == VAL_CLOSED) return val_text(side);
   if (side.kind == VAL_VAR) return marker_key(key, side.index, scope);
   Nat size = term_marker_bound(side.node);
@@ -153,6 +162,13 @@ Nat type_level(const LType *ty) {
    type names by lexical depth while preserving free type names. */
 Nat same_type(const LType *a, const LType *b) {
   return same_text(type_text(1, a, NULL, NULL), type_text(1, b, NULL, NULL));
+}
+
+/* D-C1 (USER ruling 3): the declared-type check. A side that is a group
+   around a variable compares as the variable, and so does such a group in a
+   node. refl keeps the strict equality (same_val). */
+Nat same_declared_type(const LType *a, const LType *b) {
+  return same_text(type_text(2, a, NULL, NULL), type_text(2, b, NULL, NULL));
 }
 
 static const LTypes *cons_type(const LType *head, const LTypes *tail) {

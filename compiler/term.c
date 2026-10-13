@@ -156,6 +156,29 @@ Nat same_term(const Term *left, const Term *right) {
   return 0;
 }
 
+static const Terms *bare_terms(const Terms *terms) {
+  if (terms == NULL) return NULL;
+  const Term *head = bare_term(terms->head);
+  const Terms *tail = bare_terms(terms->tail);
+  return head == terms->head && tail == terms->tail ? terms : terms_item(head, tail);
+}
+
+/* D-C1 (USER ruling 3): a group around a variable gives the variable, at
+   each depth. The other nodes keep their form. Only the declared-type check
+   uses this form (same_declared_type). */
+const Term *bare_term(const Term *term) {
+  if (term->tag == TERM_GROUP && term->args != NULL && term->args->tail == NULL) {
+    const Term *inner = bare_term(term->args->head);
+    if (inner->tag == TERM_VAR) return inner;
+  }
+  const Terms *args = bare_terms(term->args);
+  if (args == term->args) return term;
+  Term *copy = arena_alloc(sizeof *copy);
+  *copy = *term;
+  copy->args = args;
+  return copy;
+}
+
 /* The keyword of a form. A tag without a keyword gives the end text. */
 static Text term_keyword(TermTag tag) {
   switch (tag) {
