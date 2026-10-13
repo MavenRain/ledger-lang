@@ -385,9 +385,10 @@ int parse_type(Fuel fuel, Nat atom, const Bindings *environment, Tokens tokens, 
                Failure *failure);
 int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params *done, Tokens tokens,
                   const LType **type, Tokens *rest, Failure *failure);
-/* program.c: the tokens after `Sigma`. done holds the earlier parameters. */
-int sigma_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **type,
-               Tokens *rest, Failure *failure);
+/* program.c: the tokens after `Sigma`. done holds the earlier parameters. An
+   Eq side takes the work budget, and left gets the rest. */
+int sigma_type(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+               const LType **type, Tokens *rest, Nat *left, Failure *failure);
 /* parser.c: the parameters of the body in check, for a type in a term
    position (D6 part B, the motive of transport). */
 const Params *body_params(const Bindings *environment);
@@ -598,19 +599,24 @@ int param_level(Text name, Nat count, const Bindings *environment, Nat *found, N
 int body_level(Text name, const Bindings *environment, Nat *found, Nat *index);
 Nat proof_in_scope(Text name, const LType *ty, const Bindings *environment);
 int printed_side(Fuel fuel, const Value *value, Val *side);
-int argument_text(Fuel fuel, const Bindings *environment, const LType *a, const Value *value, Tokens tokens, Val *side);
+int marker_for(Text name, const Params *done, Nat *found, Nat *index);
+int put_param_markers(const Params *done, const Bindings *environment, const struct Term *term,
+                      const Bindings **scope, const struct Term **marked);
+int argument_text(Fuel fuel, const Bindings *environment, const LType *a, const Value *value, const struct Term *term,
+                  Val *side);
 int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Params *params, const Values *values,
-                  Tokens tokens, Val *side);
+                  const struct Terms *args, Val *side);
 int argument_token(Nat index, const Params *params, Tokens tokens, Token *token);
-int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
-                   const struct Term *node, const struct Term **renamed_node);
+int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                   const struct Terms *args, Tokens tokens, const struct Term *node,
+                   const struct Term **renamed_node);
 Nat kept_side(Val side);
-int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, Tokens tokens,
-                     Val side, Val *result);
+int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+                     const struct Terms *args, Tokens tokens, Val side, Val *result);
 int instantiate_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                       Tokens tokens, const LType *result, const LType **instantiated);
+                       const struct Terms *args, Tokens tokens, const LType *result, const LType **instantiated);
 const Params *instantiate_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                                 Tokens tokens, const Params *remaining);
+                                 const struct Terms *args, Tokens tokens, const Params *remaining);
 const Bindings *argument_bindings(Nat index, const Params *params, const Values *values,
                                   const Bindings *environment);
 

@@ -1765,13 +1765,14 @@ static void rename_row(const Bindings *environment, const char *callee, const ch
   const Values *values;
   Tokens rest;
   Nat left;
+  const Terms *terms = NULL;
   Failure failure;
   Tokens tokens = lexed(args);
-  assert(parse_arguments(1000, 1000, 1, param_types(item->params), body, tokens, &values, &rest, &left, NULL,
+  assert(parse_arguments(1000, 1000, 1, param_types(item->params), body, tokens, &values, &rest, &left, &terms,
                          &failure));
   assert(rest.size == 0);
   Val result;
-  assert(instantiate_side(1000, body, item->params, values, tokens, lhs_of(environment, callee), &result) == answer);
+  assert(instantiate_side(1000, body, item->params, values, terms, tokens, lhs_of(environment, callee), &result) == answer);
   if (answer == 0) return;
   assert(result.kind == VAL_TERM && result.node != NULL);
   assert(marker_vars_at(result.node) == markers);
@@ -1870,6 +1871,19 @@ static const Values *call_values(const Bindings *environment, const Params *para
   return values;
 }
 
+/* The checked argument terms of call_values. */
+static const Terms *call_args(const Bindings *environment, const Params *params, const char *args) {
+  const Values *values;
+  Tokens rest;
+  Nat left;
+  const Terms *terms = NULL;
+  Failure failure;
+  assert(parse_arguments(1000, 1000, 1, param_types(params), environment, lexed(args), &values, &rest, &left, &terms,
+                         &failure));
+  assert(rest.size == 0);
+  return terms;
+}
+
 /* The closed side of side in bound: close_body_side in a body scope, else
    close_side. */
 static Val closed_in(const Bindings *bound, const LType *a, Val side) {
@@ -1926,7 +1940,8 @@ static void body_close_row(const Bindings *environment, const Bindings *body, co
   Val rhs;
   Val side;
   assert(sides_of(p->type, &a, &lhs, &rhs));
-  assert(instantiate_side(1000, body, p->params, call_values(body, p->params, args), lexed(args), lhs, &side) == 1);
+  assert(instantiate_side(1000, body, p->params, call_values(body, p->params, args), call_args(body, p->params, args),
+                          lexed(args), lhs, &side) == 1);
   assert(kept_side(side) == 0);
   close_row(body, a, side, expected);
 }
@@ -1992,7 +2007,8 @@ static void test_d4_close(void) {
 static Val renamed_in(const Bindings *environment, const Bindings *body, const char *callee, const char *args) {
   const Binding *item = fun_named(environment, callee);
   Val side;
-  assert(instantiate_side(1000, body, item->params, call_values(body, item->params, args), lexed(args),
+  assert(instantiate_side(1000, body, item->params, call_values(body, item->params, args),
+                          call_args(body, item->params, args), lexed(args),
                           lhs_of(environment, callee), &side) == 1);
   assert(side.kind == VAL_TERM && side.node != NULL);
   return side;
@@ -2140,7 +2156,8 @@ static void test_d4_lifts(void) {
       "def g : (m : Nat) -> Eq Nat (identity m) (identity m) := fun (m : Nat) => polyUse Nat (identity m) refl\n",
       "def g : (m : Nat) -> Eq (Option Nat) (some m) (some m) := "
       "fun (m : Nat) => polyUse (Option Nat) (some m) refl\n"
-      "def resultProof : Eq (Option Nat) (some 3) (some 3) := g 3\n"};
+      "def resultProof : Eq (Option Nat) (some 3) (some 3) := g 3\n",
+      "def g : (m : Nat) -> Eq (Prod Nat Nat) (pair m 1) (pair m 1) := fun (m : Nat) => pf (m) 1\n"};
   for (size_t at = 0; at < sizeof accepted / sizeof *accepted; at++) {
     char source[2048];
     int length = snprintf(source, sizeof source, "%s%s", head, accepted[at]);
@@ -2159,7 +2176,6 @@ static void test_d4_lifts(void) {
   } refused[] = {
       {"def g : (m : Nat) -> Eq Nat (natAdd m 1) (natAdd m 1) := fun (m : Nat) => e (natAdd 1 m)\n", &eTerm},
       {"def bad : (n : Nat) -> Eq Nat (natAdd 1 n) (natAdd n 1) := fun (n : Nat) => refl\n", &eRefl},
-      {"def g : (m : Nat) -> Eq (Prod Nat Nat) (pair m 1) (pair m 1) := fun (m : Nat) => pf (m) 1\n", &eTerm},
       {"def g : (m : Nat) -> Eq Nat (identity m) (identity m) := fun (m : Nat) => polyProof Text (identity m)\n", &eTerm},
       {"def g : (m : Nat) -> Eq Nat (identity m) (identity m) := fun (m : Nat) => polyUse Nat (identity m) (e 1)\n", &eTerm}};
   for (size_t at = 0; at < sizeof refused / sizeof *refused; at++) {
@@ -2757,11 +2773,13 @@ static void test_d6_transport(void) {
   Tokens tokens, rest;
   const LType *motive = NULL;
   assert(lex(512, text("(z : Nat) (Eq Nat z 1) pf q"), &tokens, &failure));
-  assert(sigma_type(512, environment, NULL, tokens, &motive, &rest, &failure));
+  Nat motive_left;
+  assert(sigma_type(512, 1, environment, NULL, tokens, &motive, &rest, &motive_left, &failure));
   assert(motive->tag == TY_SIGMA && same_text(motive->name, text("z")) && motive->level == 0);
   assert(motive->left->tag == TY_NAT && motive->right->tag == TY_EQ && rest.size == 3);
   assert(motive->right->lhs.kind == VAL_VAR && motive->right->lhs.index == 0);
-  assert(sigma_type(512, environment, fun_named(environment, "g")->params, tokens, &motive, &rest, &failure));
+  assert(sigma_type(512, 1, environment, fun_named(environment, "g")->params, tokens, &motive, &rest, &motive_left,
+                    &failure));
   assert(motive->tag == TY_SIGMA && motive->level == 3);
   assert(motive->right->lhs.kind == VAL_VAR && motive->right->lhs.index == 3);
 
@@ -3044,6 +3062,146 @@ static void test_d7_type_names(void) {
 #undef D7_F
 #undef D7_G
 
+/* D8 part B: the side of the argument args in the body of h (the body scope
+   of program.c parse_function), and the left side of someA instantiated with
+   args. */
+typedef struct {
+  Val argument;
+  Val side;
+} SideRow;
+
+static SideRow h_side_row(const Bindings *environment, const char *args) {
+  const Binding *item = fun_named(environment, "someA");
+  Bindings *body = arena_alloc(sizeof *body);
+  *body = (Bindings){.head = body_marker(1), .tail = bind_params(fun_named(environment, "h")->params, NULL, environment)};
+  const Values *values;
+  Tokens rest;
+  Nat left;
+  const Terms *terms = NULL;
+  Failure failure;
+  Tokens tokens = lexed(args);
+  assert(parse_arguments(1000, 1000, 1, param_types(item->params), body, tokens, &values, &rest, &left, &terms,
+                         &failure));
+  assert(rest.size == 0);
+  SideRow row;
+  assert(argument_side(1000, 0, body, item->params, values, terms, &row.argument));
+  assert(instantiate_side(1000, body, item->params, values, terms, tokens, lhs_of(environment, "someA"), &row.side));
+  return row;
+}
+
+/* D8 part B (T3, T4 and P4): sides and witnesses come from checked Terms,
+   and a side gets the remaining work budget. */
+static void test_d8_sides(void) {
+  const char *c1 = "def someA : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl\n"
+                   "def p : Eq (Option Nat) (some 2) (some 2) := someA 2\n"
+                   "def h : (m : Nat) -> Eq (Option Nat) (some m) (some m) := fun (m : Nat) => someA (m)\n"
+                   "def q : Eq (Option Nat) (some 3) (some 3) := h 3\n";
+  const char *control = "def someA : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl\n"
+                        "def h : (m : Nat) -> Eq (Option Nat) (some m) (some m) := fun (m : Nat) => someA m\n"
+                        "def q : Eq (Option Nat) (some 3) (some 3) := h 3\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(c1), &environment, &failure));
+
+  /* T3: the computed side of someA is a Term with the marker of n, and both
+     sides are the same Val. */
+  const LType *a;
+  Val lhs;
+  Val rhs;
+  assert(sides_of(fun_named(environment, "someA")->type, &a, &lhs, &rhs));
+  assert(lhs.kind == VAL_TERM && lhs.node != NULL && marker_vars_at(lhs.node) == 1 && kept_side(lhs) == 1);
+  assert(same_val(lhs, rhs));
+
+  /* T3 (design item 7, probe c1): in the body of h, the side of `(m)` is the
+     side of `m` (VAL_VAR), and someA (m) gives the same side as someA m. */
+  SideRow grouped = h_side_row(environment, "(m)");
+  SideRow plain = h_side_row(environment, "m");
+  assert(grouped.argument.kind == VAL_VAR && plain.argument.kind == VAL_VAR);
+  assert(same_val(grouped.argument, plain.argument));
+  assert(grouped.side.kind == VAL_TERM && marker_vars_at(grouped.side.node) == 1);
+  assert(same_val(grouped.side, plain.side));
+
+  /* c1 and its control `someA m` check and write no instance. */
+  Text output;
+  assert(compile_program(text(c1), &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[]}")));
+  assert(compile_program(text(control), &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[]}")));
+
+  /* T4 (design item 8, probe d2): the witness side of `pack n refl` and of
+     `witness t` comes from the checked Term of the argument. payload u does
+     not have the witness of t. */
+  assert(compile_program(text("def s : Sigma (x : Nat) (Eq Nat x x) := pack 5 refl\n"
+                              "def pw : (t : Sigma (x : Nat) (Eq Nat x x)) -> Eq Nat (witness t) (witness t) := "
+                              "fun (t : Sigma (x : Nat) (Eq Nat x x)) => payload t\n"
+                              "def e : Eq Nat 5 5 := pw s\n"
+                              "def mk : (n : Nat) -> Sigma (x : Nat) (Eq Nat x x) := fun (n : Nat) => pack n refl\n"
+                              "def mkg : (n : Nat) -> Sigma (x : Nat) (Eq Nat x x) := fun (n : Nat) => pack (n) refl\n"),
+                         &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[{\"name\":\"s\",\"type\":\"Sigma (x : Nat) "
+                                "(Eq (Nat) (x) (x))\",\"value\":{\"witness\":5,\"payload\":null}}]}")));
+  sigma_refused("def pw : (t : Sigma (x : Nat) (Eq Nat x x)) -> (u : Sigma (x : Nat) (Eq Nat x x)) -> "
+                "Eq Nat (witness t) (witness t) := "
+                "fun (t : Sigma (x : Nat) (Eq Nat x x)) (u : Sigma (x : Nat) (Eq Nat x x)) => payload u\n",
+                "payload", eTerm);
+
+  /* P4 (probes f2 and f3): a computed side with a remaining budget above 1
+     evaluates the application id 2. f2 and f3 check with compile_program
+     and write no instance. */
+  const char *f2 = "def id : (x : Nat) -> Nat := fun (x : Nat) => x\n"
+                   "def k : (n : Nat) -> Eq Nat (id 2) 2 := fun (n : Nat) => refl\n";
+  const char *f3 = "def id : (x : Nat) -> Nat := fun (x : Nat) => x\n"
+                   "def q : Eq Nat 2 2 := refl\n"
+                   "def k : (n : Nat) -> Eq Nat (id 2) 2 := fun (n : Nat) => q\n";
+  const Bindings *budget_scope = NULL;
+  assert(check_definitions(text(f2), &budget_scope, &failure));
+  assert(sides_of(fun_named(budget_scope, "k")->type, &a, &lhs, &rhs));
+  assert(lhs.kind == VAL_CLOSED && same_val(lhs, rhs));
+  assert(compile_program(text(f2), &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[]}")));
+  assert(compile_program(text(f3), &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[]}")));
+}
+
+static void test_d8_grouped_sides(void) {
+  const char *head =
+      "def someA : (n : Nat) -> Eq (Option Nat) (some n) (some n) := fun (n : Nat) => refl\n"
+      "def pf : (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := "
+      "fun (n : Nat) (m : Nat) => refl\n";
+  const char *accepted[] = {
+      "def g : (m : Nat) -> Eq (Option Nat) (some (m)) (some (m)) := fun (m : Nat) => someA (m)\n",
+      "def g : (m : Nat) -> Eq (Option Nat) (some ((m))) (some ((m))) := fun (m : Nat) => someA ((m))\n",
+      "def g : (m : Nat) -> Eq (Prod Nat Nat) (pair (m) 1) (pair (m) 1) := fun (m : Nat) => pf (m) 1\n",
+      "def g : (m : Nat) -> Eq (Prod Nat Nat) (pair ((m)) 1) (pair ((m)) 1) := fun (m : Nat) => pf ((m)) 1\n",
+      "def g : (m : Nat) -> (p : Eq Nat (m) (m)) -> Sigma (x : Nat) (Eq Nat x x) := "
+      "fun (m : Nat) (p : Eq Nat (m) (m)) => pack (m) p\n",
+      "def g : (m : Nat) -> (p : Eq Nat ((m)) ((m))) -> Sigma (x : Nat) (Eq Nat x x) := "
+      "fun (m : Nat) (p : Eq Nat ((m)) ((m))) => pack ((m)) p\n"};
+  for (size_t at = 0; at < sizeof accepted / sizeof *accepted; at++) {
+    char source[2048];
+    int length = snprintf(source, sizeof source, "%s%s", head, accepted[at]);
+    assert(length > 0 && (size_t)length < sizeof source);
+    Text output;
+    Failure failure = {0};
+    assert(compile_program(text(source), &output, &failure));
+    assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[]}")));
+  }
+  const char *refused[] = {
+      "def g : (m : Nat) -> (n : Nat) -> Eq (Option Nat) (some (m)) (some (m)) := "
+      "fun (m : Nat) (n : Nat) => someA (n)\n",
+      "def g : (m : Nat) -> (n : Nat) -> (p : Eq Nat (n) (n)) -> Sigma (x : Nat) (Eq Nat x x) := "
+      "fun (m : Nat) (n : Nat) (p : Eq Nat (n) (n)) => pack (m) p\n"};
+  for (size_t at = 0; at < sizeof refused / sizeof *refused; at++) {
+    char source[2048];
+    int length = snprintf(source, sizeof source, "%s%s", head, refused[at]);
+    assert(length > 0 && (size_t)length < sizeof source);
+    Text output;
+    Failure failure = {0};
+    assert(!compile_program(text(source), &output, &failure));
+    assert(same_text(failure.message, eTerm));
+  }
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3082,6 +3240,8 @@ int main(void) {
   test_d7_query_universe();
   test_d7_read_path();
   test_d7_type_names();
+  test_d8_sides();
+  test_d8_grouped_sides();
   puts("C module tests passed");
   return 0;
 }

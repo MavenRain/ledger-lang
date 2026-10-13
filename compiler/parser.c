@@ -213,7 +213,8 @@ int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params
   if (same_text(name, sList) == 1) return former_one(more, TY_LIST, environment, done, tail, type, rest, failure);
   if (same_text(name, sProd) == 1) return former_two(more, TY_PROD, environment, done, tail, type, rest, failure);
   if (same_text(name, sSum) == 1) return former_two(more, TY_SUM, environment, done, tail, type, rest, failure);
-  if (same_text(name, sSigma) == 1) return sigma_type(more, environment, done, tail, type, rest, failure);
+  Nat used;
+  if (same_text(name, sSigma) == 1) return sigma_type(more, 1, environment, done, tail, type, rest, &used, failure);
   if (same_text(name, sRef()) == 1)
     return parse_kind_index(more, environment, tail, &kind, &after, failure)
       && parsed_type(make_type(TY_REF, kind, 0, NULL, NULL), after, type, rest);

@@ -343,7 +343,7 @@ static const Bindings *hide_params(const Params *done, const Bindings *environme
 /* The position of the nearest parameter with this name: Option (Option Nat)
    as in param_level. found 0: a type parameter or a function parameter,
    which a computed side cannot name. */
-static int marker_for(Text name, const Params *done, Nat *found, Nat *index) {
+int marker_for(Text name, const Params *done, Nat *found, Nat *index) {
   for (const Params *cell = done; cell != NULL; cell = cell->tail) {
     if (same_text(name, cell->head.name) == 1) {
       *found = !(is_type_param(cell->head) == 1 || is_arrow_type(cell->head.type) == 1);
@@ -382,26 +382,20 @@ static Tokens atom_of(Nat depth, Tokens tokens) {
   return (Tokens){tokens.items, count};
 }
 
-/* A computed side renames each value parameter to its marker. It can name
-   an earlier definition: at the head of an application (D4 part C, Q-D4-7
-   lift 2) and as a bare name (D4 part D, lift 3). It cannot hold an inline
-   function. */
-static int mark_side(const Bindings *environment, const Params *done, Tokens tokens, Tokens *marked) {
-  Token *items = arena_alloc(sizeof *items * (tokens.size + 1));
+/* A computed side can name an earlier definition: at the head of an
+   application (D4 part C, Q-D4-7 lift 2) and as a bare name (D4 part D, lift
+   3). It cannot name a type or function parameter, and it cannot hold an
+   inline function. D8 part B (delta D-B5): this check stays on the tokens
+   before the parse, so the refusal keeps its message and position. */
+static Nat side_refused(const Params *done, Tokens tokens) {
   for (Nat at = 0; at < tokens.size; at++) {
     Token head = tokens.items[at];
     Nat found;
     Nat level;
-    if (head.kind == TOKEN_IDENTIFIER && marker_for(head.text, done, &found, &level)) {
-      if (!found) return 0;
-      head.text = marker_name(level);
-    } else if (head.kind == TOKEN_IDENTIFIER && same_text(head.text, sfun) == 1) {
-      return 0;
-    }
-    items[at] = head;
+    if (head.kind == TOKEN_IDENTIFIER && marker_for(head.text, done, &found, &level) && !found) return 1;
+    if (head.kind == TOKEN_IDENTIFIER && same_text(head.text, sfun) == 1) return 1;
   }
-  *marked = (Tokens){items, tokens.size};
-  return 1;
+  return 0;
 }
 
 /* The definition check binds each marker to null with the type of its
@@ -415,27 +409,30 @@ static const Bindings *marker_bindings(const Params *done, const Bindings *envir
 
 /* A computed side (step D4a) is an atom that names value parameters, such
    as `(some n)`. A function type with type parameters cannot have one. The
-   side keeps only the term, with each marker as a variable node: the marked
-   tokens are the parse input. A side with no term is refused. */
-static int computed_side(Fuel fuel, const LType *a, const Bindings *environment, const Params *done, Tokens tokens,
-                         Val *side, Tokens *rest, Nat *left, Failure *failure) {
-  Tokens term;
-  if (!mark_side(environment, done, atom_of(0, tokens), &term)) return fail_at(failure, first_position(tokens), eTerm);
+   side keeps only the term, with each marker as a variable node. D8 part B
+   (design item 7): the atom is parsed once with the parameters in scope
+   (parse_signature binds them), and put_param_markers puts the markers in
+   the checked term. A side with no term is refused. */
+static int computed_side(Fuel fuel, Nat budget, const LType *a, const Bindings *environment, const Params *done,
+                         Tokens tokens, Val *side, Tokens *rest, Nat *left, Failure *failure) {
+  if (side_refused(done, atom_of(0, tokens)) == 1) return fail_at(failure, first_position(tokens), eTerm);
   if (has_type_param(done) == 1) return fail_at(failure, first_position(tokens), eTerm);
   const Value *value;
   const Term *node = NULL;
   Tokens after;
   Nat remaining;
-  const Bindings *scope = binding_cons(check_marker(), marker_bindings(done, environment));
-  if (!parse_term(fuel, 1, 1, a, scope, term, &value,
+  if (!parse_term(fuel, budget, 1, a, binding_cons(check_marker(), environment), atom_of(0, tokens), &value,
                   &after, &remaining, &node, failure))
     return 0;
-  if (node == NULL) return fail_at(failure, first_position(tokens), eTerm);
-  const Term *marked = marker_vars(node);
+  const Bindings *unused = environment;
+  const Term *marked;
+  if (node == NULL || !put_param_markers(done, environment, node, &unused, &marked))
+    return fail_at(failure, first_position(tokens), eTerm);
+  const Bindings *scope = binding_cons(check_marker(), marker_bindings(done, environment));
   /* D4 part C: a side with a marker takes its normal form (design item 5).
      close_side closes a side with no marker later, as before. */
   if (term_marker_bound(marked) > 0 && !side_normal_at(fuel, scope, a, marked, &marked, failure)) return 0;
-  *side = term_side(marked);
+  *side = marked->tag == TERM_VAR ? var_side(marked->index) : term_side(marked);
   *rest = skip_atom(0, tokens);
   *left = remaining;
   return 1;
@@ -444,17 +441,18 @@ static int computed_side(Fuel fuel, const LType *a, const Bindings *environment,
 /* A side of an equality in a function type is the name of a value parameter
    of type A, an atom that names no value parameter and applies no function,
    or a computed side. A closed side keeps its canonical JSON text. */
-static int eq_side(Fuel fuel, const LType *a, const Bindings *environment, const Params *done, Tokens tokens,
-                   Val *side, Tokens *rest, Nat *left, Failure *failure) {
+static int eq_side(Fuel fuel, Nat budget, const LType *a, const Bindings *environment, const Params *done,
+                   Tokens tokens, Val *side, Tokens *rest, Nat *left, Failure *failure) {
   if (neutral_side(a, done, tokens, side)) {
     *rest = drop_token(tokens);
-    *left = 1;
+    *left = budget;
     return 1;
   }
   if (names_param(done, atom_of(0, tokens)) == 1)
-    return computed_side(fuel, a, environment, done, tokens, side, rest, left, failure);
+    return computed_side(fuel, budget, a, environment, done, tokens, side, rest, left, failure);
   const Value *value;
-  if (!parse_term(fuel, 1, 1, a, hide_params(done, environment), tokens, &value, rest, left, NULL, failure)) return 0;
+  if (!parse_term(fuel, budget, 1, a, hide_params(done, environment), tokens, &value, rest, left, NULL, failure))
+    return 0;
   Failure printing;
   Text text;
   if (!printed_text(fuel, value, &text, &printing)) return fail_at(failure, first_position(tokens), printing.message);
@@ -464,9 +462,10 @@ static int eq_side(Fuel fuel, const LType *a, const Bindings *environment, const
 
 /* `Eq A x y` as the result of a function type. A is a data type. The
    definition checks the body with neutral sides, so `refl` needs the same
-   parameter or the same closed value on both sides. */
-static int eq_result(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **type,
-                     Tokens *rest, Failure *failure) {
+   parameter or the same closed value on both sides. D8 part B: the first side
+   takes the work budget, and the second side takes the rest. */
+static int eq_result(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                     const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   const LType *a;
   Tokens after_type;
   if (!parse_type_in(fuel, 1, environment, done, tokens, &a, &after_type, failure)) return 0;
@@ -475,8 +474,8 @@ static int eq_result(Fuel fuel, const Bindings *environment, const Params *done,
   Val rhs;
   Tokens after_left;
   Nat spent;
-  if (!eq_side(fuel, a, environment, done, after_type, &lhs, &after_left, &spent, failure)) return 0;
-  if (!eq_side(fuel, a, environment, done, after_left, &rhs, rest, &spent, failure)) return 0;
+  if (!eq_side(fuel, budget, a, environment, done, after_type, &lhs, &after_left, &spent, failure)) return 0;
+  if (!eq_side(fuel, spent, a, environment, done, after_left, &rhs, rest, left, failure)) return 0;
   *type = eq_type(a, lhs, rhs);
   return 1;
 }
@@ -495,22 +494,23 @@ static int sigma_domain(Fuel fuel, const Bindings *environment, const Params *do
 
 /* B of a Sigma type: a data type, `(Eq A y z)` or a Sigma type. done holds
    the binder, so an Eq side can name it. */
-static int sigma_body(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **b,
-                      Tokens *rest, Failure *failure) {
+static int sigma_body(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                      const LType **b, Tokens *rest, Nat *left, Failure *failure) {
   Tokens inside;
   if (mark_of(tokens) == 40 && is_word(sEq, drop_token(tokens)) == 1)
-    return eq_result(fuel, environment, done, drop_token(drop_token(tokens)), b, &inside, failure)
+    return eq_result(fuel, budget, environment, done, drop_token(drop_token(tokens)), b, &inside, left, failure)
       && close_parsed(inside, rest, failure);
   if (!parse_type_in(fuel, 1, environment, done, tokens, b, rest, failure)) return 0;
   if (type_level(*b) != 0) return fail_at(failure, first_position(tokens), eType);
+  *left = budget;
   return 1;
 }
 
 /* `Sigma (x : A) B` and `Sigma A B` (D5 design items 2 and 3). A is a data
    type. The binder takes the next marker after the earlier parameters, also
    in the short form. */
-int sigma_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, const LType **type,
-               Tokens *rest, Failure *failure) {
+int sigma_type(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+               const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   Fuel more = fuel - 1;
   Text name;
@@ -522,7 +522,7 @@ int sigma_type(Fuel fuel, const Bindings *environment, const Params *done, Token
   const Bindings *scope =
     starts_param(tokens) == 1 ? bind_params(param_cons((Param){name, a}, NULL), NULL, environment) : environment;
   const LType *b;
-  if (!sigma_body(more, scope, inner, after_a, &b, rest, failure)) return 0;
+  if (!sigma_body(more, budget, scope, inner, after_a, &b, rest, left, failure)) return 0;
   *type = make_type((LType){.tag = TY_SIGMA, .name = name, .level = param_count(done), .left = a, .right = b});
   return 1;
 }
@@ -546,20 +546,21 @@ static Nat has_query_type(Signature found) {
 /* The type of a parameter. A proof parameter `(e : Eq A x y)` can name
    earlier value parameters of type A as its sides (step D2b), also inside a
    computed side (step D4b). */
-static int param_declared(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens,
-                          const LType **type, Tokens *rest, Failure *failure) {
-  if (is_word(sEq, tokens) == 1) return eq_result(fuel, environment, done, drop_token(tokens), type, rest, failure);
-  return parameter_type(fuel, environment, done, tokens, type, rest, failure);
+static int param_declared(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                          const LType **type, Tokens *rest, Nat *left, Failure *failure) {
+  if (is_word(sEq, tokens) == 1)
+    return eq_result(fuel, budget, environment, done, drop_token(tokens), type, rest, left, failure);
+  return lift_parsed(budget, parameter_type(fuel, environment, done, tokens, type, rest, failure), left);
 }
 
-static int parse_param(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, Param *item,
-                       Tokens *rest, Failure *failure) {
+static int parse_param(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                       Param *item, Tokens *rest, Nat *left, Failure *failure) {
   Text name;
   if (!name_of(drop_token(tokens), &name)) return fail_at(failure, first_position(tokens), eFun);
   Tokens declared = drop_token(drop_token(drop_token(tokens)));
   const LType *type;
   Tokens after;
-  if (!param_declared(fuel, environment, done, declared, &type, &after, failure)) return 0;
+  if (!param_declared(fuel, budget, environment, done, declared, &type, &after, left, failure)) return 0;
   /* A Query type `Query T` is a parameter type (step D7a). */
   if (!(is_arrow_type(type) == 1 || type_level(type) == 0 || same_type(type, &universe_zero) == 1
         || is_query_type(type) == 1))
@@ -575,14 +576,15 @@ static int parse_param(Fuel fuel, const Bindings *environment, const Params *don
    B can refer to it. Its name is not a reserved name. Parameters hide outer
    names in subsequent type annotations. The name of a function type can end
    the chain. Its parameters follow the earlier ones. */
-static int parse_signature(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens,
-                           Signature *found, Tokens *rest, Failure *failure) {
+static int parse_signature(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                           Signature *found, Tokens *rest, Nat *left, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   Fuel more = fuel - 1;
   if (starts_param(tokens) != 1) {
     if (mark_of(tokens) == 40) {
       Tokens inside;
-      if (!parse_signature(more, environment, done, drop_token(tokens), found, &inside, failure)) return 0;
+      if (!parse_signature(more, budget, environment, done, drop_token(tokens), found, &inside, left, failure))
+        return 0;
       return close_parsed(inside, rest, failure);
     }
     Signature named;
@@ -594,10 +596,11 @@ static int parse_signature(Fuel fuel, const Bindings *environment, const Params 
       *found = (Signature){reverse_params_onto(shift_eq_params(offset, named.params), done),
                            shift_type_markers(offset, named.result)};
       *rest = drop_token(tokens);
+      *left = budget;
       return 1;
     }
     if (is_word(sEq, tokens) == 1) {
-      if (!eq_result(more, environment, done, drop_token(tokens), &result, rest, failure)) return 0;
+      if (!eq_result(more, budget, environment, done, drop_token(tokens), &result, rest, left, failure)) return 0;
       *found = (Signature){reverse_params_onto(NULL, done), result};
       return 1;
     }
@@ -605,18 +608,20 @@ static int parse_signature(Fuel fuel, const Bindings *environment, const Params 
     /* The result can also be a Query type (step D7a). */
     if (type_level(result) != 0 && is_query_type(result) != 1) return fail_at(failure, first_position(tokens), eData);
     *found = (Signature){reverse_params_onto(NULL, done), result};
+    *left = budget;
     return 1;
   }
   Param item;
   Tokens after;
-  if (!parse_param(more, environment, done, tokens, &item, &after, failure)) return 0;
+  Nat spent;
+  if (!parse_param(more, budget, environment, done, tokens, &item, &after, &spent, failure)) return 0;
   if (is_type_param(item) == 1 && reserved_param(item) == 1)
     return fail_at(failure, first_position(drop_token(tokens)), eReserved);
   if (is_type_param(item) == 1 && has_value_param(done) == 1)
     return fail_at(failure, first_position(drop_token(tokens)), eTypeParam);
   if (mark_of(after) != 62) return fail_at(failure, first_position(after), eDef);
-  return parse_signature(more, bind_params(param_cons(item, NULL), NULL, environment), param_cons(item, done),
-                         drop_token(after), found, rest, failure);
+  return parse_signature(more, spent, bind_params(param_cons(item, NULL), NULL, environment), param_cons(item, done),
+                         drop_token(after), found, rest, left, failure);
 }
 
 static Nat param_named(Text name, const Params *params) {
@@ -642,55 +647,61 @@ static const Bindings *param_renames(const Params *declared, const Params *binde
    binder types are the declared ones, with the binder names of the earlier
    type parameters. The result is the body's tokens. Earlier binders are in
    scope when checking later annotations. */
-static int parse_binders(Fuel fuel, const Bindings *environment, const Bindings *renames, const Params *declared,
-                         const Params *done, Tokens tokens, const Params **binders, Tokens *rest, Failure *failure) {
+static int parse_binders(Fuel fuel, Nat budget, const Bindings *environment, const Bindings *renames,
+                         const Params *declared, const Params *done, Tokens tokens, const Params **binders,
+                         Tokens *rest, Nat *left, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   Fuel more = fuel - 1;
   if (declared == NULL) {
     if (mark_of(tokens) != 63) return fail_at(failure, first_position(tokens), eFun);
     *binders = reverse_params_onto(NULL, done);
     *rest = drop_token(tokens);
+    *left = budget;
     return 1;
   }
   if (mark_of(tokens) == 63 && is_word(sfun, drop_token(tokens)) == 1) {
     Tokens next = drop_token(drop_token(tokens));
     if (done == NULL) return fail_at(failure, first_position(tokens), eFun);
     if (starts_param(next) != 1) return fail_at(failure, first_position(next), eFun);
-    return parse_binders(more, environment, renames, declared, done, next, binders, rest, failure);
+    return parse_binders(more, budget, environment, renames, declared, done, next, binders, rest, left, failure);
   }
   if (starts_param(tokens) != 1) return fail_at(failure, first_position(tokens), eFun);
   Param item;
   Tokens after;
-  if (!parse_param(more, environment, done, tokens, &item, &after, failure)) return 0;
+  Nat spent;
+  if (!parse_param(more, budget, environment, done, tokens, &item, &after, &spent, failure)) return 0;
   if (reserved_name(item.name) == 1) return fail_at(failure, first_position(drop_token(tokens)), eReserved);
   if (param_named(item.name, done) == 1) return fail_at(failure, first_position(drop_token(tokens)), eDuplicate);
   if (same_type(subst_type(renames, declared->head.type), item.type) != 1)
     return fail_at(failure, first_position(tokens), eFun);
-  return parse_binders(more, bind_params(param_cons(item, NULL), NULL, environment),
+  return parse_binders(more, spent, bind_params(param_cons(item, NULL), NULL, environment),
                        rename_param(declared->head, item.name, renames), declared->tail, param_cons(item, done), after,
-                       binders, rest, failure);
+                       binders, rest, left, failure);
 }
 
-/* A function definition checks its body once. It is not an instance. */
+/* A function definition checks its body once. It is not an instance. The Eq
+   sides of its signature take the work budget, and left gets the rest. The
+   binders check the same types again, thus they do not take more budget. */
 static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *environment, Tokens tokens, Binding *item,
-                          Tokens *rest, Failure *failure) {
+                          Tokens *rest, Nat *left, Failure *failure) {
   Signature found;
   Tokens after_type;
-  if (!parse_signature(fuel, environment, NULL, tokens, &found, &after_type, failure)) return 0;
+  if (!parse_signature(fuel, budget, environment, NULL, tokens, &found, &after_type, left, failure)) return 0;
   Tokens after_assign;
   if (!expect_mark(61, after_type, &after_assign, failure)) return 0;
   if (is_word(sfun, after_assign) != 1) return fail_at(failure, first_position(after_assign), eFun);
   const Params *binders;
   Tokens body;
-  if (!parse_binders(fuel, environment, NULL, found.params, NULL, drop_token(after_assign), &binders, &body, failure))
+  Nat used;
+  if (!parse_binders(fuel, budget, environment, NULL, found.params, NULL, drop_token(after_assign), &binders, &body,
+                     &used, failure))
     return 0;
   const LType *result = subst_type(param_renames(found.params, binders, NULL), found.result);
   const Value *value;
-  Nat left;
   const Term *term = NULL;
   if (!parse_term(fuel, budget, 0, result,
                   binding_cons(body_marker(param_count(binders)), bind_params(binders, NULL, environment)), body,
-                  &value, rest, &left, &term, failure))
+                  &value, rest, &used, &term, failure))
     return 0;
   *item = (Binding){
       .kind = BIND_FUN,
@@ -713,8 +724,7 @@ static int parse_definition(Fuel fuel, Nat budget, const Bindings *environment, 
   Tokens after_colon;
   if (!expect_mark(58, drop_token(tokens), &after_colon, failure)) return 0;
   if (starts_arrow(fuel, environment, after_colon) == 1)
-    return lift_parsed(budget, parse_function(fuel, budget, name, environment, after_colon, item, rest, failure),
-                       left);
+    return parse_function(fuel, budget, name, environment, after_colon, item, rest, left, failure);
   const LType *type;
   Tokens after_type;
   Nat spent;
@@ -729,11 +739,10 @@ static int parse_definition(Fuel fuel, Nat budget, const Bindings *environment, 
   }
   if (starts_arrow(fuel, environment, after_assign) == 1) {
     Signature found;
-    if (!parse_signature(fuel, environment, NULL, after_assign, &found, rest, failure)) return 0;
+    if (!parse_signature(fuel, spent, environment, NULL, after_assign, &found, rest, left, failure)) return 0;
     if (type_level(type) != 1 + (has_type_param(found.params) == 1 || has_query_type(found) == 1))
       return fail_at(failure, first_position(after_assign), eUniverse);
     *item = (Binding){.kind = BIND_ARROW, .name = name, .type = found.result, .params = found.params};
-    *left = spent;
     return 1;
   }
   const LType *inner;
