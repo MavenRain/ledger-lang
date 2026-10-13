@@ -256,7 +256,6 @@ int ops_constructor_plan(Text family, Text name, Plan *plan);
 int ops_query_plan(Text name, Plan *plan);
 int ops_query_answer(Text name, const LType **type);
 int ops_type(Text name, const LType **type);
-Nat ops_later_type(Text name);
 Nat ops_reserved_name(Text name);
 
 /* Texts of the schema and operation modules. literals.h keeps the other
@@ -273,8 +272,8 @@ Text kRefKind(void);
 Text kRefHash(void);
 Text kSchemaTag(void);
 Text eIndex(void);
-Text eLaterType(void);
 Text opsTextWritePath(void);
+Text opsTextReadPath(void);
 
 /* A parameter of a function type. A list of parameters; NULL is the end. */
 typedef struct {

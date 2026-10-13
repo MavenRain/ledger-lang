@@ -16,7 +16,6 @@ const funError = 'expected fun with the declared parameters';
 const dataError = 'expected a data type';
 const universeError = 'type is not in the declared universe';
 const termError = 'term does not have the declared type';
-const laterError = 'this type belongs to a later milestone';
 // Each case names the last occurrence of `at` in the source as the error byte.
 const reject = (source, message, at) => {
   const result = run(source);
@@ -177,9 +176,44 @@ test('an application of a WritePath function takes both arguments', () => {
   assert.deepEqual(Object.keys(run(`${actors}${refuse}def s : Step := refuse history`)), ['error']);
 });
 
-test('ReadPath stays a type of a later milestone', () => {
-  reject('def r : ReadPath := nil', laterError, 'ReadPath');
-  reject('def R : Type 1 := ReadPath', laterError, 'ReadPath');
+test('ReadPath is a function type in Type 1', () => {
+  reject('def r : ReadPath := nil', funError, 'nil');
+  reject('def R : Type 0 := ReadPath', universeError, 'ReadPath');
+  assert.deepEqual(instances('def R : Type 1 := ReadPath'), []);
+  assert.deepEqual(instances('def Reader : Type 1 := (head : Hash) -> ReadPath'), []);
+});
+
+const lift = 'def lift : (r : ReadPath) -> ReadPath := fun (r : ReadPath) (answer : Type 0) (log : Log) ' +
+  '(query : Query answer) => r answer log query';
+
+test('a function of type ReadPath passes the call to a ReadPath parameter', () => {
+  assert.deepEqual(instances(lift), []);
+  assert.deepEqual(instances('def lift : (r : ReadPath) -> ReadPath := ' +
+    'fun (q : ReadPath) (T : Type 0) (l : Log) (k : Query T) => q T l k'), []);
+});
+
+test('an application of a ReadPath parameter has the type of its type argument', () => {
+  const apply = 'fun (r : ReadPath) (log : Log) (ask : Query Flag) => r Flag log ask';
+  assert.deepEqual(instances(`def g : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Flag := ${apply}`), []);
+  reject(`def g : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Verdict := ${apply}`, termError, 'r');
+  reject('def g : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Verdict := ' +
+    'fun (r : ReadPath) (log : Log) (ask : Query Flag) => r Verdict log ask', termError, 'ask');
+  assert.deepEqual(instances('def c : (answer : Type 0) -> (r : ReadPath) -> (log : Log) -> ' +
+    '(ask : Query answer) -> answer := fun (T : Type 0) (r : ReadPath) (log : Log) (ask : Query T) => r T log ask'), []);
+});
+
+test('ReadPath checks the binders and the result', () => {
+  reject('def lift : (r : ReadPath) -> ReadPath := fun (r : ReadPath) (answer : Type 0) (log : Nat) ' +
+    '(query : Query answer) => r answer log query', funError, '(log');
+  reject('def lift : (r : ReadPath) -> ReadPath := fun (r : ReadPath) (answer : Type 0) (log : Log) ' +
+    '(query : Query answer) => log', termError, 'log');
+  reject('def x : Option (ReadPath) := none', dataError, 'ReadPath');
+  reject('def f : (w : List ReadPath) -> Nat := fun (w : Nat) => 1', dataError, 'ReadPath');
+});
+
+test('a type argument after a value argument is not read (D-B5)', () => {
+  reject(`${lift} def h : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Flag := ` +
+    'fun (r : ReadPath) (log : Log) (ask : Query Flag) => lift r Flag log ask', 'unknown name or constructor', 'Flag');
 });
 
 test('the paths example compiles to its literal steps', async () => {

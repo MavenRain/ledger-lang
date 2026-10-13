@@ -167,14 +167,29 @@ static Signature write_path_signature(void) {
   return (Signature){params, schema_type_of(text_of_cstring("Step"))};
 }
 
+/* ReadPath is the function type of core/ops.def (step D7b):
+   (answer : Type 0) -> (log : Log) -> (query : Query answer) -> answer.
+   The query type and the result keep the type parameter answer as a schema
+   name, as a written type parameter does. */
+static Signature read_path_signature(void) {
+  const LType *answer = schema_type_of(text_of_cstring("answer"));
+  LType *query = arena_alloc(sizeof *query);
+  *query = (LType){.tag = TY_QUERY, .left = answer};
+  const Params *params =
+    param_cons((Param){text_of_cstring("answer"), &universe_zero},
+               param_cons((Param){text_of_cstring("log"), list_type_of(schema_type_of(text_of_cstring("Entry")))},
+                          param_cons((Param){text_of_cstring("query"), query}, NULL)));
+  return (Signature){params, answer};
+}
+
 /* A type definition can name a function type. A parameter hides this name. */
 static int named_signature(const Bindings *environment, Tokens tokens, Signature *found) {
   Text name;
   if (!name_of(tokens, &name)) return 0;
   const Binding *item;
   if (!lookup(name, environment, &item)) {
-    if (same_text(name, opsTextWritePath()) != 1) return 0;
-    *found = write_path_signature();
+    if (same_text(name, opsTextWritePath()) != 1 && same_text(name, opsTextReadPath()) != 1) return 0;
+    *found = same_text(name, opsTextWritePath()) == 1 ? write_path_signature() : read_path_signature();
     return 1;
   }
   switch (item->kind) {
@@ -189,8 +204,9 @@ static int named_signature(const Bindings *environment, Tokens tokens, Signature
   return 0;
 }
 
-/* The type of a parameter can also be the name of a function type that has
-   no type parameter. The argument of this parameter is a function. */
+/* The type of a parameter can also be the name of a function type, also of
+   a function type with a type parameter, as ReadPath (step D7b). The argument
+   of this parameter is a function. */
 static int parameter_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens,
                           const LType **type, Tokens *rest, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
@@ -202,7 +218,6 @@ static int parameter_type(Fuel fuel, const Bindings *environment, const Params *
   Signature found;
   if (!named_signature(environment, tokens, &found))
     return parse_type_in(fuel, 0, environment, done, tokens, type, rest, failure);
-  if (has_type_param(found.params)) return fail_at(failure, first_position(tokens), eData);
   *type = arrow_type(found.params, found.result);
   *rest = drop_token(tokens);
   return 1;
@@ -573,8 +588,8 @@ static int parse_signature(Fuel fuel, const Bindings *environment, const Params 
     Signature named;
     const LType *result;
     if (named_signature(environment, tokens, &named)) {
-      if (has_value_param(done) == 1 && has_type_param(named.params) == 1)
-        return fail_at(failure, first_position(tokens), eTypeParam);
+      /* A named signature at the end of a chain can bring its type parameter
+         after value parameters, as `(head : Hash) -> ReadPath` (step D7b). */
       Nat offset = param_count(done);
       *found = (Signature){reverse_params_onto(shift_eq_params(offset, named.params), done),
                            shift_type_markers(offset, named.result)};

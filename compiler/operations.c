@@ -49,9 +49,6 @@ static const Row rows[] = {
 /* The text before the body of an alias definition. */
 #define ALIAS_HEAD ": Type 0 := "
 
-/* The definition that belongs to a later milestone. The type parser refuses it. */
-#define LATER_NAME "ReadPath"
-
 static Nat text_is(Text text, const char *string) {
   size_t size = strlen(string);
   if (text.size != size) return 0;
@@ -260,10 +257,6 @@ int ops_type(Text name, const LType **type) {
   if (!find_family(name, 1, &row)) return 0;
   *type = make_type(TY_SCHEMA, text_of(rows[row].name), NULL);
   return 1;
-}
-
-Nat ops_later_type(Text name) {
-  return text_is(name, LATER_NAME);
 }
 
 /* 1 for the names of the definitions, the families and their constructors.

@@ -96,12 +96,12 @@ test('function arguments reject mismatched signatures and unbound prefixes', () 
   }
 });
 
-test('grouping preserves rejection of polymorphic function parameters', () => {
+test('the grouped forms of Poly are refused at the fun', () => {
   for (const ty of ['Poly', '(Poly)', '((Poly))']) {
     const source = 'def Poly : Type 1 := (A : Type 0) -> (a : A) -> A ' +
       `def use : (f : ${ty}) -> Nat := fun (f : Nat) => 0`;
     assert.deepEqual(run(source), { error: {
-      byte: source.lastIndexOf('Poly'), message: 'expected a data type',
+      byte: source.lastIndexOf('(f : Nat)'), message: 'expected fun with the declared parameters',
     } });
   }
 });

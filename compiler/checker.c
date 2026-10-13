@@ -547,6 +547,13 @@ const LType *type_argument(Text name, const Bindings *chosen) {
   return schema_of(name);
 }
 
+/* The type parameter of a function type hides an outer type argument of the
+   same name (step D7b). */
+static const Bindings *hide_type_name(Text name, const Bindings *chosen) {
+  if (name.size == 0) return chosen;
+  return bindings_item(type_binding(name, &universe_zero, schema_of(name)), chosen);
+}
+
 /* The substitution replaces all names in one step. */
 const LType *subst_type(const Bindings *chosen, const LType *ty) {
   switch (ty->tag) {
@@ -571,9 +578,11 @@ const LType *subst_type(const Bindings *chosen, const LType *ty) {
     return eq_type(subst_type(chosen, ty->left), ty->lhs, ty->rhs);
   case TY_PROD:
   case TY_SUM:
-  case TY_ARROW:
     return make_type(
         (LType){.tag = ty->tag, .left = subst_type(chosen, ty->left), .right = subst_type(chosen, ty->right)});
+  case TY_ARROW:
+    return make_type((LType){.tag = TY_ARROW, .name = ty->name, .left = subst_type(chosen, ty->left),
+                             .right = subst_type(hide_type_name(ty->name, chosen), ty->right)});
   case TY_SIGMA:
     return make_type((LType){.tag = TY_SIGMA, .name = ty->name, .level = ty->level,
                              .left = subst_type(chosen, ty->left), .right = subst_type(chosen, ty->right)});
@@ -588,6 +597,17 @@ const Params *value_params(const Bindings *chosen, const Params *params) {
   if (is_type_param(params->head)) return value_params(chosen, params->tail);
   return params_item((Param){params->head.name, subst_type(chosen, params->head.type)},
                      value_params(chosen, params->tail));
+}
+
+/* A closure with a type parameter, as a ReadPath parameter, takes its type
+   arguments first (step D7b). A closure with no type parameter keeps its
+   parameters and its result. */
+static const Params *closure_params(const Bindings *chosen, const Params *params) {
+  return chosen != NULL ? value_params(chosen, params) : params;
+}
+
+static const LType *closure_result(const Bindings *chosen, const LType *result) {
+  return chosen != NULL ? subst_type(chosen, result) : result;
 }
 
 /* Side markers use the positions of all parameters, including type
@@ -2084,32 +2104,40 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         if (dependent_result(item->type) == 1 || dependent_params(item->params) == 1)
           return fail_at(failure, head.position, eTerm);
         if (atom == 1) return fail_at(failure, head.position, eParen);
+        const Bindings *chosen;
+        Tokens after_types;
+        const TermTypes *types = NULL;
+        if (!type_arguments(more, item->params, environment, NULL, tail, &chosen, &after_types,
+                            want_types(term, &types), failure))
+          return 0;
+        const Params *formal = closure_params(chosen, item->params);
+        const LType *result = closure_result(chosen, item->type);
         const Values *values;
         const Terms *args = NULL;
-        if (!parse_arguments(more, budget, 1, param_types(item->params), environment, tail, &values, &after, &spent,
+        if (!parse_arguments(more, budget, 1, param_types(formal), environment, after_types, &values, &after, &spent,
                              want_terms(term, &args), failure))
           return 0;
-        const Term *applied_term = term != NULL ? named_term(TERM_APPLY, head.position, head.text, NULL, args,
+        const Term *applied_term = term != NULL ? named_term(TERM_APPLY, head.position, head.text, types, args,
                                                              taken_tokens(tail, after), first_position(after),
                                                              environment)
                                                 : NULL;
         if (checking_body(environment) == 1)
-          return with_term(worked_typed((Typed){item->type, &null_value}, after, spent, typed, rest, left), term,
+          return with_term(worked_typed((Typed){result, &null_value}, after, spent, typed, rest, left), term,
                            applied_term);
-        const Bindings *scope = bind_arguments(environment, item->params, values, item->scope);
+        const Bindings *scope = bind_arguments(environment, formal, values, type_frame(item->scope, chosen));
         const Value *value;
         Tokens ignored;
         Nat used;
         Failure evaluated = {0, {NULL, 0}};
-        if (item->term != NULL && eval_term(more, nat_sub(spent, 1), item->type, scope, item->term, &value, &used, &evaluated))
-          return with_term(worked_typed((Typed){item->type, value}, after, used, typed, rest, left), term,
+        if (item->term != NULL && eval_term(more, nat_sub(spent, 1), result, scope, item->term, &value, &used, &evaluated))
+          return with_term(worked_typed((Typed){result, value}, after, used, typed, rest, left), term,
                            applied_term);
         /* A failed answer gives its failure. An unknown answer runs the token path. */
         if (evaluated.message.size != 0) return fail_at(failure, evaluated.position, evaluated.message);
-        if (!parse_term(more, nat_sub(spent, 1), 0, item->type, scope, term_tokens(item->term), &value, &ignored,
+        if (!parse_term(more, nat_sub(spent, 1), 0, result, scope, term_tokens(item->term), &value, &ignored,
                         &used, NULL, failure))
           return 0;
-        return with_term(worked_typed((Typed){item->type, value}, after, used, typed, rest, left), term,
+        return with_term(worked_typed((Typed){result, value}, after, used, typed, rest, left), term,
                          applied_term);
       }
       }
@@ -2528,23 +2556,31 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
        C3). The evaluator gives the same failure (part E). */
     if (dependent_result(item->type) == 1 || dependent_params(item->params) == 1)
       return fail_at(failure, term->position, eTerm);
+    /* The type arguments of a closure with a type parameter (step D7b), as
+       for a function above. */
+    const Bindings *chosen;
+    Tokens after_types;
+    if (!type_arguments(fuel, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, failure))
+      return 0;
+    const Params *formal = closure_params(chosen, item->params);
+    const LType *result = closure_result(chosen, item->type);
     const Values *values;
     Nat spent;
-    if (!eval_arguments(fuel, budget, param_types(item->params), environment, term->args, &values, &spent, NULL, failure)) return 0;
-    if (checking_body(environment) == 1) return eval_typed((Typed){item->type, &null_value}, spent, typed, left);
-    const Bindings *scope = bind_arguments(environment, item->params, values, item->scope);
+    if (!eval_arguments(fuel, budget, param_types(formal), environment, term->args, &values, &spent, NULL, failure)) return 0;
+    if (checking_body(environment) == 1) return eval_typed((Typed){result, &null_value}, spent, typed, left);
+    const Bindings *scope = bind_arguments(environment, formal, values, type_frame(item->scope, chosen));
     const Value *value;
     Nat used;
     Failure tried = {0, {NULL, 0}};
     /* The closure body term first. A 0 there runs the body tokens here, as the
        application site does (Q-S4-3). The trial writes no failure. */
-    if (item->term != NULL && eval_term(fuel, nat_sub(spent, 1), item->type, scope, item->term, &value, &used, &tried))
-      return eval_typed((Typed){item->type, value}, used, typed, left);
+    if (item->term != NULL && eval_term(fuel, nat_sub(spent, 1), result, scope, item->term, &value, &used, &tried))
+      return eval_typed((Typed){result, value}, used, typed, left);
     Tokens ignored;
-    if (!parse_term(fuel, nat_sub(spent, 1), 0, item->type, scope, term_tokens(item->term), &value, &ignored, &used,
+    if (!parse_term(fuel, nat_sub(spent, 1), 0, result, scope, term_tokens(item->term), &value, &ignored, &used,
                     NULL, failure))
       return 0;
-    return eval_typed((Typed){item->type, value}, used, typed, left);
+    return eval_typed((Typed){result, value}, used, typed, left);
   }
   }
   return 0;

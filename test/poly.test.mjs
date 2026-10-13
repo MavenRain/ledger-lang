@@ -87,8 +87,6 @@ const rejected = [
   ['a universe as a type argument', `${id}def a : Nat := id (Type 0) 4`, 'expected a data type', '(Type 0) 4'],
   ['a type parameter after a value parameter',
     'def f : (n : Nat) -> (A : Type 0) -> Nat := fun (n : Nat) (A : Type 0) => n', firstError, 'A : Type 0) ->'],
-  ['a named type parameter after a value parameter',
-    `${endo}def f : (n : Nat) -> Id := fun (n : Nat) (A : Type 0) (x : A) => x`, firstError, 'Id :='],
   ['a reserved name for a type parameter',
     'def f : (Nat : Type 0) -> Nat := fun (A : Type 0) => 1', 'reserved definition name', 'Nat : Type 0'],
   ['a value binder for a type parameter',
@@ -106,6 +104,11 @@ const rejected = [
 for (const [label, source, message, at] of rejected) {
   test(`rejects ${label} at its byte`, () => reject(source, message, at));
 }
+
+test('accepts a named type parameter after a value parameter at the end of a chain', () => {
+  const source = `${endo}def f : (n : Nat) -> Id := fun (n : Nat) (A : Type 0) (x : A) => x`;
+  assert.deepEqual(run(source), { 'ledger-lang': 1, instances: [] });
+});
 
 test('the example compiles', () => {
   const source = readFileSync(new URL('../examples/poly.ledger', import.meta.url), 'utf8');

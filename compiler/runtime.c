@@ -273,8 +273,8 @@ Text kRefKind(void) { return text_of_cstring("kind"); }
 Text kRefHash(void) { return text_of_cstring("hash"); }
 Text kSchemaTag(void) { return text_of_cstring("tag"); }
 Text eIndex(void) { return text_of_cstring("expected Kind index"); }
-Text eLaterType(void) { return text_of_cstring("this type belongs to a later milestone"); }
 Text opsTextWritePath(void) { return text_of_cstring("WritePath"); }
+Text opsTextReadPath(void) { return text_of_cstring("ReadPath"); }
 
 int lookup(Text name, const Bindings *environment, const Binding **found) {
   for (; environment != NULL; environment = environment->tail) {

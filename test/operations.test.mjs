@@ -214,11 +214,13 @@ test('A Query type is a parameter type', () => {
   }
 });
 
-test('ReadPath is a type of a later milestone', () => {
-  for (const type of ['ReadPath', 'List ReadPath', 'Option ReadPath']) {
-    assert.match(JSON.stringify(reject(`def x : ${type} := nil`)), /this type belongs to a later milestone/, type);
+test('ReadPath is a function type and not a data type', () => {
+  assert.match(JSON.stringify(reject('def x : ReadPath := nil')),
+    /"byte":20,"message":"expected fun with the declared parameters"/);
+  for (const [type, byte] of [['List ReadPath', 13], ['Option ReadPath', 15]]) {
+    assert.match(JSON.stringify(reject(`def x : ${type} := nil`)),
+      new RegExp(`"byte":${byte},"message":"expected a data type"`), type);
   }
-  assert.doesNotMatch(JSON.stringify(reject('def x : Unknown := nil')), /later milestone/);
   reject('def q : Moment := queryStageStats');
 });
 

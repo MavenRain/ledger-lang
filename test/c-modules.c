@@ -2846,6 +2846,134 @@ static void test_d7_query_universe(void) {
                            &environment, &failure));
 }
 
+/* D7 part B: the function type ReadPath (design items 6 to 12). The binders
+   of the signature and the type parameter answer in the query type and in
+   the result, the level 1, the parameter (r : ReadPath), the application of
+   a ReadPath parameter, no instance, the reserved name ReadPath, and
+   ReadPath in a data position. Called from main after
+   test_d7_query_universe. */
+#define D7_LIFT                                                                                 \
+  "def lift : (r : ReadPath) -> ReadPath := fun (r : ReadPath) (answer : Type 0) (log : Log) " \
+  "(query : Query answer) => r answer log query\n"
+#define D7_APPLY "fun (r : ReadPath) (log : Log) (ask : Query Flag) => r Flag log ask\n"
+#define D7_EMPTY "{\"ledger-lang\":1,\"instances\":[]}"
+
+static void test_d7_read_path(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  const Binding *item;
+  Text output;
+  /* read_path_signature: (answer : Type 0) -> (log : Log) ->
+     (query : Query answer) -> answer. The query type and the result keep
+     answer by its name. */
+  assert(check_definitions(text("def R : Type 1 := ReadPath\n"), &environment, &failure));
+  assert(lookup(text("R"), environment, &item) && item->kind == BIND_ARROW);
+  const Params *params = item->params;
+  assert(params != NULL && params->tail != NULL && params->tail->tail != NULL && params->tail->tail->tail == NULL);
+  assert(same_text(params->head.name, text("answer")) && params->head.type->tag == TY_UNIVERSE &&
+         params->head.type->level == 0);
+  assert(same_text(params->tail->head.name, text("log")) && params->tail->head.type->tag == TY_LIST);
+  const LType *query = params->tail->tail->head.type;
+  assert(same_text(params->tail->tail->head.name, text("query")) && query->tag == TY_QUERY);
+  assert(query->left->tag == TY_SCHEMA && same_text(query->left->name, params->head.name));
+  assert(item->type->tag == TY_SCHEMA && same_text(item->type->name, params->head.name));
+  sigma_refused("def R : Type 0 := ReadPath", "ReadPath", eUniverse);
+
+  /* parameter_type of (r : ReadPath): a function type in Type 1. The arrow
+     keeps the name answer of its type parameter (types.c arrow_type), and
+     arrow_params gives the three binders. A value parameter has no name in
+     the arrow. */
+  environment = NULL;
+  assert(check_definitions(text("def T : Type 1 := (r : ReadPath) -> Nat\n"), &environment, &failure));
+  assert(lookup(text("T"), environment, &item) && item->kind == BIND_ARROW);
+  const LType *reader = item->params->head.type;
+  assert(reader->tag == TY_ARROW && same_text(reader->name, text("answer")) && type_level(reader) == 1);
+  const Params *binders = arrow_params(reader);
+  assert(binders != NULL && binders->tail != NULL && binders->tail->tail != NULL);
+  assert(same_text(binders->head.name, text("answer")) && binders->tail->head.type->tag == TY_LIST);
+  assert(binders->tail->tail->head.type->tag == TY_QUERY);
+  sigma_refused("def T : Type 0 := (r : ReadPath) -> Nat", "(r", eUniverse);
+
+  /* The application of a ReadPath parameter has the type of its type
+     argument: Flag for `r Flag log ask`, the type parameter of lift for
+     `r answer log query`, and T for `r T log ask`. */
+  assert(compile_program(text(D7_LIFT), &output, &failure) && same_text(output, text(D7_EMPTY)));
+  assert(compile_program(text("def g : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Flag := " D7_APPLY),
+                         &output, &failure) &&
+         same_text(output, text(D7_EMPTY)));
+  sigma_refused("def g : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Verdict := " D7_APPLY, "r Flag",
+                eTerm);
+  environment = NULL;
+  assert(check_definitions(text("def c : (answer : Type 0) -> (r : ReadPath) -> (log : Log) -> "
+                                "(ask : Query answer) -> answer := "
+                                "fun (T : Type 0) (r : ReadPath) (log : Log) (ask : Query T) => r T log ask\n"),
+                           &environment, &failure));
+  const char *wrong = "def lift : (r : ReadPath) -> ReadPath := fun (r : ReadPath) (answer : Type 0) (log : Log) "
+                      "(query : Query answer) => log\n";
+  environment = NULL;
+  assert(!check_definitions(text(wrong), &environment, &failure));
+  assert(failure.position == (Nat)(strstr(wrong, "=> log") + 3 - wrong) && same_text(failure.message, eTerm));
+
+  /* The definitions lift and g above are not instances (D7_EMPTY). The body
+     query has the type Query answer, not answer. */
+  const char *value = "def r : ReadPath := fun (answer : Type 0) (log : Log) (query : Query answer) => query";
+  environment = NULL;
+  assert(!check_definitions(text(value), &environment, &failure));
+  assert(failure.position == (Nat)(strstr(value, "=> query") + 3 - value) && same_text(failure.message, eTerm));
+
+  /* ReadPath is a reserved name: a parameter or a definition cannot take it,
+     thus no binding hides the function type. */
+  sigma_refused("def f : (ReadPath : Type 0) -> (x : ReadPath) -> ReadPath := "
+                "fun (ReadPath : Type 0) (x : ReadPath) => x",
+                "ReadPath", text("reserved definition name"));
+  sigma_refused("def ReadPath : Type 0 := Nat", "ReadPath", text("reserved definition name"));
+
+  /* named_type: ReadPath in a data position gives eData. */
+  sigma_refused("def x : Option (ReadPath) := none", "ReadPath", eData);
+  sigma_refused("def f : (w : List ReadPath) -> Nat := fun (w : Nat) => 1", "ReadPath", eData);
+}
+
+static void test_d7_type_names(void) {
+  Text output;
+  Failure failure = {0, {NULL, 0}};
+  const Text expected = text("{\"ledger-lang\":1,\"instances\":[{\"name\":\"n\",\"type\":\"Nat\",\"value\":3}]}");
+  /* Type aliases and implementations may rename their bound type variables. */
+  assert(compile_program(text("def Poly : Type 1 := (A : Type 0) -> (x : A) -> A\n"
+                              "def PolyB : Type 1 := (B : Type 0) -> (x : B) -> B\n"
+                              "def id : PolyB := fun (T : Type 0) (x : T) => x\n"
+                              "def use : (f : Poly) -> Nat := fun (f : Poly) => f Nat 3\n"
+                              "def n : Nat := use id\n"), &output, &failure));
+  assert(same_text(output, expected));
+  assert(compile_program(text("def Poly : Type 1 := (A : Type 0) -> (x : A) -> A\n"
+                              "def id : Poly := fun (T : Type 0) (x : T) => x\n"
+                              "def use : (f : Poly) -> Nat := fun (f : Poly) => f Nat 3\n"
+                              "def n : Nat := use id\n"), &output, &failure));
+  assert(same_text(output, expected));
+  assert(compile_program(text("def Alias : Type 1 := (T : Type 0) -> (log : Log) -> (query : Query T) -> T\n"
+                              "def accept : (f : Alias) -> Nat := fun (f : Alias) => 1\n"
+                              "def forward : (r : ReadPath) -> Nat := fun (r : ReadPath) => accept r\n"),
+                         &output, &failure));
+  assert(same_text(output, text(D7_EMPTY)));
+
+  /* A free name cannot equal a bound variable, and distinct binders stay distinct. */
+  const LType a = {.tag = TY_SCHEMA, .name = text("A")};
+  const LType b = {.tag = TY_SCHEMA, .name = text("B")};
+  const LType universe = {.tag = TY_UNIVERSE, .level = 0};
+  const Params pa = {{text("A"), &universe}, NULL};
+  const Params pb = {{text("B"), &universe}, NULL};
+  assert(same_type(arrow_type(&pa, &a), arrow_type(&pb, &b)));
+  assert(!same_type(arrow_type(&pa, &a), arrow_type(&pb, &a)));
+  assert(!same_type(arrow_type(&pa, &b), arrow_type(&pb, &b)));
+  const Params both = {{text("A"), &universe}, &pb};
+  assert(!same_type(arrow_type(&both, &a), arrow_type(&both, &b)));
+
+  /* Unknown types retain their own diagnostic after ReadPath becomes available. */
+  sigma_refused("def x : Unknown := nil", "Unknown", eType);
+}
+
+#undef D7_LIFT
+#undef D7_APPLY
+#undef D7_EMPTY
 #undef D7_ASK
 #undef D7_F
 #undef D7_G
@@ -2886,6 +3014,8 @@ int main(void) {
   test_d6_transport_scope();
   test_d7_query_param();
   test_d7_query_universe();
+  test_d7_read_path();
+  test_d7_type_names();
   puts("C module tests passed");
   return 0;
 }

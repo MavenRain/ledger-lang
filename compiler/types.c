@@ -74,7 +74,22 @@ static Text sigma_type_name(const LType *ty, Text a, Text b) {
   return binary_type_name(sSigma, append_text(ty->name, text_byte(32, text_byte(58, text_byte(32, a)))), b);
 }
 
-static Text type_text(Nat key, const LType *ty, const SigmaKey *scope) {
+typedef struct TypeKey TypeKey;
+struct TypeKey {
+  Text name;
+  Nat depth;
+  const TypeKey *outer;
+};
+
+/* A bound type name uses a delimited depth, distinct from every source name. */
+static Text type_name_key(Text name, const TypeKey *scope) {
+  for (; scope != NULL; scope = scope->outer)
+    if (same_text(name, scope->name))
+      return text_byte(0, append_text(number_text(scope->depth), text_one(0)));
+  return name;
+}
+
+static Text type_text(Nat key, const LType *ty, const SigmaKey *scope, const TypeKey *types) {
   switch (ty->tag) {
     case TY_NAT: return sNat;
     case TY_TEXT: return sText;
@@ -85,25 +100,28 @@ static Text type_text(Nat key, const LType *ty, const SigmaKey *scope) {
     case TY_KIND: return sKind;
     case TY_HASH: return sHash();
     case TY_REF: return unary_type_name(sRef(), ty->name);
-    case TY_SCHEMA: return ty->name;
-    case TY_OPTION: return unary_type_name(sOption, type_text(key, ty->left, scope));
-    case TY_LIST: return unary_type_name(sList, type_text(key, ty->left, scope));
-    case TY_PROD: return binary_type_name(sProd, type_text(key, ty->left, scope), type_text(key, ty->right, scope));
-    case TY_SUM: return binary_type_name(sSum, type_text(key, ty->left, scope), type_text(key, ty->right, scope));
+    case TY_SCHEMA: return key ? type_name_key(ty->name, types) : ty->name;
+    case TY_OPTION: return unary_type_name(sOption, type_text(key, ty->left, scope, types));
+    case TY_LIST: return unary_type_name(sList, type_text(key, ty->left, scope, types));
+    case TY_PROD: return binary_type_name(sProd, type_text(key, ty->left, scope, types), type_text(key, ty->right, scope, types));
+    case TY_SUM: return binary_type_name(sSum, type_text(key, ty->left, scope, types), type_text(key, ty->right, scope, types));
     case TY_UNIVERSE: return ty->level == 0 ? sType0 : sType1;
     case TY_EQ:
-      return append_text(unary_type_name(sEq, type_text(key, ty->left, scope)),
+      return append_text(unary_type_name(sEq, type_text(key, ty->left, scope, types)),
         text_byte(32, text_byte(40, append_text(side_key(key, ty->lhs, scope),
           text_byte(41, text_byte(32, text_byte(40,
             append_text(side_key(key, ty->rhs, scope), text_one(41)))))))));
-    case TY_QUERY: return unary_type_name(opsTextQuery(), type_text(key, ty->left, scope));
-    case TY_ARROW:
-      return text_byte(40, append_text(type_text(key, ty->left, scope), text_byte(41, text_byte(32,
-        text_byte(45, text_byte(62, text_byte(32, type_text(key, ty->right, scope))))))));
+    case TY_QUERY: return unary_type_name(opsTextQuery(), type_text(key, ty->left, scope, types));
+    case TY_ARROW: {
+      TypeKey inner = {ty->name, types == NULL ? 0 : types->depth + 1, types};
+      const TypeKey *body = ty->name.size == 0 ? types : &inner;
+      return text_byte(40, append_text(type_text(key, ty->left, scope, types), text_byte(41, text_byte(32,
+        text_byte(45, text_byte(62, text_byte(32, type_text(key, ty->right, scope, body))))))));
+    }
     case TY_SIGMA: {
       SigmaKey inner = {ty->level, scope == NULL ? 0 : scope->depth + 1, ty->name, scope};
-      Text a = type_text(key, ty->left, scope);
-      Text b = type_text(key, ty->right, &inner);
+      Text a = type_text(key, ty->left, scope, types);
+      Text b = type_text(key, ty->right, &inner, types);
       if (!key) return sigma_type_name(ty, a, b);
       return binary_type_name(sSigma, append_text(bound_key(inner.depth),
                               text_byte(32, text_byte(58, text_byte(32, a)))), b);
@@ -112,7 +130,7 @@ static Text type_text(Nat key, const LType *ty, const SigmaKey *scope) {
   return text_end();
 }
 
-Text type_name(const LType *ty) { return type_text(0, ty, NULL); }
+Text type_name(const LType *ty) { return type_text(0, ty, NULL, NULL); }
 
 /* Data types have level 0. Type 0 has level 1 and Type 1 has level 2.
    A Query type is in Type 1, so it has level 1. */
@@ -131,8 +149,11 @@ Nat type_level(const LType *ty) {
 
 /* The type grammar has unique canonical names, so equality of the names is
    structural type equality for this subset. Sigma keys retain free markers
-   and compare bound markers by lexical depth. */
-Nat same_type(const LType *a, const LType *b) { return same_text(type_text(1, a, NULL), type_text(1, b, NULL)); }
+   and compare bound markers by lexical depth. Function keys compare bound
+   type names by lexical depth while preserving free type names. */
+Nat same_type(const LType *a, const LType *b) {
+  return same_text(type_text(1, a, NULL, NULL), type_text(1, b, NULL, NULL));
+}
 
 static const LTypes *cons_type(const LType *head, const LTypes *tail) {
   LTypes *list = arena_alloc(sizeof *list);
@@ -231,11 +252,12 @@ Nat is_query_type(const LType *ty) { return ty->tag == TY_QUERY; }
 
 /* A function type is a chain of TY_ARROW. The result of a function type is
    not a function type, so the chain gives the parameter types in order. A
-   parameter of this chain has a name that the source cannot contain. */
+   parameter of this chain has a name that the source cannot contain. A type
+   parameter keeps its name, because the later types use it (step D7b). */
 const Params *arrow_params(const LType *ty) {
   if (ty->tag != TY_ARROW) return NULL;
   Params *params = arena_alloc(sizeof *params);
-  *params = (Params){{text_one(32), ty->left}, arrow_params(ty->right)};
+  *params = (Params){{ty->name.size != 0 ? ty->name : text_one(32), ty->left}, arrow_params(ty->right)};
   return params;
 }
 
@@ -248,7 +270,10 @@ Nat is_arrow_type(const LType *ty) { return arrow_params(ty) != NULL; }
 const LType *arrow_type(const Params *params, const LType *result) {
   if (params == NULL) return result;
   LType *arrow = arena_alloc(sizeof *arrow);
-  *arrow = (LType){.tag = TY_ARROW, .left = params->head.type, .right = arrow_type(params->tail, result)};
+  *arrow = (LType){.tag = TY_ARROW,
+                   .name = is_type_param(params->head) ? params->head.name : (Text){0},
+                   .left = params->head.type,
+                   .right = arrow_type(params->tail, result)};
   return arrow;
 }
 

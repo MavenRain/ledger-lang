@@ -119,7 +119,7 @@ int named_type(Nat position, Text name, const Bindings *environment, Tokens toke
     return 1;
   }
   return fail_at(failure, position,
-                 ops_later_type(name) == 1 ? eLaterType() : same_text(name, opsTextWritePath()) == 1 ? eData : eType);
+                 same_text(name, opsTextWritePath()) == 1 || same_text(name, opsTextReadPath()) == 1 ? eData : eType);
 }
 
 /* Type formers take data types only, so a universe or a Query type is not an
