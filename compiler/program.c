@@ -697,7 +697,7 @@ static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *envi
       .name = name,
       .type = result,
       .params = binders,
-      .term = term_body(taken_tokens(body, *rest), term)};
+      .term = spanned_body(body, *rest, term)};
   return 1;
 }
 

@@ -730,6 +730,68 @@ static const Term *construct_body(const char *bytes, const char *name, const Ter
    In argument position the token path still requires parentheses, even
    for a function with no parameters. Check both binding kinds and both
    argument loops, plus the direct argument of a structure form. */
+/* D8 part A: each body runs from its checked Term. The chain f0 to fk has
+   2 to the power k + 1, minus 1, bodies (probes a11 and a12). */
+#define D8_F0 "def f0 : (x : Nat) -> Nat := fun (x : Nat) => x\n"
+#define D8_F(k, j) "def f" #k " : (x : Nat) -> Nat := fun (x : Nat) => f" #j " (f" #j " x)\n"
+#define D8_CHAIN                                                                                               \
+  D8_F0 D8_F(1, 0) D8_F(2, 1) D8_F(3, 2) D8_F(4, 3) D8_F(5, 4) D8_F(6, 5) D8_F(7, 6) D8_F(8, 7) D8_F(9, 8) \
+      D8_F(10, 9) D8_F(11, 10)
+
+/* The call scope of name, with the closure (the second binding) on its body
+   Term with an empty token span. A token run on this span gives eTerm. */
+static BothPaths bare_closure(const Bindings *environment, const char *name, const char *args) {
+  const Binding *item = fun_named(environment, name);
+  const Bindings *scope = call_scope(environment, item, args);
+  assert(scope->tail->head.kind == BIND_CLOSURE && scope->tail->head.term != NULL);
+  Bindings closure = *scope->tail;
+  closure.head.term = term_body((Tokens){0}, closure.head.term);
+  Bindings top = *scope;
+  top.tail = &closure;
+  return both_paths(&top, item, 1000, 1000);
+}
+
+static void test_d8_body_term(const Bindings *environment) {
+  /* The closure arm of eval_apply (f of twice) and apply_body (map over g of
+     mapV, a partial and an inline fun) give the value of the body Term. */
+  BothPaths twice_bare = bare_closure(environment, "twice", "size 4");
+  assert(twice_bare.eval == 1 && twice_bare.parse == 1 && same_text(twice_bare.value, text("4")));
+  BothPaths partial_bare = bare_closure(environment, "mapV", "(pickK 3) (cons 7 (cons 8 nil))");
+  assert(partial_bare.eval == 1 && partial_bare.parse == 1 && same_text(partial_bare.value, text("[3,3]")));
+  BothPaths inline_bare = bare_closure(environment, "mapV", "(fun (y : Nat) => pickK 5 y) (cons 7 (cons 8 nil))");
+  assert(inline_bare.eval == 1 && inline_bare.parse == 1 && same_text(inline_bare.value, text("[5,5]")));
+
+  /* The fold in a body (probe b1) and the map in a body (probe b2). */
+  Text output;
+  Failure failure = {0, {NULL, 0}};
+  assert(compile_program(text("def Reducer : Type 0 := (a : Nat) -> (b : List Nat) -> List Nat\n"
+                              "def pick : Reducer := fun (a : Nat) (b : List Nat) => cons a b\n"
+                              "def xs : List Nat := cons 4 (cons 7 nil)\n"
+                              "def run : (f : Reducer) -> List Nat := fun (f : Reducer) => fold f nil xs\n"
+                              "def out : List Nat := run pick\n"),
+                         &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[{\"name\":\"xs\",\"type\":\"List (Nat)\","
+                                "\"value\":[4,7]},{\"name\":\"out\",\"type\":\"List (Nat)\",\"value\":[4,7]}]}")));
+  assert(compile_program(text("def four : (x : Nat) -> Nat := fun (x : Nat) => 4\n"
+                              "def g : (o : Option Nat) -> Option Nat := fun (o : Option Nat) => map four o\n"
+                              "def xs : Option Nat := g (some 1)\n"),
+                         &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[{\"name\":\"xs\",\"type\":\"Option (Nat)\","
+                                "\"value\":4}]}")));
+
+  /* The work budget: 4095 bodies in 689 bytes check (a11). 8191 bodies in
+     748 bytes give eBudget at the first token of the innermost body, byte 46
+     (a12). */
+  assert(compile_program(text(D8_CHAIN "def n : Nat := f11 1\n"), &output, &failure));
+  Failure starved = {0, {NULL, 0}};
+  assert(!compile_program(text(D8_CHAIN D8_F(12, 11) "def n : Nat := f12 1\n"), &output, &starved));
+  assert(starved.position == 46 && same_text(starved.message, eBudget));
+}
+
+#undef D8_CHAIN
+#undef D8_F
+#undef D8_F0
+
 static void test_construct_argument_lookup(void) {
   const LType *flag;
   Tokens rest;
@@ -939,9 +1001,10 @@ static void test_term_evaluator(void) {
   assert(closure.kind == BIND_CLOSURE && closure.term == argument->term);
   Value replayed = *argument;
   replayed.term = NULL;
+  /* D8 part A: a Value with no term gives a closure with no term (no token
+     TERM_BODY). Only a Value made by hand has no term. */
   Binding decoded = bound_binding(&replayed, text("g"), one_type, environment);
-  assert(decoded.kind == BIND_CLOSURE && decoded.term->tag == TERM_BODY && decoded.term->callee == NULL);
-  assert(term_tokens(decoded.term).size == term_tokens(closure.term).size);
+  assert(decoded.kind == BIND_CLOSURE && decoded.term == NULL);
 
   const char *exact[] = {"pickK", "twoList", "label", "grouped", "deep"};
   for (Nat i = 0; i < sizeof exact / sizeof exact[0]; i++) {
@@ -1163,9 +1226,9 @@ static void test_term_evaluator(void) {
      (twice), a VAR head bound to a closure (mapV, foldV) and a PARTIAL head
      over a closure param (mapC, foldC). The args text gives the closure: a
      name or a partial gives the body term of the function. An inline fun
-     gives a Value with no term (the run-time path), thus its closure has a
-     TERM_BODY with a NULL callee and its body runs by tokens (the fallback
-     rows). Each row gives the same answer at each point of the grid. */
+     gives a Value that keeps the Term of its FUN node, thus its closure has
+     the checked body Term as the callee (D8 part A). Each row gives the same
+     answer at each point of the grid. */
   const struct {
     const char *name;
     const char *args;
@@ -1190,13 +1253,15 @@ static void test_term_evaluator(void) {
     assert(full.eval == 1 && same_text(full.value, text(closures[i].value)));
   }
   /* The closure of f (the second binding of the call scope): a name gives the
-     body term of size; an inline fun gives a TERM_BODY with a NULL callee. */
+     body term of size; an inline fun gives the TERM_BODY of its FUN node,
+     with the checked body Term as the callee (D8 part A). */
   const Binding *twice_item = fun_named(environment, "twice");
   const Bindings *name_scope = call_scope(environment, twice_item, "size 4");
   assert(name_scope->tail->head.kind == BIND_CLOSURE && name_scope->tail->head.term->callee != NULL);
   const Bindings *fun_scope = call_scope(environment, twice_item, "(fun (y : Nat) => pickK 5 y) 4");
   assert(fun_scope->tail->head.kind == BIND_CLOSURE && fun_scope->tail->head.term->tag == TERM_BODY);
-  assert(fun_scope->tail->head.term->callee == NULL);
+  assert(fun_scope->tail->head.term->callee != NULL);
+  test_d8_body_term(environment);
 
   /* Budget 1 on a map over 3 items: the first item spends it. eval_term
      gives a failed answer, eBudget at the first token of the body, the same
@@ -1265,11 +1330,12 @@ static void test_term_evaluator(void) {
          bare_failure.message.size == 0);
 
   /* Term.end (part E, ruling (a)): filterON at budget 2. Term.end of the
-     last argument is the next token of the source, but the token path runs
+     last argument is the next token of the source, and the token path runs
      on the body tokens and gives eFuel at first_position of the empty rest
-     (0). The fuel step after the last argument gives unknown. At fuel 3,
-     eval_term gives a failed answer with the Failure of the token path
-     (eFuel at 0), not eFuel at Term.end. D3-s7 part A: at fuel 2,
+     (0). The fuel step after the last argument gives eFuel at Term.end of
+     the application. That is the end of the TERM_BODY of spanned_body, and
+     body_answer moves the failure to 0 (D8 part A). At fuel 3, eval_term
+     thus gives the Failure of the token path (eFuel at 0). D3-s7 part A: at fuel 2,
      eval_unary on keep gets fuel 0 and gives eFuel at keep, the same failure
      as the token path. */
   const Binding *filtered = fun_named(environment, "filterON");

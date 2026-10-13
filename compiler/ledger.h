@@ -410,8 +410,8 @@ typedef struct {
   const LType *type;
   const LType *result;
   const Bindings *scope;
-  /* The body term (D3-s5 part F). The token path gives a TERM_BODY with no
-     callee on the body tokens, and apply_body runs parse_term on its span.
+  /* The body term (D3-s5 part F). Since D8 part A no carrier gives a
+     TERM_BODY with no callee, and apply_body runs eval_term only.
      The evaluator gives the term of the binding, or for a FUN op the checked
      body (first_arg of the FUN term), which is not always a TERM_BODY. */
   const struct Term *term;
@@ -783,8 +783,9 @@ typedef enum {
    head name to the end of the argument list, the type arguments first),
    the binder span on TERM_FUN (the tokens after fun up to the body) and
    the body span on TERM_BODY. end is the position of the first token after
-   the argument list on TERM_APPLY, TERM_PARTIAL and TERM_CONSTRUCT (0 when
-   no token follows). TERM_CLOSED is an internal typed data value: closed
+   the argument list on TERM_APPLY, TERM_PARTIAL and TERM_CONSTRUCT, and
+   after the body span on a TERM_BODY of spanned_body (0 when no token
+   follows). TERM_CLOSED is an internal typed data value: closed
    keeps the type and value, and name keeps its canonical JSON text.
    A list of terms; NULL is the end. */
 typedef struct Term Term;
@@ -847,13 +848,17 @@ const Term *term_body(Tokens tokens, const Term *callee);
 Tokens term_tokens(const Term *term);
 /* checker.c: the body tokens before rest. */
 Tokens taken_tokens(Tokens body, Tokens rest);
+/* checker.c: the TERM_BODY of the body tokens before rest, with end at the
+   first token of rest (D8 part A). */
+const Term *spanned_body(Tokens body, Tokens rest, const Term *callee);
 
 /* eval_term evaluates a checked body term at run time (D3-s3). It follows
    parse_term with atom 0 on the tokens of the term: the same expected type,
    the same fuel steps and the same work charges in the same order. A
    Worked answer is int 1 with the value and the remaining budget written,
-   or 0. On 0 the caller runs the token path. eval_synth follows
-   synth_term and writes the type and the value. */
+   or 0 with the failure written. On a checked body Term the answer is never
+   0 with no failure, and no caller runs a token path (D8 part A).
+   eval_synth follows synth_term and writes the type and the value. */
 int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
               const Value **value, Nat *left, Failure *failure);
 int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left, Failure *failure);
