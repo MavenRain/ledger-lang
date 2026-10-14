@@ -796,7 +796,8 @@ static void test_construct_argument_lookup(void) {
   const LType *flag;
   Tokens rest;
   Failure failure = {0, {NULL, 0}};
-  assert(parse_type(1000, 0, NULL, lexed("Flag"), &flag, &rest, &failure) && rest.size == 0);
+  Nat type_left;
+  assert(parse_type(1000, 1000, 0, NULL, lexed("Flag"), &flag, &rest, &type_left, &failure) && rest.size == 0);
   Params param = {{text("x"), flag}, NULL};
   Bindings identity = {{.kind = BIND_FUN, .name = text("idFlag"), .type = flag, .params = &param,
                         .term = term_body(lexed("x"), term_var(0, 0, text("x"), 0))}, NULL};
@@ -806,7 +807,7 @@ static void test_construct_argument_lookup(void) {
   Tokens truth_tokens = lexed("flagYes");
   assert(parse_term(1000, 1000, 0, flag, &identity, truth_tokens, &value, &rest, &left, &truth, &failure));
   const LType *universe;
-  assert(parse_type(1000, 0, NULL, lexed("Type 0"), &universe, &rest, &failure) && rest.size == 0);
+  assert(parse_type(1000, 1000, 0, NULL, lexed("Type 0"), &universe, &rest, &left, &failure) && rest.size == 0);
   Params type_param = {{text("A"), universe}, NULL};
   LType equality = {.tag = TY_EQ, .left = flag, .lhs = {.kind = VAL_VAR}, .rhs = {.kind = VAL_VAR}};
   Params proof_param = {{text("proof"), &equality}, NULL};
@@ -824,7 +825,8 @@ static void test_construct_argument_lookup(void) {
               {"Flag", "flagNo", 1}};
   for (Nat row = 0; row < sizeof rows / sizeof rows[0]; row++) {
     const LType *expected;
-    assert(parse_type(1000, 0, &identity, lexed(rows[row].type), &expected, &rest, &failure) && rest.size == 0);
+    assert(parse_type(1000, 1000, 0, &identity, lexed(rows[row].type), &expected, &rest, &left, &failure) &&
+           rest.size == 0);
     Tokens tokens = lexed(rows[row].body);
     const Term *node = NULL;
     assert(parse_term(1000, 1000, 0, expected, &identity, tokens, &value, &rest, &left, &node, &failure) &&
@@ -1609,7 +1611,7 @@ static void test_refused_nodes(void) {
   Tokens rest;
   Nat left;
   const Value *items_300;
-  assert(parse_type(1000, 0, NULL, lexed("List Nat"), &list_nat, &rest, &failure));
+  assert(parse_type(1000, 1000, 0, NULL, lexed("List Nat"), &list_nat, &rest, &left, &failure));
   assert(parse_term(1000, 1000, 0, list_nat, NULL, lexed("cons 300 nil"), &items_300, &rest, &left, NULL, &failure));
   const Binding *filter_item = fun_named(environment, "filterT");
   const Bindings *filter_scope = call_scope(environment, filter_item, "4 \"ab\"");
@@ -1637,7 +1639,7 @@ static void test_refused_nodes(void) {
   construct.term = construct_body("p", "p", NULL);
   assert(refused_at(both_paths(call_scope(environment, flag_item, "4 flagYes"), &construct, 1000, 1000), eTerm, 0));
   const LType *nat;
-  assert(parse_type(1000, 0, NULL, lexed("Nat"), &nat, &rest, &failure));
+  assert(parse_type(1000, 1000, 0, NULL, lexed("Nat"), &nat, &rest, &left, &failure));
   LType equality = {.tag = TY_EQ, .left = nat, .lhs = {.kind = VAL_VAR}, .rhs = {.kind = VAL_VAR}};
   const Value *five;
   assert(parse_term(1000, 1000, 0, nat, NULL, lexed("5"), &five, &rest, &left, NULL, &failure));
@@ -2275,7 +2277,8 @@ static const LType *sigma_parsed(const char *source) {
   const LType *type;
   Tokens rest;
   Failure failure = {0, {NULL, 0}};
-  assert(parse_type(1000, 0, NULL, lexed(source), &type, &rest, &failure) && rest.size == 0);
+  Nat left;
+  assert(parse_type(1000, 1000, 0, NULL, lexed(source), &type, &rest, &left, &failure) && rest.size == 0);
   return type;
 }
 
@@ -3451,6 +3454,88 @@ static void test_d9_function_budget(void) {
   assert(same_text(failure.message, eBudget));
 }
 
+/* D10: a Sigma side in a type runs on the work budget. At budget 1 the
+   body of id is over the budget. At budget 1000 left is less than the
+   budget, because the sides evaluate bodies. */
+static void test_d10_type_budget(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text("def id : (x : Nat) -> Nat := fun (x : Nat) => x\n"), &environment, &failure));
+  const char *source = "Sigma (x : Nat) (Eq Nat (id 2) (id 2))";
+  const LType *type;
+  Tokens rest;
+  Nat left = 0;
+  assert(!parse_type(1000, 1, 0, environment, lexed(source), &type, &rest, &left, &failure));
+  /* D10 delta: on the eBudget failure, *left keeps the budget (1), not 0. */
+  assert(same_text(failure.message, eBudget) && failure.position == 46 && left == 1);
+  failure = (Failure){0, {NULL, 0}};
+  assert(parse_type(1000, 1000, 0, environment, lexed(source), &type, &rest, &left, &failure) && rest.size == 0);
+  assert(type->tag == TY_SIGMA && left == 998);
+}
+
+/* Computed type arguments remain available when a partial application
+   becomes a callback, on both the token and checked-term paths. */
+static void test_d10_partial_type_arguments(void) {
+  const char *prefix =
+      "def id : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+      "def F : Type 0 := (n : Nat) -> Nat\n"
+      "def pick : (A : Type 0) -> (n : Nat) -> Nat := fun (A : Type 0) (n : Nat) => n\n"
+      "def call : (f : F) -> (n : Nat) -> Nat := fun (f : F) (n : Nat) => f n\n"
+      "def step : (A : Type 0) -> (n : Nat) -> (a : Nat) -> Nat := "
+      "fun (A : Type 0) (n : Nat) (a : Nat) => n\n"
+      "def xs : List Nat := cons 7 nil\n";
+  const struct { const char *source; const char *expected; } rows[] = {
+      {"def out : Nat := call (pick (Sigma (x : Nat) (Eq Nat (id 2) 2))) 7\n", "7"},
+      {"def outer : (n : Nat) -> Nat := fun (n : Nat) => "
+       "call (pick (Sigma (x : Nat) (Eq Nat (id 2) 2))) n\n"
+       "def out : Nat := outer 7\n", "7"},
+      {"def out : List Nat := map (pick (Sigma (x : Nat) (Eq Nat (id 2) 2))) (cons 7 nil)\n", "[7]"},
+      {"def outer : (n : Nat) -> List Nat := fun (n : Nat) => "
+       "map (pick (Sigma (x : Nat) (Eq Nat (id 2) 2))) (cons n nil)\n"
+       "def out : List Nat := outer 7\n", "[7]"},
+      {"def out : Nat := fold (step (Sigma (x : Nat) (Eq Nat (id 2) 2))) 0 xs\n", "7"},
+      {"def outer : (n : Nat) -> Nat := fun (n : Nat) => "
+       "fold (step (Sigma (x : Nat) (Eq Nat (id 2) 2))) n xs\n"
+       "def out : Nat := outer 7\n", "7"}
+  };
+  for (Nat row = 0; row < sizeof rows / sizeof rows[0]; row++) {
+    char source[1024];
+    int size = snprintf(source, sizeof source, "%s%s", prefix, rows[row].source);
+    assert(size > 0 && (size_t)size < sizeof source);
+    const Bindings *environment = NULL;
+    Failure failure = {0};
+    int accepted = check_definitions(text(source), &environment, &failure);
+    if (!accepted)
+      fprintf(stderr, "partial type argument row %lu: failure at byte %lu\n", (unsigned long)row,
+              (unsigned long)failure.position);
+    assert(accepted);
+    const Binding *out;
+    assert(lookup(text("out"), environment, &out));
+    assert(same_text(printed(out->value), text(rows[row].expected)));
+  }
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text(prefix), &environment, &failure));
+  Tokens tokens = lexed("call (pick (Sigma (x : Nat) (Eq Nat (id 2) 2))) 7");
+  Tokens rest;
+  const Value *value;
+  const Term *term = NULL;
+  Nat left;
+  const LType *nat;
+  assert(parse_type(1000, 4, 0, environment, lexed("Nat"), &nat, &rest, &left, &failure));
+  /* One type-side body, call, and pick cost three units. Rebuilding the
+     callback consumes no extra work and never replenishes the budget. */
+  assert(parse_term(1000, 4, 0, nat, environment, tokens, &value, &rest, &left, &term, &failure));
+  assert(rest.size == 0 && left == 1 && same_text(printed(value), text("7")));
+  assert(eval_term(1000, 4, nat, environment, term, &value, &left, &failure));
+  assert(left == 1 && same_text(printed(value), text("7")));
+  assert(!parse_term(1000, 3, 0, nat, environment, tokens, &value, &rest, &left, NULL, &failure));
+  assert(same_text(failure.message, eBudget));
+  failure = (Failure){0};
+  assert(!eval_term(1000, 3, nat, environment, term, &value, &left, &failure));
+  assert(same_text(failure.message, eBudget));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3497,6 +3582,8 @@ int main(void) {
   test_d9_side_budget();
   test_d9_parameter_budget_failure();
   test_d9_function_budget();
+  test_d10_type_budget();
+  test_d10_partial_type_arguments();
   puts("C module tests passed");
   return 0;
 }

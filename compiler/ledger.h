@@ -210,9 +210,11 @@ struct Attrs {
 };
 
 struct Term;
+struct Bindings;
 
 /* term is the TERM_BODY of an inline argument (D3-s4), else NULL. same_value
-   and the printer do not read it. */
+   and the printer do not read it. chosen keeps resolved type arguments in
+   the first bound Value of a typed partial application. */
 struct Value {
   ValueKind kind;
   Flag flag;
@@ -221,6 +223,7 @@ struct Value {
   const Values *items;
   const Attrs *attrs;
   const struct Term *term;
+  const struct Bindings *chosen;
 };
 
 Nat has_field(Text key, const Attrs *attrs);
@@ -382,10 +385,10 @@ int data_type(Nat position, const LType *argument, const LType *result, Tokens t
               Tokens *rest, Failure *failure);
 int data_types(Nat at, const LType *a, Nat bt, const LType *b, const LType *result, Tokens tokens, const LType **type,
                Tokens *rest, Failure *failure);
-int parse_type(Fuel fuel, Nat atom, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
-               Failure *failure);
-int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params *done, Tokens tokens,
-                  const LType **type, Tokens *rest, Failure *failure);
+int parse_type(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tokens tokens, const LType **type,
+               Tokens *rest, Nat *left, Failure *failure);
+int parse_type_in(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, const Params *done, Tokens tokens,
+                  const LType **type, Tokens *rest, Nat *left, Failure *failure);
 /* program.c: the tokens after `Sigma`. done holds the earlier parameters. An
    Eq side takes the work budget, and left gets the rest. */
 int sigma_type(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
@@ -446,8 +449,9 @@ Nat has_value_param(const Params *params);
 const LType *type_argument(Text name, const Bindings *chosen);
 const LType *subst_type(const Bindings *chosen, const LType *ty);
 const Params *value_params(const Bindings *chosen, const Params *params);
-int type_arguments(Fuel fuel, const Params *params, const Bindings *environment, const Bindings *chosen,
-                   Tokens tokens, const Bindings **result, Tokens *rest, const struct TermTypes **types, Failure *failure);
+int type_arguments(Fuel fuel, Nat budget, const Params *params, const Bindings *environment, const Bindings *chosen,
+                   Tokens tokens, const Bindings **result, Tokens *rest, const struct TermTypes **types, Nat *left,
+                   Failure *failure);
 const Bindings *definition_scope(Text name, const Bindings *environment);
 Binding opaque_closure(Text name, const LType *ty);
 Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings *caller);
@@ -466,7 +470,8 @@ const Params *inline_params(const Values *names, const Params *params);
 Binding inline_closure(Text name, const LType *ty, const Value *value, const Bindings *caller);
 Fuel type_fuel(Tokens tokens);
 Tokens type_tokens_of(const Value *types);
-const Values *typed_bound(const Params *params, Tokens tokens, Tokens rest, const Values *values);
+const Values *typed_bound(const Params *params, const Bindings *chosen, Tokens tokens, Tokens rest,
+                          const Values *values);
 Binding bound_binding(const Value *value, Text name, const LType *ty, const Bindings *caller);
 const Bindings *bind_bound(const Values *values, const Params *params, const Bindings *caller,
                            const Bindings *scope);
@@ -581,10 +586,10 @@ typedef struct {
 } Grown;
 
 const LType *inline_result(Nat mode, const LType *expected, const Params *params);
-int inline_binder(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, Param *binder,
-                  Tokens *rest, Failure *failure);
-int inline_binders(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, const Params **binders,
-                   Tokens *body, Failure *failure);
+int inline_binder(Fuel fuel, Nat budget, const Bindings *environment, const Bindings *seen, Tokens tokens,
+                  Param *binder, Tokens *rest, Nat *left, Failure *failure);
+int inline_binders(Fuel fuel, Nat budget, const Bindings *environment, const Bindings *seen, Tokens tokens,
+                   const Params **binders, Tokens *body, Nat *left, Failure *failure);
 Nat layer_index(const Value *layer);
 const Value *layer_payload(const Value *layer);
 const Values *grown_items(Grown built);
@@ -638,7 +643,8 @@ int partial_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType 
                      const Params *params, const LType *result, const Bindings *environment, Tokens tokens,
                      const Value **value, Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
-                    const Params *params, const Params *formal, const LType *result, const Bindings *environment,
+                    const Params *params, const Params *formal, const LType *result, const Bindings *chosen,
+                    const Bindings *environment,
                     Tokens tokens, Tokens after_types, const Value **value, Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int inline_argument(Fuel fuel, Nat budget, Nat position, const LType *expected, const Bindings *environment,
                     Tokens tokens, const Value **value, Tokens *rest, Nat *left, const struct Term **term, Failure *failure);

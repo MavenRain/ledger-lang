@@ -675,14 +675,16 @@ static const Params *side_params(const Bindings *chosen, const Params *params) {
 }
 
 /* One type argument for each leading type parameter. The fuel goes to
-   parse_type unchanged, as in the mech. */
-int type_arguments(Fuel fuel, const Params *params, const Bindings *environment, const Bindings *chosen,
-                   Tokens tokens, const Bindings **result, Tokens *rest, const TermTypes **types, Failure *failure) {
+   parse_type unchanged, as in the mech. D10: each type argument runs on
+   the rest of the work budget, and left gets the rest. */
+int type_arguments(Fuel fuel, Nat budget, const Params *params, const Bindings *environment, const Bindings *chosen,
+                   Tokens tokens, const Bindings **result, Tokens *rest, const TermTypes **types, Nat *left,
+                   Failure *failure) {
   const TermTypes *done = NULL;
   for (; params != NULL && is_type_param(params->head); params = params->tail) {
     const LType *given;
     Tokens after;
-    if (!parse_type(fuel, 1, environment, tokens, &given, &after, failure)) return 0;
+    if (!parse_type(fuel, budget, 1, environment, tokens, &given, &after, &budget, failure)) return 0;
     if (type_level(given) != 0) return fail_at(failure, first_position(tokens), eData);
     chosen = bindings_item(type_binding(params->head.name, params->head.type, given), chosen);
     if (types != NULL)
@@ -695,6 +697,7 @@ int type_arguments(Fuel fuel, const Params *params, const Bindings *environment,
   }
   *result = chosen;
   *rest = tokens;
+  *left = budget;
   if (types != NULL) {
     const TermTypes *ordered = NULL;
     for (; done != NULL; done = done->tail) ordered = term_types_item(done->head, ordered);
@@ -824,12 +827,16 @@ Tokens type_tokens_of(const Value *types) {
   return as_values(types, &items) ? inline_tokens(items) : (Tokens){0};
 }
 
-/* A partial application of a function with type parameters keeps the tokens
-   of its type arguments (tokens less rest) as its first bound value. */
-const Values *typed_bound(const Params *params, Tokens tokens, Tokens rest, const Values *values) {
+/* A partial application keeps both the tokens and the resolved type
+   arguments. Closure reconstruction reuses the already-budgeted types. */
+const Values *typed_bound(const Params *params, const Bindings *chosen, Tokens tokens, Tokens rest,
+                          const Values *values) {
   if (!has_type_param(params)) return values;
   Nat used = tokens.size > rest.size ? tokens.size - rest.size : 0;
-  return values_item(items_value(inline_token_values((Tokens){tokens.items, used})), values);
+  const Value *types = make_value((Value){.kind = VALUE_ITEMS,
+                                        .items = inline_token_values((Tokens){tokens.items, used}),
+                                        .chosen = chosen});
+  return values_item(types, values);
 }
 
 static Binding typed_closure(const Values *rest, Text name, const LType *ty, Text other, const Params *params,
@@ -879,14 +886,19 @@ const Bindings *bind_bound(const Values *values, const Params *params, const Bin
    in front of the definition scope, as an application does. */
 static Binding typed_closure(const Values *rest, Text name, const LType *ty, Text other, const Params *params,
                              const LType *result, const Term *term, const Bindings *caller) {
-  const Bindings *chosen;
-  Tokens after;
-  Failure ignored;
   if (rest == NULL) return opaque_closure(name, ty);
-  Tokens types = type_tokens_of(rest->head);
+  const Bindings *chosen = rest->head->chosen;
   const Values *values = rest->tail;
-  if (!type_arguments(type_fuel(types), params, caller, NULL, types, &chosen, &after, NULL, &ignored))
-    return opaque_closure(name, ty);
+  if (chosen == NULL) {
+    Tokens types = type_tokens_of(rest->head);
+    Tokens after;
+    Failure ignored;
+    Nat unused;
+    /* Token-only carriers can reconstruct types that evaluate no bodies.
+       Checked partial applications keep their resolved types above. */
+    if (!type_arguments(type_fuel(types), 1, params, caller, NULL, types, &chosen, &after, NULL, &unused, &ignored))
+      return opaque_closure(name, ty);
+  }
   const Params *formal = value_params(chosen, params);
   return closure_binding(name, drop_params(values_length(values), formal), subst_type(chosen, result), term,
                          bind_bound(values, formal, caller,
@@ -1404,8 +1416,8 @@ const LType *inline_result(Nat mode, const LType *expected, const Params *params
   return value_layer(param_seed(params));
 }
 
-int inline_binder(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, Param *binder,
-                  Tokens *rest, Failure *failure) {
+int inline_binder(Fuel fuel, Nat budget, const Bindings *environment, const Bindings *seen, Tokens tokens,
+                  Param *binder, Tokens *rest, Nat *left, Failure *failure) {
   Tokens after_open;
   if (!expect_mark(40, tokens, &after_open, failure)) return fail_at(failure, failure->position, eFun);
   if (after_open.size == 0) return fail_at(failure, first_position(tokens), eFun);
@@ -1419,7 +1431,7 @@ int inline_binder(Fuel fuel, const Bindings *environment, const Bindings *seen, 
   if (!expect_mark(58, after_name, &after_colon, failure)) return fail_at(failure, failure->position, eFun);
   const LType *ty;
   Tokens after_type;
-  if (!parse_type(fuel, 0, environment, after_colon, &ty, &after_type, failure)) return 0;
+  if (!parse_type(fuel, budget, 0, environment, after_colon, &ty, &after_type, left, failure)) return 0;
   if (type_level(ty) != 0) return fail_at(failure, first_position(after_colon), eData);
   if (!expect_mark(41, after_type, rest, failure)) return fail_at(failure, failure->position, eFun);
   *binder = (Param){head.text, ty};
@@ -1428,19 +1440,20 @@ int inline_binder(Fuel fuel, const Bindings *environment, const Bindings *seen, 
 
 /* Each binder takes one unit of fuel (fuelMore), and the binder itself
    parses its type with the fuel that remains. */
-int inline_binders(Fuel fuel, const Bindings *environment, const Bindings *seen, Tokens tokens, const Params **binders,
-                   Tokens *body, Failure *failure) {
+int inline_binders(Fuel fuel, Nat budget, const Bindings *environment, const Bindings *seen, Tokens tokens,
+                   const Params **binders, Tokens *body, Nat *left, Failure *failure) {
   const Params *done = NULL;
   for (;;) {
     if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
     Fuel more = fuel - 1;
     Param binder;
     Tokens after_binder;
-    if (!inline_binder(more, environment, seen, tokens, &binder, &after_binder, failure)) return 0;
+    if (!inline_binder(more, budget, environment, seen, tokens, &binder, &after_binder, &budget, failure)) return 0;
     done = params_item(binder, done);
     Failure ignored;
     if (expect_mark(63, after_binder, body, &ignored)) {
       *binders = reverse_params_onto(NULL, done);
+      *left = budget;
       return 1;
     }
     environment = bind_params(params_item(binder, NULL), NULL, environment);
@@ -2188,8 +2201,8 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         const Bindings *chosen;
         Tokens after_types;
         const TermTypes *types = NULL;
-        if (!type_arguments(more, item->params, environment, NULL, tail, &chosen, &after_types,
-                            want_types(term, &types), failure))
+        if (!type_arguments(more, budget, item->params, environment, NULL, tail, &chosen, &after_types,
+                            want_types(term, &types), &budget, failure))
           return 0;
         const Values *values;
         const Terms *args = NULL;
@@ -2235,8 +2248,8 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
         const Bindings *chosen;
         Tokens after_types;
         const TermTypes *types = NULL;
-        if (!type_arguments(more, item->params, environment, NULL, tail, &chosen, &after_types,
-                            want_types(term, &types), failure))
+        if (!type_arguments(more, budget, item->params, environment, NULL, tail, &chosen, &after_types,
+                            want_types(term, &types), &budget, failure))
           return 0;
         const Params *formal = closure_params(chosen, item->params);
         const LType *result = closure_result(chosen, item->type);
@@ -2294,10 +2307,12 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
       /* D6 part B (design items 6 and 7): the motive (z : A') B, then e, then t. */
       const LType *motive;
       Tokens proof_tokens;
-      if (!sigma_type(more, 1, environment, body_params(environment), tail, &motive, &proof_tokens, &spent, failure))
+      /* D10: the motive runs on the work budget, and the proof takes the rest. */
+      if (!sigma_type(more, budget, environment, body_params(environment), tail, &motive, &proof_tokens, &spent,
+                      failure))
         return 0;
       const Term *proof = NULL;
-      if (!synth_term(more, budget, 1, environment, proof_tokens, &found, &after, &spent, want_term(term, &proof),
+      if (!synth_term(more, spent, 1, environment, proof_tokens, &found, &after, &spent, want_term(term, &proof),
                       failure))
         return 0;
       const LType *bx, *by;
@@ -2709,7 +2724,8 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
        (D3-s5 part B). An empty span gives 0 for a callee with type params. */
     const Bindings *chosen;
     Tokens after_types;
-    if (!type_arguments(fuel, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, failure))
+    if (!type_arguments(fuel, budget, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL,
+                        &budget, failure))
       return 0;
     const Values *values;
     Nat spent;
@@ -2748,7 +2764,8 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
        for a function above. */
     const Bindings *chosen;
     Tokens after_types;
-    if (!type_arguments(fuel, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, failure))
+    if (!type_arguments(fuel, budget, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL,
+                        &budget, failure))
       return 0;
     const Params *formal = closure_params(chosen, item->params);
     const LType *result = closure_result(chosen, item->type);
@@ -2849,7 +2866,7 @@ static int eval_inline_unary(Fuel fuel, Nat budget, const LType *wanted, const B
   /* inline_unary reads one binder with the tests of inline_binder: a refusal
      is the failure of the token path (D3-s8 U1). A span of one token is
      unknown: the token path gives eFun at the fun token. */
-  if (!inline_binder(fuel - 1, environment, NULL, term->tokens, &binder, &after_binder, &refused))
+  if (!inline_binder(fuel - 1, budget, environment, NULL, term->tokens, &binder, &after_binder, &budget, &refused))
     return fail_at(failure, refused.position, refused.message);
   /* Two binders are unknown: the token path gives eFun at the second `(`. */
   if (!expect_mark(63, after_binder, &body, &refused)) return 0;
@@ -2896,7 +2913,8 @@ static int eval_bound_unary(Fuel fuel, Nat budget, const Bindings *environment, 
   Fuel more = fuel - 1;
   const Bindings *chosen;
   Tokens after_types;
-  if (!type_arguments(more, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, failure))
+  if (!type_arguments(more, budget, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL,
+                      &budget, failure))
     return 0;
   const Params *formal = value_params(chosen, item->params);
   const Params *front = front_params(formal);
@@ -2908,7 +2926,7 @@ static int eval_bound_unary(Fuel fuel, Nat budget, const Bindings *environment, 
   if (bound_functions(front, values) == 0) return fail_at(failure, term->position, eTerm);
   /* Use locals, not a nested call. With the nested call, tcc on arm64 makes
      code that causes an invalid memory access. */
-  const Values *bound = typed_bound(item->params, term->tokens, after_types, values);
+  const Values *bound = typed_bound(item->params, chosen, term->tokens, after_types, values);
   const LType *ty = arrow_type(drop_params(params_length(front), formal), subst_type(chosen, item->type));
   Binding closure = partial_closure(term->name, ty, term->name, bound, environment);
   if (!unary_checked(environment, &closure, op)) return fail_at(failure, term->position, eUnary);
@@ -3122,7 +3140,7 @@ static int eval_inline_stepper(Fuel fuel, Nat budget, Nat mode, const LType *exp
   Tokens body;
   Failure refused;
   if (first_arg(term) == NULL) return 0;
-  if (!inline_binders(fuel - 1, environment, NULL, term->tokens, &params, &body, &refused))
+  if (!inline_binders(fuel - 1, budget, environment, NULL, term->tokens, &params, &body, &budget, &refused))
     return refused.position == 0 ? 0 : fail_at(failure, refused.position, refused.message);
   const LType *result = inline_result(mode, expected, params);
   const Value *checked;
@@ -3179,7 +3197,8 @@ static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment
   Fuel more = fuel - 1;
   const Bindings *chosen;
   Tokens after_types;
-  if (!type_arguments(more, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL, failure))
+  if (!type_arguments(more, budget, item->params, environment, NULL, term->tokens, &chosen, &after_types, NULL,
+                      &budget, failure))
     return 0;
   const Params *formal = value_params(chosen, item->params);
   const Params *front = take_params(terms_count(term->args), formal);
@@ -3188,7 +3207,7 @@ static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment
   if (!eval_bound_arguments(more, budget, front, environment, term->args, term->end, &values, &spent, failure)) return 0;
   if (bound_functions(front, values) == 0) return fail_at(failure, term->position, eTerm);
   /* Use locals, not a nested call, as in eval_bound_unary (tcc on arm64). */
-  const Values *bound = typed_bound(item->params, term->tokens, after_types, values);
+  const Values *bound = typed_bound(item->params, chosen, term->tokens, after_types, values);
   const LType *ty = arrow_type(drop_params(params_length(front), formal), subst_type(chosen, item->type));
   Binding made = partial_closure(term->name, ty, term->name, bound, environment);
   const Term *body = made.term;
@@ -3564,7 +3583,7 @@ static int eval_inline_argument(Fuel fuel, Nat budget, const LType *expected, co
   Failure refused = {0, {NULL, 0}};
   if (body == NULL || body->tag != TERM_BODY) return 0;
   /* inline_argument: the refusal of inline_binders at fuel - 1 (D3-s8 U2). */
-  if (!inline_binders(more, environment, NULL, term->tokens, &params, &binder_rest, &refused))
+  if (!inline_binders(more, budget, environment, NULL, term->tokens, &params, &binder_rest, &budget, &refused))
     return fail_at(failure, refused.position, refused.message);
   /* inline_argument: eTerm when the binders do not give the type (D3-s5 part E). */
   if (same_type(expected, arrow_type(params, arrow_result(expected))) != 1) return fail_at(failure, term->position, eTerm);
@@ -3596,7 +3615,8 @@ static int eval_partial_argument(Fuel fuel, Nat budget, const LType *expected, c
      then typed_bound, as partial_argument does (D3-s5 part B). */
   const Bindings *chosen;
   Tokens after_types;
-  if (!type_arguments(fuel - 1, params, environment, NULL, term->tokens, &chosen, &after_types, NULL, failure))
+  if (!type_arguments(fuel - 1, budget, params, environment, NULL, term->tokens, &chosen, &after_types, NULL, &budget,
+                      failure))
     return 0;
   /* fuel 1: the fuel step of prefix_argument, after type_arguments. */
   if (fuel == 1) return fail_at(failure, term->position, eFuel);
@@ -3613,7 +3633,7 @@ static int eval_partial_argument(Fuel fuel, Nat budget, const LType *expected, c
                       failure))
     return 0;
   if (bound_functions(bound, values) == 0) return fail_at(failure, term->position, eTerm);
-  const Values *kept = typed_bound(params, term->tokens, after_types, values);
+  const Values *kept = typed_bound(params, chosen, term->tokens, after_types, values);
   return eval_worked(make_value((Value){.kind = VALUE_ITEMS, .items = values_item(text_value(term->name), kept)}),
                      spent, value, left);
 }
@@ -3804,17 +3824,18 @@ int partial_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType 
                      term != NULL ? reference_term(position, name, environment) : NULL);
   if (dependent_result(result) == 1 || dependent_params(params) == 1) return fail_at(failure, position, eTerm);
   if (has_type_param(params) != 1)
-    return prefix_argument(more, budget, atom, position, expected, name, params, params, result, environment, tokens,
+    return prefix_argument(more, budget, atom, position, expected, name, params, params, result, NULL, environment, tokens,
                            tokens, value, rest, left, term, failure);
   if (atom == 1) return fail_at(failure, position, eTerm);
   const Bindings *chosen;
   Tokens after_types;
   const TermTypes *types = NULL;
-  if (!type_arguments(more, params, environment, NULL, tokens, &chosen, &after_types, want_types(term, &types), failure))
+  if (!type_arguments(more, budget, params, environment, NULL, tokens, &chosen, &after_types, want_types(term, &types),
+                      &budget, failure))
     return 0;
   const Term *partial = NULL;
   int ok = prefix_argument(more, budget, atom, position, expected, name, params, value_params(chosen, params),
-                           subst_type(chosen, result), environment, tokens, after_types, value, rest, left,
+                           subst_type(chosen, result), chosen, environment, tokens, after_types, value, rest, left,
                            want_term(term, &partial), failure);
   return with_term(ok, term,
                    partial != NULL ? term_call(TERM_PARTIAL, position, 0, partial->tokens, partial->end, partial->name,
@@ -3823,7 +3844,8 @@ int partial_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType 
 }
 
 int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected, Text name,
-                    const Params *params, const Params *formal, const LType *result, const Bindings *environment,
+                    const Params *params, const Params *formal, const LType *result, const Bindings *chosen,
+                    const Bindings *environment,
                     Tokens tokens, Tokens after_types, const Value **value, Tokens *rest, Nat *left, const Term **term, Failure *failure) {
   if (fuel == 0) return fail_at(failure, position, eFuel);
   Fuel more = fuel - 1;
@@ -3841,7 +3863,7 @@ int prefix_argument(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *
   if (bound_functions(bound, values))
     return with_term(worked_value(
         make_value((Value){.kind = VALUE_ITEMS,
-                           .items = values_item(text_value(name), typed_bound(params, tokens, after_types, values))}),
+                           .items = values_item(text_value(name), typed_bound(params, chosen, tokens, after_types, values))}),
                          after, spent, value, rest, left),
                      term,
                      term != NULL ? named_term(TERM_PARTIAL, position, name, NULL, args, taken_tokens(tokens, after),
@@ -3856,7 +3878,7 @@ int inline_argument(Fuel fuel, Nat budget, Nat position, const LType *expected, 
   Fuel more = fuel - 1;
   const Params *params;
   Tokens body;
-  if (!inline_binders(more, environment, NULL, tokens, &params, &body, failure)) return 0;
+  if (!inline_binders(more, budget, environment, NULL, tokens, &params, &body, &budget, failure)) return 0;
   if (same_type(expected, arrow_type(params, arrow_result(expected))) != 1) return fail_at(failure, position, eTerm);
   const Value *checked;
   Tokens after;
@@ -4054,7 +4076,8 @@ int side_normal_at(Fuel fuel, Nat budget, const Bindings *scope, const LType *ty
   if (node->tag == TERM_APPLY && lookup(node->name, scope, &item) && item->kind == BIND_FUN) {
     const Bindings *chosen;
     Tokens after;
-    if (!type_arguments(more, item->params, scope, NULL, node->tokens, &chosen, &after, NULL, failure)) return 0;
+    if (!type_arguments(more, budget, item->params, scope, NULL, node->tokens, &chosen, &after, NULL, &budget, failure))
+      return 0;
     types = param_types(side_params(chosen, item->params));
   }
   if (types != NULL) {
@@ -4279,7 +4302,7 @@ int inline_unary(Fuel fuel, Nat budget, Nat position, const LType *wanted, const
     if (!expect_mark(58, after_name, &after_colon, &refused)) return fail_at(failure, refused.position, eFun);
     const LType *ty;
     Tokens after_type;
-    if (!parse_type(more, 0, environment, after_colon, &ty, &after_type, failure)) return 0;
+    if (!parse_type(more, budget, 0, environment, after_colon, &ty, &after_type, &budget, failure)) return 0;
     if (type_level(ty) != 0) return fail_at(failure, first_position(after_colon), eData);
     Tokens after_binder;
     if (!expect_mark(41, after_type, &after_binder, &refused)) return fail_at(failure, refused.position, eFun);
@@ -4316,7 +4339,8 @@ int bound_unary(Fuel fuel, Nat budget, Nat position, Text name, const Params *pa
   const Bindings *chosen;
   Tokens after_types;
   const TermTypes *types = NULL;
-  if (!type_arguments(more, params, environment, NULL, tokens, &chosen, &after_types, want_types(term, &types), failure))
+  if (!type_arguments(more, budget, params, environment, NULL, tokens, &chosen, &after_types, want_types(term, &types),
+                      &budget, failure))
     return 0;
   const Params *formal = value_params(chosen, params);
   const Params *front = front_params(formal);
@@ -4330,7 +4354,7 @@ int bound_unary(Fuel fuel, Nat budget, Nat position, Text name, const Params *pa
   if (bound_functions(front, values) == 0) return fail_at(failure, position, eTerm);
   Binding closure =
       partial_closure(name, arrow_type(drop_params(params_length(front), formal), subst_type(chosen, result)), name,
-                      typed_bound(params, tokens, after_types, values), environment);
+                      typed_bound(params, chosen, tokens, after_types, values), environment);
   Unary shaped;
   if (!unary_of(environment, &closure, &shaped)) return fail_at(failure, position, eUnary);
   *op = shaped;
@@ -4429,7 +4453,7 @@ int inline_stepper(Fuel fuel, Nat budget, Nat position, Nat mode, const LType *e
   Fuel more = fuel - 1;
   const Params *params = NULL;
   Tokens body = {0};
-  if (!inline_binders(more, environment, NULL, tokens, &params, &body, failure)) return 0;
+  if (!inline_binders(more, budget, environment, NULL, tokens, &params, &body, &budget, failure)) return 0;
   const LType *result = inline_result(mode, expected, params);
   const Value *value = NULL;
   Tokens after = {0};
@@ -4458,7 +4482,8 @@ int bound_stepper(Fuel fuel, Nat budget, Nat position, Text name, const Params *
   const Bindings *chosen = NULL;
   Tokens after_types = {0};
   const TermTypes *types = NULL;
-  if (!type_arguments(more, params, environment, NULL, tokens, &chosen, &after_types, want_types(term, &types), failure))
+  if (!type_arguments(more, budget, params, environment, NULL, tokens, &chosen, &after_types, want_types(term, &types),
+                      &budget, failure))
     return 0;
   const Params *formal = value_params(chosen, params);
   const Values *values = NULL;
@@ -4471,7 +4496,7 @@ int bound_stepper(Fuel fuel, Nat budget, Nat position, Text name, const Params *
   if (bound_functions(take_params(values_length(values), formal), values) == 0)
     return fail_at(failure, position, eTerm);
   Binding made = partial_closure(name, arrow_type(drop_params(values_length(values), formal), subst_type(chosen, result)),
-                                 name, typed_bound(params, tokens, after_types, values), environment);
+                                 name, typed_bound(params, chosen, tokens, after_types, values), environment);
   const Term *called = term != NULL ? named_term(TERM_PARTIAL, position, name, types, args, taken_tokens(tokens, after),
                                                  first_position(after), environment)
                                     : NULL;

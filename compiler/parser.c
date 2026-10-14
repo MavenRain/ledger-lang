@@ -136,22 +136,23 @@ int data_types(Nat at, const LType *a, Nat bt, const LType *b, const LType *resu
   return data_type(bt, b, result, tokens, type, rest, failure);
 }
 
-static int former_one(Fuel more, LTypeTag tag, const Bindings *environment, const Params *done, Tokens tail,
-                      const LType **type, Tokens *rest, Failure *failure) {
+static int former_one(Fuel more, Nat budget, LTypeTag tag, const Bindings *environment, const Params *done,
+                      Tokens tail, const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   const LType *a;
   Tokens after;
-  return parse_type_in(more, 1, environment, done, tail, &a, &after, failure)
+  return parse_type_in(more, budget, 1, environment, done, tail, &a, &after, left, failure)
     && data_type(first_position(tail), a, unary_type(tag, a), after, type, rest, failure);
 }
 
-static int former_two(Fuel more, LTypeTag tag, const Bindings *environment, const Params *done, Tokens tail,
-                      const LType **type, Tokens *rest, Failure *failure) {
+static int former_two(Fuel more, Nat budget, LTypeTag tag, const Bindings *environment, const Params *done,
+                      Tokens tail, const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   const LType *a;
   const LType *b;
   Tokens after;
   Tokens second;
-  return parse_type_in(more, 1, environment, done, tail, &a, &after, failure)
-    && parse_type_in(more, 1, environment, done, after, &b, &second, failure)
+  Nat spent;
+  return parse_type_in(more, budget, 1, environment, done, tail, &a, &after, &spent, failure)
+    && parse_type_in(more, spent, 1, environment, done, after, &b, &second, left, failure)
     && data_types(first_position(tail), a, first_position(after), b, binary_type(tag, a, b), second, type, rest,
                   failure);
 }
@@ -175,16 +176,17 @@ const Params *body_params(const Bindings *environment) {
   return &params[count - 1];
 }
 
-int parse_type(Fuel fuel, Nat atom, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
-               Failure *failure) {
-  return parse_type_in(fuel, atom, environment, body_params(environment), tokens, type, rest, failure);
+int parse_type(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tokens tokens, const LType **type,
+               Tokens *rest, Nat *left, Failure *failure) {
+  return parse_type_in(fuel, budget, atom, environment, body_params(environment), tokens, type, rest, left, failure);
 }
 
 /* An argument (atom = 1) is a nullary type name or a parenthesized type.
    done holds the earlier parameters of a signature. A Sigma binder gets the
-   next marker after them. */
-int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params *done, Tokens tokens,
-                  const LType **type, Tokens *rest, Failure *failure) {
+   next marker after them. D10: a Sigma side runs on the work budget, and
+   left gets the rest. */
+int parse_type_in(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, const Params *done, Tokens tokens,
+                  const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   Tokens after;
   Text kind;
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
@@ -197,11 +199,13 @@ int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params
   case TOKEN_STRING: return fail_at(failure, head.position, eType);
   case TOKEN_PUNCTUATION:
     if (head.number != 40) return fail_at(failure, head.position, eType);
-    return parse_type_in(more, 0, environment, done, tail, type, &after, failure) && close_parsed(after, rest, failure);
+    return parse_type_in(more, budget, 0, environment, done, tail, type, &after, left, failure)
+      && close_parsed(after, rest, failure);
   case TOKEN_IDENTIFIER: break;
   }
   Text name = head.text;
   if (atom == 1 && type_former(name) == 1) return fail_at(failure, head.position, eParen);
+  *left = budget;
   if (same_text(name, sNat) == 1) return parsed_type(&nat_type, tail, type, rest);
   if (same_text(name, sText) == 1) return parsed_type(&text_type, tail, type, rest);
   if (same_text(name, sFlag) == 1) return parsed_type(&flag_type, tail, type, rest);
@@ -209,17 +213,20 @@ int parse_type_in(Fuel fuel, Nat atom, const Bindings *environment, const Params
   if (same_text(name, sValues) == 1) return parsed_type(&values_type, tail, type, rest);
   if (same_text(name, sAttrs) == 1) return parsed_type(&attrs_type, tail, type, rest);
   if (same_text(name, sKind) == 1) return parsed_type(&kind_type, tail, type, rest);
-  if (same_text(name, sOption) == 1) return former_one(more, TY_OPTION, environment, done, tail, type, rest, failure);
-  if (same_text(name, sList) == 1) return former_one(more, TY_LIST, environment, done, tail, type, rest, failure);
-  if (same_text(name, sProd) == 1) return former_two(more, TY_PROD, environment, done, tail, type, rest, failure);
-  if (same_text(name, sSum) == 1) return former_two(more, TY_SUM, environment, done, tail, type, rest, failure);
-  Nat used;
-  if (same_text(name, sSigma) == 1) return sigma_type(more, 1, environment, done, tail, type, rest, &used, failure);
+  if (same_text(name, sOption) == 1)
+    return former_one(more, budget, TY_OPTION, environment, done, tail, type, rest, left, failure);
+  if (same_text(name, sList) == 1)
+    return former_one(more, budget, TY_LIST, environment, done, tail, type, rest, left, failure);
+  if (same_text(name, sProd) == 1)
+    return former_two(more, budget, TY_PROD, environment, done, tail, type, rest, left, failure);
+  if (same_text(name, sSum) == 1)
+    return former_two(more, budget, TY_SUM, environment, done, tail, type, rest, left, failure);
+  if (same_text(name, sSigma) == 1) return sigma_type(more, budget, environment, done, tail, type, rest, left, failure);
   if (same_text(name, sRef()) == 1)
     return parse_kind_index(more, environment, tail, &kind, &after, failure)
       && parsed_type(make_type(TY_REF, kind, 0, NULL, NULL), after, type, rest);
   if (same_text(name, opsTextQuery()) == 1)
-    return former_one(more, TY_QUERY, environment, done, tail, type, rest, failure);
+    return former_one(more, budget, TY_QUERY, environment, done, tail, type, rest, left, failure);
   if (!named_type(head.position, name, environment, tail, type, rest, failure)) return 0;
   Nat offset = 0;
   for (const Params *cell = done; cell != NULL; cell = cell->tail) offset++;

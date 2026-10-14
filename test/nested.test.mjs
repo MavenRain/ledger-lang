@@ -143,3 +143,31 @@ test('a Sigma type text gives the side terms with the bound name', () => {
     'Sigma (x : Nat) (Eq (List (Nat)) ((cons x [])) ((cons x [])))',
   ]);
 });
+
+// D10: a Sigma side in a type runs on the remaining work budget.
+const checks = source => {
+  const result = run(source);
+  assert.equal(result['ledger-lang'], 1, JSON.stringify(result));
+};
+const transported = name =>
+  'def e : Eq Nat 2 2 := refl\ndef t : Eq Nat 2 2 := refl\n' +
+  `def p : Eq Nat 2 2 := transport (z : Nat) (Eq Nat (${name} 2) z) e t\n`;
+
+test('a Sigma side in a type runs on the remaining work budget', () => {
+  checks(`${idX}def s : Sigma (x : Nat) (Eq Nat (id 2) (id 2)) := pack 2 refl\n`);
+  const sigma = 'Sigma (x : Nat) (Eq Nat (id 2) x)';
+  checks(`${idX}def g : (s : ${sigma}) -> Nat := fun (s : ${sigma}) => witness s\n`);
+  checks(`${idX}def g : (n : Nat) -> ${sigma} := fun (n : Nat) => pack 2 refl\n`);
+  checks(`${idX}def s : Sigma (x : Nat) (Sigma (y : Nat) (Eq Nat (id 2) y)) := pack 1 (pack 2 refl)\n`);
+  checks(`${idX}${transported('id')}`);
+});
+
+test('the work of a Sigma side is charged to the work budget', () => {
+  overBudget(`${doubled(11)}def s : Sigma (x : Nat) (Eq Nat (f11 2) (f11 2)) := pack 2 refl\n`);
+  overBudget(`${doubled(12)}${transported('f12')}`);
+  // The motive (4095 bodies) and the proof k 2 (4094 bodies) are each below 8 * 833 + 64 and together above it.
+  const k = 'def k : (n : Nat) -> Eq Nat (f10 n) (f10 n) := fun (n : Nat) => refl\n';
+  overBudget(
+    `${doubled(11)}${k}def t : Eq Nat 2 2 := refl\ndef p : Eq Nat 2 2 := transport (z : Nat) (Eq Nat (f11 2) z) (k 2) t\n`,
+  );
+});

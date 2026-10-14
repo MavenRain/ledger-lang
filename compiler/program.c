@@ -111,12 +111,13 @@ static int parse_eq_type(Nat position, Fuel fuel, Nat budget, const Bindings *en
                          const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   const LType *a;
   Tokens after_type;
-  if (!parse_type(fuel, 1, environment, tokens, &a, &after_type, failure)) return 0;
+  Nat typed;
+  if (!parse_type(fuel, budget, 1, environment, tokens, &a, &after_type, &typed, failure)) return 0;
   if (type_level(a) != 0) return fail_at(failure, first_position(tokens), eData);
   const Value *lhs;
   Tokens after_left;
   Nat spent;
-  if (!parse_term(fuel, budget, 1, a, environment, after_type, &lhs, &after_left, &spent, NULL, failure)) return 0;
+  if (!parse_term(fuel, typed, 1, a, environment, after_type, &lhs, &after_left, &spent, NULL, failure)) return 0;
   const Value *rhs;
   Tokens after_right;
   Nat remaining;
@@ -130,7 +131,7 @@ static int declared_type(Fuel fuel, Nat budget, const Bindings *environment, Tok
   if (tokens.size != 0 && tokens.items[0].kind == TOKEN_IDENTIFIER && same_text(tokens.items[0].text, sEq) == 1)
     return parse_eq_type(tokens.items[0].position, fuel, budget, environment, drop_token(tokens), type, rest, left,
                          failure);
-  return lift_parsed(budget, parse_type(fuel, 0, environment, tokens, type, rest, failure), left);
+  return parse_type(fuel, budget, 0, environment, tokens, type, rest, left, failure);
 }
 
 /* The mark of a first punctuation token, else 1. No punctuation has mark 1. */
@@ -207,19 +208,21 @@ static int named_signature(const Bindings *environment, Tokens tokens, Signature
 /* The type of a parameter can also be the name of a function type, also of
    a function type with a type parameter, as ReadPath (step D7b). The argument
    of this parameter is a function. */
-static int parameter_type(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens,
-                          const LType **type, Tokens *rest, Failure *failure) {
+static int parameter_type(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                          const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   if (mark_of(tokens) == 40) {
     Tokens inside;
-    if (!parameter_type(fuel - 1, environment, done, drop_token(tokens), type, &inside, failure)) return 0;
+    if (!parameter_type(fuel - 1, budget, environment, done, drop_token(tokens), type, &inside, left, failure))
+      return 0;
     return close_parsed(inside, rest, failure);
   }
   Signature found;
   if (!named_signature(environment, tokens, &found))
-    return parse_type_in(fuel, 0, environment, done, tokens, type, rest, failure);
+    return parse_type_in(fuel, budget, 0, environment, done, tokens, type, rest, left, failure);
   *type = arrow_type(found.params, found.result);
   *rest = drop_token(tokens);
+  *left = budget;
   return 1;
 }
 
@@ -470,13 +473,14 @@ static int eq_result(Fuel fuel, Nat budget, const Bindings *environment, const P
                      const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   const LType *a;
   Tokens after_type;
-  if (!parse_type_in(fuel, 1, environment, done, tokens, &a, &after_type, failure)) return 0;
+  Nat typed;
+  if (!parse_type_in(fuel, budget, 1, environment, done, tokens, &a, &after_type, &typed, failure)) return 0;
   if (type_level(a) != 0) return fail_at(failure, first_position(tokens), eData);
   Val lhs;
   Val rhs;
   Tokens after_left;
   Nat spent;
-  if (!eq_side(fuel, budget, a, environment, done, after_type, &lhs, &after_left, &spent, failure)) return 0;
+  if (!eq_side(fuel, typed, a, environment, done, after_type, &lhs, &after_left, &spent, failure)) return 0;
   if (!eq_side(fuel, spent, a, environment, done, after_left, &rhs, rest, left, failure)) return 0;
   *type = eq_type(a, lhs, rhs);
   return 1;
@@ -484,13 +488,15 @@ static int eq_result(Fuel fuel, Nat budget, const Bindings *environment, const P
 
 /* A of `Sigma (x : A) B` or of the short form `Sigma A B`. The short form
    has no binder name. */
-static int sigma_domain(Fuel fuel, const Bindings *environment, const Params *done, Tokens tokens, Text *name,
-                        const LType **a, Tokens *rest, Failure *failure) {
+static int sigma_domain(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                        Text *name, const LType **a, Tokens *rest, Nat *left, Failure *failure) {
   Tokens inside;
   *name = text_end();
-  if (starts_param(tokens) != 1) return parse_type_in(fuel, 1, environment, done, tokens, a, rest, failure);
+  if (starts_param(tokens) != 1)
+    return parse_type_in(fuel, budget, 1, environment, done, tokens, a, rest, left, failure);
   if (!name_of(drop_token(tokens), name)) return fail_at(failure, first_position(tokens), eType);
-  return parse_type_in(fuel, 0, environment, done, drop_token(drop_token(drop_token(tokens))), a, &inside, failure)
+  return parse_type_in(fuel, budget, 0, environment, done, drop_token(drop_token(drop_token(tokens))), a, &inside,
+                       left, failure)
     && close_parsed(inside, rest, failure);
 }
 
@@ -502,9 +508,8 @@ static int sigma_body(Fuel fuel, Nat budget, const Bindings *environment, const 
   if (mark_of(tokens) == 40 && is_word(sEq, drop_token(tokens)) == 1)
     return eq_result(fuel, budget, environment, done, drop_token(drop_token(tokens)), b, &inside, left, failure)
       && close_parsed(inside, rest, failure);
-  if (!parse_type_in(fuel, 1, environment, done, tokens, b, rest, failure)) return 0;
+  if (!parse_type_in(fuel, budget, 1, environment, done, tokens, b, rest, left, failure)) return 0;
   if (type_level(*b) != 0) return fail_at(failure, first_position(tokens), eType);
-  *left = budget;
   return 1;
 }
 
@@ -518,13 +523,14 @@ int sigma_type(Fuel fuel, Nat budget, const Bindings *environment, const Params 
   Text name;
   const LType *a;
   Tokens after_a;
-  if (!sigma_domain(more, environment, done, tokens, &name, &a, &after_a, failure)) return 0;
+  Nat spent;
+  if (!sigma_domain(more, budget, environment, done, tokens, &name, &a, &after_a, &spent, failure)) return 0;
   if (type_level(a) != 0 || a->tag == TY_EQ) return fail_at(failure, first_position(tokens), eType);
   const Params *inner = param_cons((Param){name, a}, done);
   const Bindings *scope =
     starts_param(tokens) == 1 ? bind_params(param_cons((Param){name, a}, NULL), NULL, environment) : environment;
   const LType *b;
-  if (!sigma_body(more, budget, scope, inner, after_a, &b, rest, left, failure)) return 0;
+  if (!sigma_body(more, spent, scope, inner, after_a, &b, rest, left, failure)) return 0;
   *type = make_type((LType){.tag = TY_SIGMA, .name = name, .level = param_count(done), .left = a, .right = b});
   return 1;
 }
@@ -552,7 +558,7 @@ static int param_declared(Fuel fuel, Nat budget, const Bindings *environment, co
                           const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   if (is_word(sEq, tokens) == 1)
     return eq_result(fuel, budget, environment, done, drop_token(tokens), type, rest, left, failure);
-  return lift_parsed(budget, parameter_type(fuel, environment, done, tokens, type, rest, failure), left);
+  return parameter_type(fuel, budget, environment, done, tokens, type, rest, left, failure);
 }
 
 static int parse_param(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
@@ -606,11 +612,10 @@ static int parse_signature(Fuel fuel, Nat budget, const Bindings *environment, c
       *found = (Signature){reverse_params_onto(NULL, done), result};
       return 1;
     }
-    if (!parse_type_in(more, 0, environment, done, tokens, &result, rest, failure)) return 0;
+    if (!parse_type_in(more, budget, 0, environment, done, tokens, &result, rest, left, failure)) return 0;
     /* The result can also be a Query type (step D7a). */
     if (type_level(result) != 0 && is_query_type(result) != 1) return fail_at(failure, first_position(tokens), eData);
     *found = (Signature){reverse_params_onto(NULL, done), result};
-    *left = budget;
     return 1;
   }
   Param item;
@@ -749,10 +754,9 @@ static int parse_definition(Fuel fuel, Nat budget, const Bindings *environment, 
     return 1;
   }
   const LType *inner;
-  if (!parse_type(fuel, 0, environment, after_assign, &inner, rest, failure)) return 0;
+  if (!parse_type(fuel, spent, 0, environment, after_assign, &inner, rest, left, failure)) return 0;
   if (type_level(type) != type_level(inner) + 1) return fail_at(failure, first_position(after_assign), eUniverse);
   *item = (Binding){.kind = BIND_TYPE, .name = name, .type = type, .defined = inner};
-  *left = spent;
   return 1;
 }
 
