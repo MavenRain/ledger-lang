@@ -442,6 +442,8 @@ Binding check_marker(void);
 /* The count of TERM_VAR walks that found no binder by slot (D3-s6 part C). */
 Nat slot_mismatches(void);
 Nat checking_body(const Bindings *environment);
+/* The environment without the unnamed checking frames (D11 part A). */
+const Bindings *closed_environment(const Bindings *environment);
 const LTypes *param_types(const Params *params);
 Nat is_type_param(Param item);
 Nat has_type_param(const Params *params);

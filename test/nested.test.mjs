@@ -171,3 +171,34 @@ test('the work of a Sigma side is charged to the work budget', () => {
     `${doubled(11)}${k}def t : Eq Nat 2 2 := refl\ndef p : Eq Nat 2 2 := transport (z : Nat) (Eq Nat (f11 2) z) (k 2) t\n`,
   );
 });
+
+// D11 part A: a closed side in a function body is evaluated, as at the top level.
+test('a closed side in a function body closes on its value', () => {
+  const tr = side =>
+    'def tr : (x : Nat) -> (y : Nat) -> (e : Eq Nat x y) -> ' +
+    `(t : Eq Nat ${side} x) -> Eq Nat ${side} y := fun (x : Nat) (y : Nat) (e : Eq Nat x y) (t : Eq Nat ${side} x) => ` +
+    'transport (z : Nat) (Eq Nat (id 2) z) e t\n';
+  checks(`${idX}${tr('2')}`);
+  checks(`${idX}${tr('(id 2)')}`);
+  checks(
+    `${idX}def k : (n : Nat) -> Eq Nat (id n) (id n) := fun (n : Nat) => refl\n` +
+      'def h : (m : Nat) -> Eq Nat (id 2) (id 2) := fun (m : Nat) => k 2\n',
+  );
+  const list = '(cons m (cons 2 nil))';
+  checks(
+    `${idX}def k : (xs : List Nat) -> Eq (List Nat) xs xs := fun (xs : List Nat) => refl\n` +
+      `def h : (m : Nat) -> Eq (List Nat) ${list} ${list} := fun (m : Nat) => k (cons m (cons (id 2) nil))\n`,
+  );
+  checks(
+    `${idX}def fst : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (b : Nat) => a\n` +
+      'def k : (a : Nat) -> (b : Nat) -> Eq Nat (fst a b) (fst a b) := fun (a : Nat) (b : Nat) => refl\n' +
+      'def h : (m : Nat) -> Eq Nat (fst m 2) (fst m 2) := fun (m : Nat) => k m (id 2)\n',
+  );
+});
+
+test('the work of a closed side in a function body is charged to the work budget', () => {
+  // The type side (f10 2) and the body side of k 2 are each below the budget and together above it.
+  const k = 'def k : (n : Nat) -> Eq Nat (f10 n) (f10 n) := fun (n : Nat) => refl\n';
+  checks(`${doubled(10)}${k}def h : (m : Nat) -> Eq Nat 2 2 := fun (m : Nat) => k 2\n`);
+  overBudget(`${doubled(10)}${k}def h : (m : Nat) -> Eq Nat (f10 2) (f10 2) := fun (m : Nat) => k 2\n`);
+});

@@ -456,7 +456,10 @@ static int eq_side(Fuel fuel, Nat budget, const LType *a, const Bindings *enviro
   if (names_param(done, atom_of(0, tokens)) == 1)
     return computed_side(fuel, budget, a, environment, done, tokens, side, rest, left, failure);
   const Value *value;
-  if (!parse_term(fuel, budget, 1, a, hide_params(done, environment), tokens, &value, rest, left, NULL, failure))
+  /* D11 part A: a closed side in a body (a transport motive) runs as at the
+     top level, without the checking frames. */
+  if (!parse_term(fuel, budget, 1, a, closed_environment(hide_params(done, environment)), tokens, &value, rest, left,
+                  NULL, failure))
     return 0;
   Failure printing;
   Text text;

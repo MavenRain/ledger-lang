@@ -451,8 +451,9 @@ static int cong_argument(Fuel fuel, Nat position, const LType *a, Val side, cons
 }
 
 /* A marker-free side needs real evaluation even during body checking.
-   Keep named bindings in scope, but remove the unnamed checking frames. */
-static const Bindings *cong_closed_environment(const Bindings *environment) {
+   Keep named bindings in scope, but remove the unnamed checking frames.
+   D11 part A (design item 2): each closed side in a body uses this path. */
+const Bindings *closed_environment(const Bindings *environment) {
   if (checking_body(environment) != 1) return environment;
   const Bindings *kept = NULL;
   for (const Bindings *cell = environment; cell != NULL; cell = cell->tail)
@@ -477,7 +478,7 @@ static int cong_side(Fuel fuel, Nat budget, const Bindings *environment, Nat pos
   const Term *node = term_form(TERM_GROUP, position, 0, terms_item(call, NULL));
   if (term_marker_bound(node) == 0) {
     const Value *value;
-    if (!eval_term(more, budget, function->type, cong_closed_environment(environment), node, &value, left, failure))
+    if (!eval_term(more, budget, function->type, closed_environment(environment), node, &value, left, failure))
       return 0;
     return printed_side(more, value, result) ? 1 : fail_at(failure, position, eTerm);
   }
@@ -4065,8 +4066,9 @@ int side_normal_at(Fuel fuel, Nat budget, const Bindings *scope, const LType *ty
     Val closed;
     Failure evaluated = {0, {NULL, 0}};
     /* D9 (design item 2): the node runs on the remaining work budget, and a
-       budget failure of eval_term goes to the caller. */
-    if (!eval_term(more, budget, type, scope, node, &value, left, &evaluated))
+       budget failure of eval_term goes to the caller. D11 part A: the
+       closed node runs as at the top level (closed_environment). */
+    if (!eval_term(more, budget, type, closed_environment(scope), node, &value, left, &evaluated))
       return kept_budget_failure(failure, evaluated);
     if (!printed_side(more, value, &closed)) return 0;
     *normal = term_closed(node->position, type, value, closed.text);
@@ -4119,7 +4121,8 @@ int side_normal(Fuel fuel, Nat budget, const Bindings *scope, const Term *node, 
     default: break;
     }
     Typed typed;
-    if (!eval_synth(more, budget, scope, node, &typed, left, failure)) return 0;
+    /* D11 part A: the closed sub-term runs as at the top level. */
+    if (!eval_synth(more, budget, closed_environment(scope), node, &typed, left, failure)) return 0;
     /* Some Option payloads use VALUE_NAT or VALUE_TEXT too. Only a Nat
        or Text term can be replaced by the corresponding scalar literal. */
     *normal = same_type(typed.type, &nat_type) || same_type(typed.type, &text_type)
@@ -4156,7 +4159,14 @@ int close_body_side(Fuel fuel, Nat budget, const Bindings *environment, const LT
     *left = budget;
     return 1;
   }
-  return close_side(fuel - 1, budget, environment, a, side, closed, left, failure);
+  /* D11 part A (design items 2 and 4): a side with no marker closes as at
+     the top level, on the remaining work budget. On a failure, *left keeps
+     the budget (D10 delta 7). */
+  Nat spent;
+  *left = budget;
+  if (!close_side(fuel - 1, budget, closed_environment(environment), a, side, closed, &spent, failure)) return 0;
+  *left = spent;
+  return 1;
 }
 
 int close_result(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,

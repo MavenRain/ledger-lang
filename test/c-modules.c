@@ -3536,6 +3536,31 @@ static void test_d10_partial_type_arguments(void) {
   assert(same_text(failure.message, eBudget));
 }
 
+/* D11 part A (design item 2): the closed side (id 2) of the c11-a4 call
+   `k 2` in a body closes on its value 2, not on the null of the body check.
+   At budget 1 it gives eBudget, and *left keeps the budget. */
+static void test_d11_body_closed_side(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text("def id : (x : Nat) -> Nat := fun (x : Nat) => x\n"), &environment, &failure));
+  const LType *nat;
+  Tokens rest;
+  Nat left = 0;
+  assert(parse_type(1000, 1000, 0, environment, lexed("Nat"), &nat, &rest, &left, &failure));
+  Bindings scope = {.head = check_marker(), .tail = environment};
+  const Bindings *body = &scope;
+  const Value *value;
+  const Term *node = NULL;
+  assert(parse_term(1000, 1000, 1, nat, body, lexed("(id 2)"), &value, &rest, &left, &node, &failure) && node != NULL);
+  Val closed;
+  assert(close_body_side(1000, 1000, body, nat, (Val){.kind = VAL_TERM, .node = node}, &closed, &left, &failure));
+  assert(closed.kind == VAL_CLOSED && same_text(closed.text, text("2")) && left < 1000);
+  failure = (Failure){0, {NULL, 0}};
+  left = 0;
+  assert(!close_body_side(1000, 1, body, nat, (Val){.kind = VAL_TERM, .node = node}, &closed, &left, &failure));
+  assert(same_text(failure.message, eBudget) && left == 1);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3584,6 +3609,7 @@ int main(void) {
   test_d9_function_budget();
   test_d10_type_budget();
   test_d10_partial_type_arguments();
+  test_d11_body_closed_side();
   puts("C module tests passed");
   return 0;
 }
