@@ -431,7 +431,9 @@ static int computed_side(Fuel fuel, Nat budget, const LType *a, const Bindings *
   const Bindings *scope = binding_cons(check_marker(), marker_bindings(done, environment));
   /* D4 part C: a side with a marker takes its normal form (design item 5).
      close_side closes a side with no marker later, as before. */
-  if (term_marker_bound(marked) > 0 && !side_normal_at(fuel, scope, a, marked, &marked, failure)) return 0;
+  if (term_marker_bound(marked) > 0 &&
+      !side_normal_at(fuel, remaining, scope, a, marked, &marked, &remaining, failure))
+    return 0;
   *side = marked->tag == TERM_VAR ? var_side(marked->index) : term_side(marked);
   *rest = skip_atom(0, tokens);
   *left = remaining;
@@ -680,8 +682,9 @@ static int parse_binders(Fuel fuel, Nat budget, const Bindings *environment, con
 }
 
 /* A function definition checks its body once. It is not an instance. The Eq
-   sides of its signature take the work budget, and left gets the rest. The
-   binders check the same types again, thus they do not take more budget. */
+   sides of its signature and closed side work in its body share the work
+   budget, and left gets the rest. The binders check the same types again,
+   thus they do not take more budget. */
 static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *environment, Tokens tokens, Binding *item,
                           Tokens *rest, Nat *left, Failure *failure) {
   Signature found;
@@ -699,9 +702,9 @@ static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *envi
   const LType *result = subst_type(param_renames(found.params, binders, NULL), found.result);
   const Value *value;
   const Term *term = NULL;
-  if (!parse_term(fuel, budget, 0, result,
+  if (!parse_term(fuel, *left, 0, result,
                   binding_cons(body_marker(param_count(binders)), bind_params(binders, NULL, environment)), body,
-                  &value, rest, &used, &term, failure))
+                   &value, rest, left, &term, failure))
     return 0;
   *item = (Binding){
       .kind = BIND_FUN,

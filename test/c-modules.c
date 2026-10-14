@@ -1772,7 +1772,8 @@ static void rename_row(const Bindings *environment, const char *callee, const ch
                          &failure));
   assert(rest.size == 0);
   Val result;
-  assert(instantiate_side(1000, body, item->params, values, terms, tokens, lhs_of(environment, callee), &result) == answer);
+  assert(instantiate_side(1000, 1000, body, item->params, values, terms, tokens, lhs_of(environment, callee), &result,
+                          &(Nat){0}, &(Failure){0, {NULL, 0}}) == answer);
   if (answer == 0) return;
   assert(result.kind == VAL_TERM && result.node != NULL);
   assert(marker_vars_at(result.node) == markers);
@@ -1888,8 +1889,9 @@ static const Terms *call_args(const Bindings *environment, const Params *params,
    close_side. */
 static Val closed_in(const Bindings *bound, const LType *a, Val side) {
   Val closed;
-  assert(checking_body(bound) == 1 ? close_body_side(1000, bound, a, side, &closed)
-                                   : close_side(1000, bound, a, side, &closed));
+  assert(checking_body(bound) == 1
+             ? close_body_side(1000, 1000, bound, a, side, &closed, &(Nat){0}, &(Failure){0, {NULL, 0}})
+             : close_side(1000, 1000, bound, a, side, &closed, &(Nat){0}, &(Failure){0, {NULL, 0}}));
   assert(closed.kind == VAL_CLOSED);
   return closed;
 }
@@ -1940,8 +1942,9 @@ static void body_close_row(const Bindings *environment, const Bindings *body, co
   Val rhs;
   Val side;
   assert(sides_of(p->type, &a, &lhs, &rhs));
-  assert(instantiate_side(1000, body, p->params, call_values(body, p->params, args), call_args(body, p->params, args),
-                          lexed(args), lhs, &side) == 1);
+  assert(instantiate_side(1000, 1000, body, p->params, call_values(body, p->params, args),
+                          call_args(body, p->params, args), lexed(args), lhs, &side, &(Nat){0},
+                          &(Failure){0, {NULL, 0}}) == 1);
   assert(kept_side(side) == 0);
   close_row(body, a, side, expected);
 }
@@ -1970,18 +1973,22 @@ static void test_d4_close(void) {
   const Binding *p = fun_named(environment, "p");
   const Values *p_values = call_values(environment, p->params, "2 6");
   const LType *closed;
-  assert(close_result(1000, environment, p->params, p_values, 1, p->type, &closed));
+  assert(close_result(1000, 1000, environment, p->params, p_values, 1, p->type, &closed, &(Nat){0},
+                      &(Failure){0, {NULL, 0}}));
   close_type_row(argument_bindings(0, p->params, p_values, environment), p->type, closed, "(pair 2 6)");
   const Binding *w = fun_named(environment, "w");
   const Values *w_values = call_values(environment, w->params, "4");
-  assert(close_result(1000, environment, w->params, w_values, 1, w->type, &closed));
+  assert(close_result(1000, 1000, environment, w->params, w_values, 1, w->type, &closed, &(Nat){0},
+                      &(Failure){0, {NULL, 0}}));
   close_type_row(argument_bindings(0, w->params, w_values, environment), w->type, closed, "(some 4)");
 
   /* D4b: the proof parameter e of q 2 6. The third value is a number: the
      sides of e use only the markers of n and m. */
   const Binding *q = fun_named(environment, "q");
   const Values *q_values = call_values(environment, fun_named(environment, "three")->params, "2 6 0");
-  const Params *q_closed = close_params(1000, environment, q->params, q_values, q->params);
+  const Params *q_closed;
+  assert(close_params(1000, 1000, environment, q->params, q_values, q->params, &q_closed, &(Nat){0},
+                      &(Failure){0, {NULL, 0}}));
   close_type_row(argument_bindings(0, q->params, q_values, environment), q->params->tail->tail->head.type,
                  q_closed->tail->tail->head.type, "(pair 2 6)");
 
@@ -2000,16 +2007,16 @@ static void test_d4_close(void) {
   Val rhs;
   Val none;
   assert(sides_of(p->type, &a, &lhs, &rhs));
-  assert(close_side(1000, environment, a, lhs, &none) == 0);
+  assert(close_side(1000, 1000, environment, a, lhs, &none, &(Nat){0}, &(Failure){0, {NULL, 0}}) == 0);
 }
 
 /* The renamed left side of callee in body, with the arguments in args. */
 static Val renamed_in(const Bindings *environment, const Bindings *body, const char *callee, const char *args) {
   const Binding *item = fun_named(environment, callee);
   Val side;
-  assert(instantiate_side(1000, body, item->params, call_values(body, item->params, args),
+  assert(instantiate_side(1000, 1000, body, item->params, call_values(body, item->params, args),
                           call_args(body, item->params, args), lexed(args),
-                          lhs_of(environment, callee), &side) == 1);
+                          lhs_of(environment, callee), &side, &(Nat){0}, &(Failure){0, {NULL, 0}}) == 1);
   assert(side.kind == VAL_TERM && side.node != NULL);
   return side;
 }
@@ -2092,7 +2099,7 @@ static void normal_row(const Bindings *environment, const char *left, const char
   const Term *normal;
   Failure failure = {0, {NULL, 0}};
   assert(lhs.kind == VAL_TERM && marker_vars_at(lhs.node) == 1);
-  assert(side_normal(1000, environment, lhs.node, &normal, &failure) == 1 && normal == lhs.node);
+  assert(side_normal(1000, 1000, environment, lhs.node, &normal, &(Nat){0}, &failure) == 1 && normal == lhs.node);
   assert(same_val(lhs, rhs) == expected);
   assert(same_type(fun_named(environment, left)->type, fun_named(environment, right)->type) == expected);
 }
@@ -2259,7 +2266,7 @@ static void test_d4_normal(void) {
   const Term *fun = term_form(TERM_FUN, 9, 1, one(marker));
   const Term *normal;
   Failure refused = {0, {NULL, 0}};
-  assert(side_normal(1000, environment, as_construct(some, one(fun)), &normal, &refused) == 0);
+  assert(side_normal(1000, 1000, environment, as_construct(some, one(fun)), &normal, &(Nat){0}, &refused) == 0);
   assert(refused.position == 9 && same_text(refused.message, eTerm));
 }
 
@@ -3084,8 +3091,10 @@ static SideRow h_side_row(const Bindings *environment, const char *args) {
                          &failure));
   assert(rest.size == 0);
   SideRow row;
-  assert(argument_side(1000, 0, body, item->params, values, terms, &row.argument));
-  assert(instantiate_side(1000, body, item->params, values, terms, tokens, lhs_of(environment, "someA"), &row.side));
+  assert(argument_side(1000, 1000, 0, body, item->params, values, terms, &row.argument, &(Nat){0},
+                       &(Failure){0, {NULL, 0}}));
+  assert(instantiate_side(1000, 1000, body, item->params, values, terms, tokens, lhs_of(environment, "someA"),
+                          &row.side, &(Nat){0}, &(Failure){0, {NULL, 0}}));
   return row;
 }
 
@@ -3322,6 +3331,126 @@ static void test_d8_motive(void) {
   assert(proved.type->rhs.kind == VAL_CLOSED && same_text(proved.type->rhs.text, text("1")));
 }
 
+/* D9 part A: close_side, side_normal_at and side_normal run on the
+   remaining work budget (design items 1 and 2). At budget 1000 each helper
+   gives the rest less 1, for the one body of id. At budget 1 each helper
+   gives 0 and eBudget at the first token of the body of id (byte 46). */
+static void test_d9_side_budget(void) {
+  const char *source =
+      "def id : (x : Nat) -> Nat := fun (x : Nat) => x\n"
+      "def k : (n : Nat) -> Eq Nat (id n) (id n) := fun (n : Nat) => refl\n"
+      "def pf : (n : Nat) -> (m : Nat) -> Eq (Prod Nat Nat) (pair n m) (pair n m) := fun (n : Nat) (m : Nat) => refl\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  Nat left = 0;
+
+  /* close_side: the a1 side (id n) with n = 2 closes to 2. */
+  const Binding *k = fun_named(environment, "k");
+  const Bindings *bound = argument_bindings(0, k->params, call_values(environment, k->params, "2"), environment);
+  const LType *a;
+  Val lhs;
+  Val rhs;
+  Val closed;
+  assert(sides_of(k->type, &a, &lhs, &rhs) && lhs.kind == VAL_TERM);
+  assert(close_side(1000, 1000, bound, a, lhs, &closed, &left, &failure) == 1);
+  assert(closed.kind == VAL_CLOSED && same_text(val_text(closed), text("2")) && left == 999);
+  failure = (Failure){0, {NULL, 0}};
+  assert(close_side(1000, 1, bound, a, lhs, &closed, &left, &failure) == 0);
+  assert(failure.position == 46 && same_text(failure.message, eBudget));
+
+  /* side_normal_at: the closed constructor cons (id 2) nil at List Nat
+     gives a TERM_CLOSED node. */
+  const LType *list = sigma_parsed("List Nat");
+  const Value *value;
+  Typed found;
+  Tokens rest;
+  const Term *term = NULL;
+  const Term *normal = NULL;
+  failure = (Failure){0, {NULL, 0}};
+  assert(parse_term(1000, 1000, 0, list, environment, lexed("cons (id 2) nil"), &value, &rest, &left, &term, &failure));
+  assert(side_normal_at(1000, 1000, environment, list, term, &normal, &left, &failure) == 1);
+  assert(normal->tag == TERM_CLOSED && left == 999);
+  failure = (Failure){0, {NULL, 0}};
+  assert(side_normal_at(1000, 1, environment, list, term, &normal, &left, &failure) == 0);
+  assert(failure.position == 46 && same_text(failure.message, eBudget));
+
+  /* side_normal: the closed application id 2 next to the marker n in the
+     node of pair n (id 2) gives the literal 2 node. */
+  const Term *pair = ungrouped(lhs_of(environment, "pf").node);
+  failure = (Failure){0, {NULL, 0}};
+  assert(synth_term(1000, 1000, 0, environment, lexed("id 2"), &found, &rest, &left, &term, &failure));
+  const Term *node = as_construct(pair, terms_item(pair->args->head, one(term)));
+  assert(side_normal(1000, 1000, environment, node, &normal, &left, &failure) == 1);
+  assert(ungrouped(normal)->args->tail->head->tag == TERM_NUMBER && left == 999);
+  failure = (Failure){0, {NULL, 0}};
+  assert(side_normal(1000, 1, environment, node, &normal, &left, &failure) == 0);
+  assert(failure.position == 46 && same_text(failure.message, eBudget));
+}
+
+static void test_d9_parameter_budget_failure(void) {
+  const char *source =
+      "def id : (x : Nat) -> Nat := fun (x : Nat) => x\n"
+      "def f : (x : Nat) -> (p : Eq Nat (id x) (id x)) -> Eq Nat (id x) (id x) := fun (x : Nat) (p : Eq Nat (id x) (id x)) => p\n"
+      "def r : Eq Nat (id 2) (id 2) := refl\n";
+  const Bindings *environment = NULL;
+  Failure failure = {0, {NULL, 0}};
+  assert(check_definitions(text(source), &environment, &failure));
+  Typed found;
+  Tokens rest;
+  Nat left;
+  const Term *node = NULL;
+  assert(synth_term(1000, 8, 0, environment, lexed("f 2 r"), &found, &rest, &left, &node, &failure));
+  assert(rest.size == 0 && left == 1);
+  for (Nat budget = 5; budget < 8; budget++) {
+    failure = (Failure){0, {NULL, 0}};
+    assert(!synth_term(1000, budget, 0, environment, lexed("f 2 r"), &found, &rest, &left, NULL, &failure));
+    assert(same_text(failure.message, eBudget));
+    if (budget == 6) assert(failure.position == 46);
+    failure = (Failure){0, {NULL, 0}};
+    assert(!eval_synth(1000, budget, environment, node, &found, &left, &failure));
+    assert(same_text(failure.message, eBudget));
+    if (budget == 6) assert(failure.position == 46);
+  }
+  failure = (Failure){0, {NULL, 0}};
+  assert(eval_synth(1000, 8, environment, node, &found, &left, &failure) && left == 1);
+}
+
+static Text d9_function_budget_source(Nat depth, Nat signature_work, Nat repeat) {
+  TextBuilder source = builder_new();
+  builder_append(&source, text("def f0 : (x : Nat) -> Nat := fun (x : Nat) => x\n"));
+  char row[256];
+  for (Nat k = 1; k <= depth; k++) {
+    int size = snprintf(row, sizeof row,
+                        "def f%u : (x : Nat) -> Nat := fun (x : Nat) => f%u (f%u x)\n", k, k - 1, k - 1);
+    assert(size > 0 && (size_t)size < sizeof row);
+    builder_append(&source, text(row));
+  }
+  builder_append(&source, text("def e : Eq Nat 1 1 := refl\n"));
+  for (Nat k = 0; k <= repeat; k++) {
+    int size = signature_work
+                   ? snprintf(row, sizeof row,
+                              "def g%u : (m : Nat) -> Eq Nat (f%u 1) (f%u 1) := fun (m : Nat) => cong f%u e\n",
+                              k, depth, depth, depth)
+                   : snprintf(row, sizeof row,
+                              "def g%u : (m : Nat) -> Eq Nat 1 1 := fun (m : Nat) => cong f%u e\n", k, depth);
+    assert(size > 0 && (size_t)size < sizeof row);
+    builder_append(&source, text(row));
+  }
+  return builder_text(&source);
+}
+
+static void test_d9_function_budget(void) {
+  Text output;
+  Failure failure = {0, {NULL, 0}};
+  assert(compile_program(d9_function_budget_source(1, 1, 0), &output, &failure));
+  assert(compile_program(d9_function_budget_source(9, 1, 0), &output, &failure));
+  assert(!compile_program(d9_function_budget_source(10, 1, 0), &output, &failure));
+  assert(same_text(failure.message, eBudget));
+  assert(!compile_program(d9_function_budget_source(10, 0, 1), &output, &failure));
+  assert(same_text(failure.message, eBudget));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3365,6 +3494,9 @@ int main(void) {
   test_d8_side_groups();
   test_d8_declared_evaluation();
   test_d8_motive();
+  test_d9_side_budget();
+  test_d9_parameter_budget_failure();
+  test_d9_function_budget();
   puts("C module tests passed");
   return 0;
 }

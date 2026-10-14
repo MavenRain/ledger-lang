@@ -179,9 +179,10 @@ static int witness_node(Fuel fuel, Nat position, Typed found, Val witness, const
    (design item 8): witness is the side form of the witness. A VAL_CLOSED
    witness puts the value of found. A side with no marker left closes on its
    node, as for a D4 side. */
-static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat level, Typed found, Val witness,
-                    Val side, Val *result) {
+static int put_side(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, Nat level, Typed found,
+                    Val witness, Val side, Val *result, Nat *left, Failure *failure) {
   *result = side;
+  *left = budget;
   switch (side.kind) {
   case VAL_CLOSED: return 1;
   case VAL_VAR: {
@@ -192,7 +193,7 @@ static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat 
     case VAL_TERM:
       *result = witness;
       if (term_marker_bound(witness.node) > 0) return 1;
-      return close_side(fuel, environment, a, witness, result);
+      return close_side(fuel, budget, environment, a, witness, result, left, failure);
     }
     return 0;
   }
@@ -206,7 +207,7 @@ static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat 
     const Term *node = term_with_markers(side.node, table, size);
     *result = (Val){.kind = VAL_TERM, .node = node};
     if (term_marker_bound(node) > 0) return 1;
-    return close_side(fuel, environment, a, (Val){.kind = VAL_TERM, .node = node}, result);
+    return close_side(fuel, budget, environment, a, (Val){.kind = VAL_TERM, .node = node}, result, left, failure);
   }
   }
   return 0;
@@ -217,31 +218,35 @@ static int put_side(Fuel fuel, const Bindings *environment, const LType *a, Nat 
    including when a type argument reuses an outer marker index. The walk has
    the form of instantiate_type and uses its fuel. Part C
    (design item 8): witness is the side form of a (see put_side). */
-static int put_marker(Fuel fuel, const Bindings *environment, const LType *type, Nat level, Typed found,
-                      Val witness, const LType **result) {
+static int put_marker(Fuel fuel, Nat budget, const Bindings *environment, const LType *type, Nat level, Typed found,
+                      Val witness, const LType **result, Nat *left, Failure *failure) {
   if (fuel == 0) return 0;
   Fuel more = fuel - 1;
   LType copy = *type;
+  Nat first;
+  Nat second;
+  *left = budget;
   switch (type->tag) {
   case TY_EQ:
-    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left) ||
-        !put_side(more, environment, copy.left, level, found, witness, type->lhs, &copy.lhs) ||
-        !put_side(more, environment, copy.left, level, found, witness, type->rhs, &copy.rhs)) return 0;
+    if (!put_marker(more, budget, environment, type->left, level, found, witness, &copy.left, &first, failure) ||
+        !put_side(more, first, environment, copy.left, level, found, witness, type->lhs, &copy.lhs, &second, failure) ||
+        !put_side(more, second, environment, copy.left, level, found, witness, type->rhs, &copy.rhs, left, failure))
+      return 0;
     break;
   case TY_OPTION:
   case TY_LIST:
   case TY_QUERY:
-    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left)) return 0;
+    if (!put_marker(more, budget, environment, type->left, level, found, witness, &copy.left, left, failure)) return 0;
     break;
   case TY_SIGMA:
-    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left)) return 0;
+    if (!put_marker(more, budget, environment, type->left, level, found, witness, &copy.left, left, failure)) return 0;
     if (type->level != level &&
-        !put_marker(more, environment, type->right, level, found, witness, &copy.right)) return 0;
+        !put_marker(more, *left, environment, type->right, level, found, witness, &copy.right, left, failure)) return 0;
     break;
   case TY_PROD:
   case TY_SUM:
-    if (!put_marker(more, environment, type->left, level, found, witness, &copy.left) ||
-        !put_marker(more, environment, type->right, level, found, witness, &copy.right)) return 0;
+    if (!put_marker(more, budget, environment, type->left, level, found, witness, &copy.left, &first, failure) ||
+        !put_marker(more, first, environment, type->right, level, found, witness, &copy.right, left, failure)) return 0;
     break;
   case TY_NAT:
   case TY_TEXT:
@@ -268,23 +273,47 @@ static int put_marker(Fuel fuel, const Bindings *environment, const LType *type,
    projection with the null value, and payload has B with the side of
    `witness s` for the marker (neutral_witness on the checked term of s, D8
    part B). With no term (eval_synth), a neutral payload is refused. */
-static int neutral_witness(Fuel fuel, const Bindings *environment, const LType *a, Nat position, const Term *argument,
-                           Val *side);
+static int neutral_witness(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, Nat position,
+                           const Term *argument, Val *side, Nat *left, Failure *failure);
 
-static int project_sigma(Fuel fuel, const Bindings *environment, Nat position, Nat index, Typed found,
-                         const Term *argument, Tokens tokens, Typed *result, Tokens *rest, Failure *failure) {
+/* D9 (design item 5): the failure of a side helper. A budget failure goes
+   to the caller with no change (eBudget at the first token of the innermost
+   body). Each other failure gives message at position, as before D9. */
+static int side_failure(Failure *failure, Failure side, Nat position, Text message) {
+  if (!same_text(side.message, eBudget)) return fail_at(failure, position, message);
+  *failure = side;
+  return 0;
+}
+
+/* D9 (design item 5): the failure of eval_term in a side. A budget failure
+   goes to the caller with no change. Each other failure does not change the
+   failure of the caller, as before D9. */
+static int kept_budget_failure(Failure *failure, Failure side) {
+  if (same_text(side.message, eBudget)) *failure = side;
+  return 0;
+}
+
+static int project_sigma(Fuel fuel, Nat budget, const Bindings *environment, Nat position, Nat index, Typed found,
+                         const Term *argument, Tokens tokens, Typed *result, Tokens *rest, Nat *left,
+                         Failure *failure) {
   if (found.type->tag != TY_SIGMA) return fail_at(failure, position, eSigma);
   Nat neutral = found.value->kind != VALUE_ATTRS ? 1 : 0;
   Val side = {.kind = VAL_CLOSED};
-  if (neutral == 1 && index == 2 && !neutral_witness(fuel, environment, found.type->left, position, argument, &side))
-    return fail_at(failure, position, eTerm);
+  Nat spent = budget;
+  Failure witnessed = {0, {NULL, 0}};
+  if (neutral == 1 && index == 2 &&
+      !neutral_witness(fuel, budget, environment, found.type->left, position, argument, &side, &spent, &witnessed))
+    return side_failure(failure, witnessed, position, eTerm);
   const LType *b = found.type->left;
   const Value *witness = neutral == 1 ? &null_value : project_value(1, found.value);
-  if (index == 2 && !put_marker(fuel, environment, found.type->right, found.type->level,
-                              (Typed){found.type->left, witness}, side, &b))
-    return fail_at(failure, position, eSigma);
+  Nat used = spent;
+  Failure put = {0, {NULL, 0}};
+  if (index == 2 && !put_marker(fuel, spent, environment, found.type->right, found.type->level,
+                                (Typed){found.type->left, witness}, side, &b, &used, &put))
+    return side_failure(failure, put, position, eSigma);
   *result = (Typed){b, neutral == 1 ? &null_value : project_value(index, found.value)};
   *rest = tokens;
+  *left = used;
   return 1;
 }
 
@@ -434,8 +463,8 @@ static const Bindings *cong_closed_environment(const Bindings *environment) {
 /* The side (f x) of cong is a TERM_GROUP of a TERM_APPLY node, in the form
    of the parse of a declared side (f x). A side with a marker takes its
    normal form. A side with no marker closes with eval_term on the budget of
-   the cong term, not with close_side: close_side has budget 1, and the body
-   of f needs more (delta P2). A value that does not print is eTerm. */
+   the cong term (delta P2). D9: close_side and side_normal_at also run on
+   the remaining work budget. A value that does not print is eTerm. */
 static int cong_side(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const Binding *function,
                      const LType *a, Val side, Val *result, Nat *left, Failure *failure) {
   if (fuel == 0) return 0;
@@ -452,9 +481,8 @@ static int cong_side(Fuel fuel, Nat budget, const Bindings *environment, Nat pos
       return 0;
     return printed_side(more, value, result) ? 1 : fail_at(failure, position, eTerm);
   }
-  if (!side_normal_at(more, environment, function->type, node, &node, failure)) return 0;
+  if (!side_normal_at(more, budget, environment, function->type, node, &node, left, failure)) return 0;
   *result = (Val){.kind = VAL_TERM, .node = node};
-  *left = budget;
   return 1;
 }
 
@@ -494,26 +522,28 @@ static int transport_found(Nat position, const LType *a, Val side, Typed *found,
 
 /* D6 part B (design items 6 and 7): B of the motive (z : A') B with a side
    of e for the marker of z, on the pack path (put_marker). */
-static int transport_type(Fuel fuel, const Bindings *environment, Nat position, const LType *motive, Val side,
-                          const LType **result, Failure *failure) {
+static int transport_type(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const LType *motive,
+                          Val side, const LType **result, Nat *left, Failure *failure) {
   Typed found;
   if (!transport_found(position, motive->left, side, &found, failure)) return 0;
-  if (!put_marker(fuel, environment, motive->right, motive->level, found, side, result))
-    return fail_at(failure, position, eSigma);
+  Failure put = {0, {NULL, 0}};
+  if (!put_marker(fuel, budget, environment, motive->right, motive->level, found, side, result, left, &put))
+    return side_failure(failure, put, position, eSigma);
   return 1;
 }
 
 /* D6 part B (design items 7 and 8): transport (z : A') B e t. e has the type
    Eq A x y, and A' must be A. t checks against B with x for z. The result
    type is B with y for z. A neutral e and a closed e use this one path. */
-static int transport_types(Fuel fuel, const Bindings *environment, Nat position, const LType *motive, Typed found,
-                           const LType **bx, const LType **by, Failure *failure) {
+static int transport_types(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const LType *motive,
+                           Typed found, const LType **bx, const LType **by, Nat *left, Failure *failure) {
   const LType *a;
   Val x, y;
+  Nat spent;
   if (!sides_of(found.type, &a, &x, &y)) return fail_at(failure, position, eProof);
   if (!same_type(motive->left, a)) return fail_at(failure, position, eMatch);
-  return transport_type(fuel, environment, position, motive, x, bx, failure) &&
-         transport_type(fuel, environment, position, motive, y, by, failure);
+  return transport_type(fuel, budget, environment, position, motive, x, bx, &spent, failure) &&
+         transport_type(fuel, spent, environment, position, motive, y, by, left, failure);
 }
 
 /* The definition of a function checks its body once, with null for each
@@ -600,16 +630,18 @@ const LType *subst_type(const Bindings *chosen, const LType *ty) {
    parameter of slot s gives its value for the marker s - 1 (put_marker, the
    project_sigma form). A type parameter also has a slot, thus the walk skips
    each binding that is not a value. In a checking body the markers stay. */
-static int application_motive(Fuel fuel, const Bindings *environment, Nat position, const LType *motive,
-                              const LType **result, Failure *failure) {
+static int application_motive(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const LType *motive,
+                              const LType **result, Nat *left, Failure *failure) {
   *result = motive;
+  *left = budget;
   if (checking_body(environment) == 1) return 1;
   *result = subst_type(environment, motive);
   for (const Bindings *cell = environment; cell != NULL; cell = cell->tail) {
     if (cell->head.slot == 0 || cell->head.kind != BIND_VALUE) continue;
-    if (!put_marker(fuel, environment, *result, cell->head.slot - 1, (Typed){cell->head.type, cell->head.value},
-                    (Val){.kind = VAL_CLOSED}, result))
-      return fail_at(failure, position, eSigma);
+    Failure put = {0, {NULL, 0}};
+    if (!put_marker(fuel, *left, environment, *result, cell->head.slot - 1, (Typed){cell->head.type, cell->head.value},
+                    (Val){.kind = VAL_CLOSED}, result, left, &put))
+      return side_failure(failure, put, position, eSigma);
   }
   return 1;
 }
@@ -1579,11 +1611,11 @@ static int put_marker_list(const Params *done, const Bindings *environment, cons
 
 /* The node already names markers in scope, either from a signature or
    from put_param_markers on a body term. */
-static int node_side(Fuel fuel, const Bindings *scope, const LType *a, const Term *node, Val *side) {
+static int node_side(Fuel fuel, Nat budget, const Bindings *scope, const LType *a, const Term *node, Val *side,
+                     Nat *left, Failure *failure) {
   if (node == NULL) return 0;
   const Term *marked = marker_vars(node);
-  Failure failure = {0, {NULL, 0}};
-  if (!side_normal_at(fuel, scope, a, marked, &marked, &failure)) return 0;
+  if (!side_normal_at(fuel, budget, scope, a, marked, &marked, left, failure)) return 0;
   *side = marked->tag == TERM_VAR ? (Val){.kind = VAL_VAR, .index = marked->index}
                                 : (Val){.kind = VAL_TERM, .node = marked};
   return 1;
@@ -1595,11 +1627,12 @@ static int node_side(Fuel fuel, const Bindings *scope, const LType *a, const Ter
    type of the parameter, and a side with a marker takes its normal form.
    An inline function stays refused. D8 part B (design item 7): the side
    comes from the checked term, not from a copy of the tokens. */
-static int body_term_side(Fuel fuel, const Bindings *environment, const LType *a, const Term *term, Val *side) {
+static int body_term_side(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, const Term *term,
+                          Val *side, Nat *left, Failure *failure) {
   const Bindings *scope = environment;
   const Term *marked;
   if (!put_param_markers(NULL, environment, term, &scope, &marked)) return 0;
-  return node_side(fuel, scope, a, marked, side);
+  return node_side(fuel, budget, scope, a, marked, side, left, failure);
 }
 
 /* D5 part C (design item 8): the side of `witness s` for the checked term
@@ -1608,23 +1641,25 @@ static int body_term_side(Fuel fuel, const Bindings *environment, const LType *a
    of a parenthesized argument in a body (body_term_side), thus the side has
    the form of a declared side `(witness s)`. A signature already names its
    markers and has no body-level frame, so its node uses node_side directly. */
-static int neutral_witness(Fuel fuel, const Bindings *environment, const LType *a, Nat position, const Term *argument,
-                           Val *side) {
+static int neutral_witness(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, Nat position,
+                           const Term *argument, Val *side, Nat *left, Failure *failure) {
   if (argument == NULL) return 0;
   const Term *node = term_form(TERM_GROUP, position, 0,
                                terms_item(term_form(TERM_WITNESS, position, 0, terms_item(argument, NULL)), NULL));
   Nat found = 0;
   Nat index = 0;
-  if (body_level(switness, environment, &found, &index)) return body_term_side(fuel, environment, a, node, side);
-  return node_side(fuel, environment, a, node, side);
+  if (body_level(switness, environment, &found, &index))
+    return body_term_side(fuel, budget, environment, a, node, side, left, failure);
+  return node_side(fuel, budget, environment, a, node, side, left, failure);
 }
 
 /* D8 part B (design item 7, delta D-B1): the side of an argument comes from
    its checked term. A body parameter in parentheses has the side of the
    body parameter. Another parenthesized term gives a VAL_TERM side
    (body_term_side). */
-int argument_text(Fuel fuel, const Bindings *environment, const LType *a, const Value *value, const Term *term,
-                  Val *side) {
+int argument_text(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, const Value *value,
+                  const Term *term, Val *side, Nat *left, Failure *failure) {
+  *left = budget;
   if (checking_body(environment) != 1) return printed_side(fuel, value, side);
   if (term == NULL) return 0;
   if (term->tag == TERM_NUMBER || term->tag == TERM_STRING) return printed_side(fuel, value, side);
@@ -1637,23 +1672,23 @@ int argument_text(Fuel fuel, const Bindings *environment, const LType *a, const 
     *side = (Val){.kind = VAL_VAR, .index = index};
     return 1;
   }
-  if (term->tag == TERM_GROUP) return body_term_side(fuel, environment, a, term, side);
+  if (term->tag == TERM_GROUP) return body_term_side(fuel, budget, environment, a, term, side, left, failure);
   if (!body_level(term->name, environment, &found, &index)) return 0;
   if (found == 0) return printed_side(fuel, value, side);
   *side = (Val){.kind = VAL_VAR, .index = index};
   return 1;
 }
 
-int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Params *params, const Values *values,
-                  const Terms *args, Val *side) {
+int argument_side(Fuel fuel, Nat budget, Nat index, const Bindings *environment, const Params *params,
+                  const Values *values, const Terms *args, Val *side, Nat *left, Failure *failure) {
   for (; params != NULL; params = params->tail, index = index - 1) {
     if (is_type_param(params->head) == 1) {
       if (index == 0) return 0;
       continue;
     }
     if (index == 0)
-      return argument_text(fuel, environment, params->head.type, argument_head(values),
-                           args != NULL ? args->head : NULL, side);
+      return argument_text(fuel, budget, environment, params->head.type, argument_head(values),
+                           args != NULL ? args->head : NULL, side, left, failure);
     values = argument_tail(values);
     args = args != NULL ? args->tail : NULL;
   }
@@ -1679,7 +1714,9 @@ int argument_token(Nat index, const Params *params, Tokens tokens, Token *token)
 /* The node of a closed argument token, with cost 0 (Q-S9-6). A
    parenthesized argument gives a VAL_TERM side (argument_text, D4 part D),
    thus rename_markers does not come here with it. */
-static int closed_node(Fuel fuel, Nat index, const Bindings *environment, const Params *params, Token token, const Term **node) {
+static int closed_node(Fuel fuel, Nat budget, Nat index, const Bindings *environment, const Params *params, Token token,
+                       const Term **node, Nat *left, Failure *failure) {
+  *left = budget;
   switch (token.kind) {
   case TOKEN_NUMBER: *node = term_number(token.position, 0, token.number); return 1;
   case TOKEN_STRING: *node = term_string(token.position, 0, token.text); return 1;
@@ -1699,8 +1736,7 @@ static int closed_node(Fuel fuel, Nat index, const Bindings *environment, const 
     } else {
       return 0;
     }
-    Failure failure = {0, {NULL, 0}};
-    return side_normal_at(fuel, environment, params->head.type, *node, node, &failure);
+    return side_normal_at(fuel, budget, environment, params->head.type, *node, node, left, failure);
   }
   case TOKEN_PUNCTUATION: return 0;
   }
@@ -1714,8 +1750,9 @@ static int closed_node(Fuel fuel, Nat index, const Bindings *environment, const 
    first variable node of the marker, a VAL_TERM argument to its node (its
    markers are body levels already; D4 part D), and a closed argument to
    its node. */
-int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                   const Terms *args, Tokens tokens, const Term *node, const Term **renamed_node) {
+int rename_markers(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
+                   const Terms *args, Tokens tokens, const Term *node, const Term **renamed_node, Nat *left,
+                   Failure *failure) {
   Nat size = term_marker_bound(node);
   const Term **table = arena_alloc(sizeof *table * (size + 1));
   for (Nat index = 0; index < size; index++) {
@@ -1723,7 +1760,7 @@ int rename_markers(Fuel fuel, const Bindings *environment, const Params *params,
     const Term *first = term_marker_first(node, index);
     if (first == NULL) continue;
     Val side;
-    if (!argument_side(fuel, index, environment, params, values, args, &side)) return 0;
+    if (!argument_side(fuel, budget, index, environment, params, values, args, &side, &budget, failure)) return 0;
     if (side.kind == VAL_TERM) {
       table[index] = side.node;
       continue;
@@ -1734,9 +1771,10 @@ int rename_markers(Fuel fuel, const Bindings *environment, const Params *params,
     }
     Token token;
     if (!argument_token(index, params, tokens, &token)) return 0;
-    if (!closed_node(fuel, index, environment, params, token, &table[index])) return 0;
+    if (!closed_node(fuel, budget, index, environment, params, token, &table[index], &budget, failure)) return 0;
   }
   *renamed_node = term_with_markers(node, table, size);
+  *left = budget;
   return 1;
 }
 
@@ -1749,22 +1787,23 @@ Nat kept_side(Val side) {
   return 0;
 }
 
-int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                     const Terms *args, Tokens tokens, Val side, Val *result) {
+int instantiate_side(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
+                     const Terms *args, Tokens tokens, Val side, Val *result, Nat *left, Failure *failure) {
+  *left = budget;
   switch (side.kind) {
   case VAL_CLOSED: *result = side; return 1;
-  case VAL_VAR: return argument_side(fuel, side.index, environment, params, values, args, result);
+  case VAL_VAR: return argument_side(fuel, budget, side.index, environment, params, values, args, result, left, failure);
   case VAL_TERM: {
     if (checking_body(environment) != 1) {
       *result = side;
       return 1;
     }
     const Term *node;
-    if (!rename_markers(fuel, environment, params, values, args, tokens, side.node, &node)) return 0;
+    if (!rename_markers(fuel, budget, environment, params, values, args, tokens, side.node, &node, left, failure))
+      return 0;
     /* D4 part C: a side with a marker left takes its normal form again
        (design item 5). close_body_side closes a side with no marker left. */
-    Failure failure = {0, {NULL, 0}};
-    if (term_marker_bound(node) > 0 && !side_normal(fuel, environment, node, &node, &failure)) return 0;
+    if (term_marker_bound(node) > 0 && !side_normal(fuel, *left, environment, node, &node, left, failure)) return 0;
     *result = (Val){.kind = VAL_TERM, .node = node};
     return 1;
   }
@@ -1790,15 +1829,16 @@ static int sigma_marker(const SigmaMarker *scope, Nat from, Nat *to) {
 
 /* A local Sigma variable stays bound. Free signature variables become
    arguments. Fresh local markers prevent those arguments from being captured. */
-static int instantiate_scoped_side(Fuel fuel, const Bindings *environment, const Params *params,
+static int instantiate_scoped_side(Fuel fuel, Nat budget, const Bindings *environment, const Params *params,
                                    const Values *values, const Terms *args, Tokens tokens,
-                                   const SigmaMarker *scope, Val side, Val *result) {
+                                   const SigmaMarker *scope, Val side, Val *result, Nat *left, Failure *failure) {
+  *left = budget;
   if (scope == NULL || side.kind == VAL_CLOSED)
-    return instantiate_side(fuel, environment, params, values, args, tokens, side, result);
+    return instantiate_side(fuel, budget, environment, params, values, args, tokens, side, result, left, failure);
   if (side.kind == VAL_VAR) {
     Nat to;
     if (!sigma_marker(scope, side.index, &to))
-      return instantiate_side(fuel, environment, params, values, args, tokens, side, result);
+      return instantiate_side(fuel, budget, environment, params, values, args, tokens, side, result, left, failure);
     *result = (Val){.kind = VAL_VAR, .index = to};
     return 1;
   }
@@ -1815,27 +1855,29 @@ static int instantiate_scoped_side(Fuel fuel, const Bindings *environment, const
     }
     if (checking_body(environment) != 1) continue;
     Val argument;
-    if (!argument_side(fuel, index, environment, params, values, args, &argument)) return 0;
+    if (!argument_side(fuel, budget, index, environment, params, values, args, &argument, &budget, failure)) return 0;
     if (argument.kind == VAL_TERM) table[index] = argument.node;
     else if (argument.kind == VAL_VAR)
       table[index] = term_var(first->position, 0, marker_name(argument.index), argument.index);
     else {
       Token token;
       if (!argument_token(index, params, tokens, &token) ||
-          !closed_node(fuel, index, environment, params, token, &table[index])) return 0;
+          !closed_node(fuel, budget, index, environment, params, token, &table[index], &budget, failure)) return 0;
     }
   }
   const Term *node = term_with_markers(side.node, table, size);
-  Failure failure = {0, {NULL, 0}};
+  *left = budget;
   if (checking_body(environment) == 1 && term_marker_bound(node) > 0 &&
-      !side_normal(fuel, environment, node, &node, &failure)) return 0;
+      !side_normal(fuel, budget, environment, node, &node, left, failure)) return 0;
   *result = (Val){.kind = VAL_TERM, .node = node};
   return 1;
 }
 
-static int instantiate_type(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                            const Terms *args, Tokens tokens, const Bindings *chosen, const SigmaMarker *scope,
-                            const LType *type, const LType **instantiated) {
+static int instantiate_type(Fuel fuel, Nat budget, const Bindings *environment, const Params *params,
+                            const Values *values, const Terms *args, Tokens tokens, const Bindings *chosen,
+                            const SigmaMarker *scope, const LType *type, const LType **instantiated, Nat *left,
+                            Failure *failure) {
+  *left = budget;
   /* A supplied type already uses the caller's markers. Substituting the
      callee's arguments into it would change its free variables. */
   for (const Bindings *cell = chosen; cell != NULL; cell = cell->tail)
@@ -1844,33 +1886,42 @@ static int instantiate_type(Fuel fuel, const Bindings *environment, const Params
       return 1;
     }
   LType copy = *type;
+  Nat first;
+  Nat second;
   switch (type->tag) {
   case TY_EQ:
-    if (!instantiate_type(fuel, environment, params, values, args, tokens, chosen, scope, type->left, &copy.left) ||
-        !instantiate_scoped_side(fuel, environment, params, values, args, tokens, scope, type->lhs, &copy.lhs) ||
-        !instantiate_scoped_side(fuel, environment, params, values, args, tokens, scope, type->rhs, &copy.rhs)) return 0;
+    if (!instantiate_type(fuel, budget, environment, params, values, args, tokens, chosen, scope, type->left,
+                          &copy.left, &first, failure) ||
+        !instantiate_scoped_side(fuel, first, environment, params, values, args, tokens, scope, type->lhs, &copy.lhs,
+                                 &second, failure) ||
+        !instantiate_scoped_side(fuel, second, environment, params, values, args, tokens, scope, type->rhs, &copy.rhs,
+                                 left, failure)) return 0;
     if (checking_body(environment) == 1 &&
-        (!close_body_side(fuel, environment, copy.left, copy.lhs, &copy.lhs) ||
-         !close_body_side(fuel, environment, copy.left, copy.rhs, &copy.rhs))) return 0;
+        (!close_body_side(fuel, *left, environment, copy.left, copy.lhs, &copy.lhs, &first, failure) ||
+         !close_body_side(fuel, first, environment, copy.left, copy.rhs, &copy.rhs, left, failure))) return 0;
     break;
   case TY_SIGMA: {
     if (fuel == 0) return 0;
-    if (!instantiate_type(fuel - 1, environment, params, values, args, tokens, chosen, scope, type->left, &copy.left)) return 0;
+    if (!instantiate_type(fuel - 1, budget, environment, params, values, args, tokens, chosen, scope, type->left,
+                          &copy.left, &first, failure)) return 0;
     copy.level = frame_slot(environment) + type->level;
     SigmaMarker inner = {type->level, copy.level, scope};
-    if (!instantiate_type(fuel - 1, environment, params, values, args, tokens, chosen, &inner, type->right, &copy.right)) return 0;
+    if (!instantiate_type(fuel - 1, first, environment, params, values, args, tokens, chosen, &inner, type->right,
+                          &copy.right, left, failure)) return 0;
     break;
   }
   case TY_OPTION:
   case TY_LIST:
   case TY_QUERY:
-    if (fuel == 0 || !instantiate_type(fuel - 1, environment, params, values, args, tokens, chosen, scope,
-                                     type->left, &copy.left)) return 0;
+    if (fuel == 0 || !instantiate_type(fuel - 1, budget, environment, params, values, args, tokens, chosen, scope,
+                                     type->left, &copy.left, left, failure)) return 0;
     break;
   case TY_PROD:
   case TY_SUM:
-    if (fuel == 0 || !instantiate_type(fuel - 1, environment, params, values, args, tokens, chosen, scope, type->left, &copy.left) ||
-        !instantiate_type(fuel - 1, environment, params, values, args, tokens, chosen, scope, type->right, &copy.right)) return 0;
+    if (fuel == 0 || !instantiate_type(fuel - 1, budget, environment, params, values, args, tokens, chosen, scope,
+                                     type->left, &copy.left, &first, failure) ||
+        !instantiate_type(fuel - 1, first, environment, params, values, args, tokens, chosen, scope, type->right,
+                          &copy.right, left, failure)) return 0;
     break;
   case TY_NAT:
   case TY_TEXT:
@@ -1891,27 +1942,36 @@ static int instantiate_type(Fuel fuel, const Bindings *environment, const Params
   return 1;
 }
 
-int instantiate_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                       const Terms *args, Tokens tokens, const LType *result, const LType **instantiated) {
-  return instantiate_type(fuel, environment, params, values, args, tokens, NULL, NULL, result, instantiated);
+int instantiate_result(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
+                       const Terms *args, Tokens tokens, const LType *result, const LType **instantiated, Nat *left,
+                       Failure *failure) {
+  return instantiate_type(fuel, budget, environment, params, values, args, tokens, NULL, NULL, result, instantiated,
+                          left, failure);
 }
 
-static int instantiate_specialized(Fuel fuel, const Bindings *environment, const Params *params,
+static int instantiate_specialized(Fuel fuel, Nat budget, const Bindings *environment, const Params *params,
                                    const Values *values, const Terms *args, Tokens tokens, const Bindings *chosen,
-                                   const LType *result, const LType **instantiated) {
-  return instantiate_type(fuel, environment, params, values, args, tokens, chosen, NULL, result, instantiated);
+                                   const LType *result, const LType **instantiated, Nat *left, Failure *failure) {
+  return instantiate_type(fuel, budget, environment, params, values, args, tokens, chosen, NULL, result, instantiated,
+                          left, failure);
 }
 
-const Params *instantiate_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                                 const Terms *args, Tokens tokens, const Params *remaining) {
+/* D9: a param that does not instantiate stays as it is, as before D9, and
+   its work is not charged (the same rule as close_params). */
+const Params *instantiate_params(Fuel fuel, Nat budget, const Bindings *environment, const Params *params,
+                                 const Values *values, const Terms *args, Tokens tokens, const Params *remaining,
+                                 Nat *left) {
   const Params *done = NULL;
+  *left = budget;
   for (; remaining != NULL; remaining = remaining->tail) {
     Param head = remaining->head;
     const LType *found;
-    done = params_item(instantiate_result(fuel, environment, params, values, args, tokens, head.type, &found)
-                           ? (Param){head.name, found}
-                           : head,
-                       done);
+    Nat spent;
+    Failure failure = {0, {NULL, 0}};
+    int instantiated = instantiate_result(fuel, *left, environment, params, values, args, tokens, head.type, &found,
+                                          &spent, &failure);
+    if (instantiated) *left = spent;
+    done = params_item(instantiated ? (Param){head.name, found} : head, done);
   }
   return reverse_params_onto(NULL, done);
 }
@@ -2141,19 +2201,25 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
                                                              environment)
                                                 : NULL;
         const LType *instantiated = NULL;
-        int resolved = instantiate_specialized(more, environment, side_params(chosen, item->params), values,
+        Nat ready = spent;
+        Failure closing = {0, {NULL, 0}};
+        int resolved = instantiate_specialized(more, spent, environment, side_params(chosen, item->params), values,
                                                term != NULL ? args : NULL, after_types, chosen,
-                                               subst_type(chosen, item->type), &instantiated);
+                                               subst_type(chosen, item->type), &instantiated, &ready, &closing);
         const LType *applied;
-        if (!close_result(more, environment, item->params, values, resolved, instantiated, &applied))
-          return fail_at(failure, head.position, eTerm);
+        if (!close_result(more, ready, environment, item->params, values, resolved, instantiated, &applied, &spent,
+                          &closing))
+          return side_failure(failure, closing, head.position, eTerm);
         if (checking_body(environment) == 1)
           return with_term(worked_typed((Typed){applied, &null_value}, after, spent, typed, rest, left), term,
                            applied_term);
-        const Params *closed =
-            close_params(more, environment, item->params, values,
-                         instantiate_params(more, environment, item->params, values, term != NULL ? args : NULL,
-                                            after_types, item->params));
+        const Params *instantiated_params =
+            instantiate_params(more, spent, environment, item->params, values, term != NULL ? args : NULL, after_types,
+                               item->params, &spent);
+        const Params *closed;
+        if (!close_params(more, spent, environment, item->params, values, instantiated_params, &closed, &spent,
+                          failure))
+          return 0;
         const Bindings *scope = bind_arguments(environment, value_params(chosen, closed), values,
                                                type_frame(definition_scope(item->name, environment), chosen));
         const Value *value;
@@ -2235,7 +2301,7 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
                       failure))
         return 0;
       const LType *bx, *by;
-      if (!transport_types(more, environment, head.position, motive, found, &bx, &by, failure)) return 0;
+      if (!transport_types(more, spent, environment, head.position, motive, found, &bx, &by, &spent, failure)) return 0;
       const Value *value;
       Tokens later;
       Nat used;
@@ -2254,11 +2320,8 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
                                                 terms_item(first, NULL))
                                     : NULL);
     if (form > 5)
-      return with_term(lift_parsed(spent,
-                                   project_sigma(more, environment, head.position, form - 5, found, first, after,
-                                                 typed, rest,
-                                                 failure),
-                                   left),
+      return with_term(project_sigma(more, spent, environment, head.position, form - 5, found, first, after, typed,
+                                     rest, left, failure),
                        term, term != NULL ? form_term(form == 6 ? TERM_WITNESS : TERM_PAYLOAD, head.position,
                                                       terms_item(first, NULL))
                                           : NULL);
@@ -2299,11 +2362,15 @@ static int pack_term(Fuel fuel, Nat budget, Nat atom, Nat position, const LType 
   if (!parse_term(more, budget, 1, expected->left, environment, tokens, &witness, &after, &spent, &first, failure))
     return 0;
   Val side;
-  if (!argument_text(more, environment, expected->left, witness, first, &side))
-    return fail_at(failure, position, eTerm);
+  Nat ready;
+  Failure argued = {0, {NULL, 0}};
+  if (!argument_text(more, spent, environment, expected->left, witness, first, &side, &ready, &argued))
+    return side_failure(failure, argued, position, eTerm);
   const LType *b;
-  if (!put_marker(more, environment, expected->right, expected->level, (Typed){expected->left, witness}, side, &b))
-    return fail_at(failure, position, eSigma);
+  Failure put = {0, {NULL, 0}};
+  if (!put_marker(more, ready, environment, expected->right, expected->level, (Typed){expected->left, witness}, side,
+                  &b, &spent, &put))
+    return side_failure(failure, put, position, eSigma);
   const Value *payload;
   Tokens later;
   Nat used;
@@ -2569,12 +2636,16 @@ static int eval_pack(Fuel fuel, Nat budget, const LType *expected, const Binding
   Nat spent;
   if (!eval_argument(more, budget, expected->left, environment, first_arg(term), &witness, &spent, failure)) return 0;
   Val side;
+  Nat ready;
+  Failure argued = {0, {NULL, 0}};
   if (second == NULL ||
-      !argument_text(more, environment, expected->left, witness, first_arg(term), &side))
-    return fail_at(failure, term->position, eTerm);
+      !argument_text(more, spent, environment, expected->left, witness, first_arg(term), &side, &ready, &argued))
+    return side_failure(failure, argued, term->position, eTerm);
   const LType *b;
-  if (!put_marker(more, environment, expected->right, expected->level, (Typed){expected->left, witness}, side, &b))
-    return fail_at(failure, term->position, eSigma);
+  Failure put = {0, {NULL, 0}};
+  if (!put_marker(more, ready, environment, expected->right, expected->level, (Typed){expected->left, witness}, side,
+                  &b, &spent, &put))
+    return side_failure(failure, put, term->position, eSigma);
   const Value *payload;
   Nat used;
   if (!eval_argument(more, spent, b, environment, second, &payload, &used, failure)) return 0;
@@ -2609,11 +2680,13 @@ static int eval_dependent(Fuel fuel, Nat budget, const Bindings *chosen, const B
     if (args == NULL) return 0;
     const Values *earlier = reverse_values_onto(NULL, seen);
     const LType *instantiated = NULL;
-    int resolved = instantiate_specialized(fuel, environment, specialized, earlier, given, start, chosen,
-                                           subst_type(chosen, head.type), &instantiated);
+    Nat ready = budget;
+    Failure closing = {0, {NULL, 0}};
+    int resolved = instantiate_specialized(fuel, budget, environment, specialized, earlier, given, start, chosen,
+                                           subst_type(chosen, head.type), &instantiated, &ready, &closing);
     const LType *expected;
-    if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected))
-      return fail_at(failure, args->head->position, eTerm);
+    if (!close_result(fuel, ready, environment, params, earlier, resolved, instantiated, &expected, &budget, &closing))
+      return side_failure(failure, closing, args->head->position, eTerm);
     const Value *value;
     if (!eval_argument(fuel, budget, expected, environment, args->head, &value, &budget, failure)) return 0;
     seen = values_item(value, seen);
@@ -2644,16 +2717,21 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
                         term->end, &values, &spent, failure))
       return 0;
     const LType *instantiated = NULL;
-    int resolved = instantiate_specialized(fuel, environment, side_params(chosen, item->params), values, term->args,
-                                           after_types, chosen, subst_type(chosen, item->type), &instantiated);
+    Nat ready = spent;
+    Failure closing = {0, {NULL, 0}};
+    int resolved = instantiate_specialized(fuel, spent, environment, side_params(chosen, item->params), values,
+                                           term->args, after_types, chosen, subst_type(chosen, item->type),
+                                           &instantiated, &ready, &closing);
     const LType *applied;
-    if (!close_result(fuel, environment, item->params, values, resolved, instantiated, &applied))
-      return fail_at(failure, term->position, eTerm);
+    if (!close_result(fuel, ready, environment, item->params, values, resolved, instantiated, &applied, &spent,
+                      &closing))
+      return side_failure(failure, closing, term->position, eTerm);
     if (checking_body(environment) == 1) return eval_typed((Typed){applied, &null_value}, spent, typed, left);
-    const Params *closed =
-        close_params(fuel, environment, item->params, values,
-                     instantiate_params(fuel, environment, item->params, values, term->args, after_types,
-                                        item->params));
+    const Params *instantiated_params = instantiate_params(fuel, spent, environment, item->params, values, term->args,
+                                                           after_types, item->params, &spent);
+    const Params *closed;
+    if (!close_params(fuel, spent, environment, item->params, values, instantiated_params, &closed, &spent, failure))
+      return 0;
     const Bindings *scope = bind_arguments(environment, value_params(chosen, closed), values,
                                            type_frame(definition_scope(item->name, environment), chosen));
     const Value *value;
@@ -3370,10 +3448,8 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
   case TERM_WITNESS:
   case TERM_PAYLOAD:
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
-    return lift_parsed(spent,
-                       project_sigma(more, environment, term->position, term->tag == TERM_WITNESS ? 1 : 2, found,
-                                     NULL, no_tokens, typed, &rest, failure),
-                       left);
+    return project_sigma(more, spent, environment, term->position, term->tag == TERM_WITNESS ? 1 : 2, found, NULL,
+                         no_tokens, typed, &rest, left, failure);
   case TERM_SYMM:
     if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure)) return 0;
     return lift_parsed(spent, symm_proof(term->position, found, no_tokens, typed, &rest, failure), left);
@@ -3392,10 +3468,13 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
     /* D8 part C (design item 13): the motive is the LType of the check. Put
        the type and value arguments of this application scope in it. */
     const LType *motive;
-    if (!application_motive(more, environment, term->position, term->types->head.type, &motive, failure)) return 0;
+    Nat ready;
+    if (!application_motive(more, budget, environment, term->position, term->types->head.type, &motive, &ready,
+                            failure))
+      return 0;
     const LType *bx, *by;
-    if (!eval_synth(more, budget, environment, first_arg(term), &found, &spent, failure) ||
-        !transport_types(more, environment, term->position, motive, found, &bx, &by, failure))
+    if (!eval_synth(more, ready, environment, first_arg(term), &found, &spent, failure) ||
+        !transport_types(more, spent, environment, term->position, motive, found, &bx, &by, &spent, failure))
       return 0;
     const Value *value;
     Nat used;
@@ -3842,12 +3921,14 @@ int dependent_arguments(Fuel fuel, Nat budget, const Bindings *chosen, const Bin
     if (is_type_param(head) == 1) continue;
     const Values *earlier = reverse_values_onto(NULL, seen);
     const LType *instantiated = NULL;
-    int resolved = instantiate_specialized(fuel, environment, specialized, earlier,
+    Nat ready = budget;
+    Failure closing = {0, {NULL, 0}};
+    int resolved = instantiate_specialized(fuel, budget, environment, specialized, earlier,
                                            terms != NULL ? reverse_terms_onto(NULL, built) : NULL, start, chosen,
-                                           subst_type(chosen, head.type), &instantiated);
+                                           subst_type(chosen, head.type), &instantiated, &ready, &closing);
     const LType *expected;
-    if (!close_result(fuel, environment, params, earlier, resolved, instantiated, &expected))
-      return fail_at(failure, first_position(tokens), eTerm);
+    if (!close_result(fuel, ready, environment, params, earlier, resolved, instantiated, &expected, &budget, &closing))
+      return side_failure(failure, closing, first_position(tokens), eTerm);
     const Value *value;
     const Term *made = NULL;
     if (!parse_term(fuel, budget, 1, expected, environment, tokens, &value, &tokens, &budget, want_term(terms, &made),
@@ -3858,19 +3939,25 @@ int dependent_arguments(Fuel fuel, Nat budget, const Bindings *chosen, const Bin
   }
 }
 
-int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *closed) {
+int close_side(Fuel fuel, Nat budget, const Bindings *bound, const LType *a, Val side, Val *closed, Nat *left,
+               Failure *failure) {
   if (fuel == 0) return 0;
   Fuel more = fuel - 1;
   switch (side.kind) {
   case VAL_CLOSED:
-  case VAL_VAR: *closed = side; return 1;
+  case VAL_VAR:
+    *closed = side;
+    *left = budget;
+    return 1;
   case VAL_TERM: {
     const Value *value;
-    Nat left;
-    Failure failure = {0, {NULL, 0}};
+    Failure evaluated = {0, {NULL, 0}};
     /* D4: a side closes on its node with eval_term. An unknown answer is a
-       refusal: the side has no tokens to replay (K1 stays out, Q-D4-4). */
-    if (!eval_term(more, 1, a, bound, side.node, &value, &left, &failure)) return 0;
+       refusal: the side has no tokens to replay (K1 stays out, Q-D4-4). D9
+       (design item 1): the side runs on the remaining work budget, and a
+       budget failure of eval_term goes to the caller. */
+    if (!eval_term(more, budget, a, bound, side.node, &value, left, &evaluated))
+      return kept_budget_failure(failure, evaluated);
     return printed_side(more, value, closed);
   }
   }
@@ -3887,16 +3974,19 @@ int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *
    unfold). A group gives the normal form of its inner term, and a new
    literal without the group. Each other form with a marker is refused
    (eTerm at its position). A node is copied only when a child changes. */
-static int normal_args(Fuel fuel, const Bindings *scope, const Terms *args, const Terms **normal, Failure *failure) {
+static int normal_args(Fuel fuel, Nat budget, const Bindings *scope, const Terms *args, const Terms **normal,
+                       Nat *left, Failure *failure) {
   if (fuel == 0) return 0;
   if (args == NULL) {
     *normal = NULL;
+    *left = budget;
     return 1;
   }
   const Term *head;
   const Terms *tail;
-  if (!side_normal(fuel - 1, scope, args->head, &head, failure)) return 0;
-  if (!normal_args(fuel - 1, scope, args->tail, &tail, failure)) return 0;
+  Nat spent;
+  if (!side_normal(fuel - 1, budget, scope, args->head, &head, &spent, failure)) return 0;
+  if (!normal_args(fuel - 1, spent, scope, args->tail, &tail, left, failure)) return 0;
   *normal = head == args->head && tail == args->tail ? args : terms_item(head, tail);
   return 1;
 }
@@ -3909,17 +3999,19 @@ static const Term *with_args(const Term *node, const Terms *args) {
   return copy;
 }
 
-static int normal_typed_args(Fuel fuel, const Bindings *scope, const LTypes *types, const Terms *args,
-                             const Terms **normal, Failure *failure) {
+static int normal_typed_args(Fuel fuel, Nat budget, const Bindings *scope, const LTypes *types, const Terms *args,
+                             const Terms **normal, Nat *left, Failure *failure) {
   if (fuel == 0) return 0;
   if (types == NULL || args == NULL) {
     *normal = NULL;
+    *left = budget;
     return types == NULL && args == NULL;
   }
   const Term *head;
   const Terms *tail;
-  if (!side_normal_at(fuel - 1, scope, types->head, args->head, &head, failure) ||
-      !normal_typed_args(fuel - 1, scope, types->tail, args->tail, &tail, failure)) return 0;
+  Nat spent;
+  if (!side_normal_at(fuel - 1, budget, scope, types->head, args->head, &head, &spent, failure) ||
+      !normal_typed_args(fuel - 1, spent, scope, types->tail, args->tail, &tail, left, failure)) return 0;
   *normal = head == args->head && tail == args->tail ? args : terms_item(head, tail);
   return 1;
 }
@@ -3929,13 +4021,13 @@ static int normal_typed_args(Fuel fuel, const Bindings *scope, const LTypes *typ
    A group around a variable stays a group, thus refl keeps (n) different
    from n. The declared-type check compares it as the variable (D-C1).
    Applications with markers remain applications, as in side_normal. */
-int side_normal_at(Fuel fuel, const Bindings *scope, const LType *type, const Term *node,
-                   const Term **normal, Failure *failure) {
+int side_normal_at(Fuel fuel, Nat budget, const Bindings *scope, const LType *type, const Term *node,
+                   const Term **normal, Nat *left, Failure *failure) {
   if (fuel == 0) return 0;
   Fuel more = fuel - 1;
   if (node->tag == TERM_GROUP) {
     const Term *inner;
-    if (!side_normal_at(more, scope, type, first_arg(node), &inner, failure)) return 0;
+    if (!side_normal_at(more, budget, scope, type, first_arg(node), &inner, left, failure)) return 0;
     *normal = inner->tag == TERM_NUMBER || inner->tag == TERM_STRING ||
               inner->tag == TERM_CLOSED
                   ? inner : with_args(node, terms_item(inner, NULL));
@@ -3948,11 +4040,13 @@ int side_normal_at(Fuel fuel, const Bindings *scope, const LType *type, const Te
                   item->kind == BIND_VALUE && item->slot == 0 && same_type(type, item->type);
   if (term_marker_bound(node) == 0 && (constructor || data_name)) {
     const Value *value;
-    Nat left;
-    Failure evaluated = {0, {NULL, 0}};
     Val closed;
-    if (!eval_term(more, 1, type, scope, node, &value, &left, &evaluated) ||
-        !printed_side(more, value, &closed)) return 0;
+    Failure evaluated = {0, {NULL, 0}};
+    /* D9 (design item 2): the node runs on the remaining work budget, and a
+       budget failure of eval_term goes to the caller. */
+    if (!eval_term(more, budget, type, scope, node, &value, left, &evaluated))
+      return kept_budget_failure(failure, evaluated);
+    if (!printed_side(more, value, &closed)) return 0;
     *normal = term_closed(node->position, type, value, closed.text);
     return 1;
   }
@@ -3965,16 +4059,18 @@ int side_normal_at(Fuel fuel, const Bindings *scope, const LType *type, const Te
   }
   if (types != NULL) {
     const Terms *args;
-    if (!normal_typed_args(more, scope, types, node->args, &args, failure)) return 0;
+    if (!normal_typed_args(more, budget, scope, types, node->args, &args, left, failure)) return 0;
     *normal = with_args(node, args);
     return 1;
   }
-  return side_normal(fuel, scope, node, normal, failure);
+  return side_normal(fuel, budget, scope, node, normal, left, failure);
 }
 
-int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term **normal, Failure *failure) {
+int side_normal(Fuel fuel, Nat budget, const Bindings *scope, const Term *node, const Term **normal, Nat *left,
+                Failure *failure) {
   if (fuel == 0) return 0;
   Fuel more = fuel - 1;
+  *left = budget;
   if (node->tag == TERM_VAR || node->tag == TERM_NUMBER || node->tag == TERM_STRING || node->tag == TERM_CLOSED) {
     *normal = node;
     return 1;
@@ -4000,8 +4096,7 @@ int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term *
     default: break;
     }
     Typed typed;
-    Nat left;
-    if (!eval_synth(more, 1, scope, node, &typed, &left, failure)) return 0;
+    if (!eval_synth(more, budget, scope, node, &typed, left, failure)) return 0;
     /* Some Option payloads use VALUE_NAT or VALUE_TEXT too. Only a Nat
        or Text term can be replaced by the corresponding scalar literal. */
     *normal = same_type(typed.type, &nat_type) || same_type(typed.type, &text_type)
@@ -4011,7 +4106,7 @@ int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term *
   }
   if (node->tag == TERM_GROUP) {
     const Term *inner;
-    if (!side_normal(more, scope, node->args->head, &inner, failure)) return 0;
+    if (!side_normal(more, budget, scope, node->args->head, &inner, left, failure)) return 0;
     if (inner->tag == TERM_NUMBER || inner->tag == TERM_STRING || inner->tag == TERM_CLOSED) {
       *normal = inner;
       return 1;
@@ -4025,22 +4120,24 @@ int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term *
   int projected = node->tag == TERM_WITNESS || node->tag == TERM_PAYLOAD;
   if (node->tag != TERM_CONSTRUCT && !applied && !projected) return fail_at(failure, node->position, eTerm);
   const Terms *args;
-  if (!normal_args(more, scope, node->args, &args, failure)) return 0;
+  if (!normal_args(more, budget, scope, node->args, &args, left, failure)) return 0;
   *normal = with_args(node, args);
   return 1;
 }
 
-int close_body_side(Fuel fuel, const Bindings *environment, const LType *a, Val side, Val *closed) {
+int close_body_side(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, Val side, Val *closed,
+                    Nat *left, Failure *failure) {
   if (fuel == 0) return 0;
   if (kept_side(side) == 1) {
     *closed = side;
+    *left = budget;
     return 1;
   }
-  return close_side(fuel - 1, environment, a, side, closed);
+  return close_side(fuel - 1, budget, environment, a, side, closed, left, failure);
 }
 
-int close_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, int resolved,
-                 const LType *result, const LType **closed) {
+int close_result(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
+                 int resolved, const LType *result, const LType **closed, Nat *left, Failure *failure) {
   if (fuel == 0) return 0;
   Fuel more = fuel - 1;
   if (!resolved) return 0;
@@ -4049,38 +4146,53 @@ int close_result(Fuel fuel, const Bindings *environment, const Params *params, c
   Val rhs;
   if (!sides_of(result, &a, &lhs, &rhs)) {
     *closed = result;
+    *left = budget;
     return 1;
   }
   Val x;
   Val y;
+  Nat spent;
   if (checking_body(environment) == 1) {
-    if (!close_body_side(more, environment, a, lhs, &x)) return 0;
-    if (!close_body_side(more, environment, a, rhs, &y)) return 0;
+    if (!close_body_side(more, budget, environment, a, lhs, &x, &spent, failure)) return 0;
+    if (!close_body_side(more, spent, environment, a, rhs, &y, left, failure)) return 0;
     *closed = eq_type(a, x, y);
     return 1;
   }
   const Bindings *bound = argument_bindings(0, params, values, environment);
-  if (!close_side(more, bound, a, lhs, &x)) return 0;
-  if (!close_side(more, bound, a, rhs, &y)) return 0;
+  if (!close_side(more, budget, bound, a, lhs, &x, &spent, failure)) return 0;
+  if (!close_side(more, spent, bound, a, rhs, &y, left, failure)) return 0;
   *closed = eq_type(a, x, y);
   return 1;
 }
 
-/* At fuel 0 the params not yet closed are kept as they are. */
-const Params *close_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                           const Params *remaining) {
+/* At fuel 0 the params not yet closed are kept as they are. A param that
+   cannot close keeps its type and does not take work budget. Exhaustion of
+   the work budget stops the call and preserves its failure. */
+int close_params(Fuel fuel, Nat budget, const Bindings *environment, const Params *params,
+                 const Values *values, const Params *remaining, const Params **closed, Nat *left,
+                 Failure *failure) {
   const Params *done = NULL;
+  *left = budget;
   for (; remaining != NULL; remaining = remaining->tail) {
-    if (fuel == 0) return reverse_params_onto(remaining, done);
+    if (fuel == 0) {
+      *closed = reverse_params_onto(remaining, done);
+      return 1;
+    }
     fuel = fuel - 1;
     Param head = remaining->head;
     const LType *found;
-    done = params_item(close_result(fuel, environment, params, values, 1, head.type, &found)
-                           ? (Param){head.name, found}
-                           : head,
-                       done);
+    Nat spent;
+    Failure closing = {0, {NULL, 0}};
+    int ready = close_result(fuel, *left, environment, params, values, 1, head.type, &found, &spent, &closing);
+    if (!ready && same_text(closing.message, eBudget)) {
+      *failure = closing;
+      return 0;
+    }
+    if (ready) *left = spent;
+    done = params_item(ready ? (Param){head.name, found} : head, done);
   }
-  return reverse_params_onto(NULL, done);
+  *closed = reverse_params_onto(NULL, done);
+  return 1;
 }
 
 int unary_term(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, Tokens tokens, Unary *op,

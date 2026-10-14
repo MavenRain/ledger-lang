@@ -103,3 +103,43 @@ test('the sides of an equality type use the work budget', () => {
   assert.deepEqual(values(`${chain(3)}def p : Eq Nat (f3 2) 2 := refl def q : Nat := f3 5`), [5]);
   overBudget(`${chain(40)}def p : Eq Nat (f40 1) 1 := refl`);
 });
+
+// D9: the side helpers run on the remaining work budget.
+const idX = 'def id : (x : Nat) -> Nat := fun (x : Nat) => x\n';
+const doubled = depth =>
+  Array.from({ length: depth + 1 }, (_, k) =>
+    k === 0
+      ? 'def f0 : (x : Nat) -> Nat := fun (x : Nat) => x\n'
+      : `def f${k} : (x : Nat) -> Nat := fun (x : Nat) => f${k - 1} (f${k - 1} x)\n`,
+  ).join('');
+const closedSides = name =>
+  `def k : (n : Nat) -> Eq Nat (${name} n) (${name} n) := fun (n : Nat) => refl\n` +
+  `def p : Eq Nat (${name} 2) (${name} 2) := k 2\n`;
+const types = source => {
+  const result = run(source);
+  assert.equal(result['ledger-lang'], 1, JSON.stringify(result));
+  return result.instances.map(item => item.type);
+};
+
+test('a computed side closes on the remaining work budget', () => {
+  assert.deepEqual(values(`${idX}${closedSides('id')}`), []);
+  assert.deepEqual(values(`${doubled(1)}${closedSides('f1')}`), []);
+  const proof = 'Eq Nat (id n) (id n)';
+  const u = `def u : (n : Nat) -> (p : ${proof}) -> Nat := fun (n : Nat) (p : ${proof}) => n\n`;
+  assert.deepEqual(values(`${idX}${u}def r : Eq Nat 2 2 := refl\ndef v : Nat := u 2 r\n`), [2]);
+});
+
+test('the work of a computed side is charged to the work budget', () => {
+  // Each side of k 2 and of p evaluates 2047 bodies. 8 * 716 + 64 < 4 * 2047.
+  overBudget(`${doubled(10)}${closedSides('f10')}`);
+});
+
+test('a Sigma type text gives the side terms with the bound name', () => {
+  const s = `${idX}def s : Sigma (x : Nat) (Eq Nat (id x) (id x)) := pack 2 refl\n`;
+  assert.deepEqual(types(`${s}def e : Eq Nat (id 2) (id 2) := payload s\n`), [
+    'Sigma (x : Nat) (Eq (Nat) ((id x)) ((id x)))',
+  ]);
+  assert.deepEqual(types('def s : Sigma (x : Nat) (Eq (List Nat) (cons x nil) (cons x nil)) := pack 2 refl\n'), [
+    'Sigma (x : Nat) (Eq (List (Nat)) ((cons x [])) ((cons x [])))',
+  ]);
+});

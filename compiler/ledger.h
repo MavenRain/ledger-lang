@@ -603,21 +603,23 @@ int printed_side(Fuel fuel, const Value *value, Val *side);
 int marker_for(Text name, const Params *done, Nat *found, Nat *index);
 int put_param_markers(const Params *done, const Bindings *environment, const struct Term *term,
                       const Bindings **scope, const struct Term **marked);
-int argument_text(Fuel fuel, const Bindings *environment, const LType *a, const Value *value, const struct Term *term,
-                  Val *side);
-int argument_side(Fuel fuel, Nat index, const Bindings *environment, const Params *params, const Values *values,
-                  const struct Terms *args, Val *side);
+int argument_text(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, const Value *value,
+                  const struct Term *term, Val *side, Nat *left, Failure *failure);
+int argument_side(Fuel fuel, Nat budget, Nat index, const Bindings *environment, const Params *params,
+                  const Values *values, const struct Terms *args, Val *side, Nat *left, Failure *failure);
 int argument_token(Nat index, const Params *params, Tokens tokens, Token *token);
-int rename_markers(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
+int rename_markers(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
                    const struct Terms *args, Tokens tokens, const struct Term *node,
-                   const struct Term **renamed_node);
+                   const struct Term **renamed_node, Nat *left, Failure *failure);
 Nat kept_side(Val side);
-int instantiate_side(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                     const struct Terms *args, Tokens tokens, Val side, Val *result);
-int instantiate_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                       const struct Terms *args, Tokens tokens, const LType *result, const LType **instantiated);
-const Params *instantiate_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                                 const struct Terms *args, Tokens tokens, const Params *remaining);
+int instantiate_side(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
+                     const struct Terms *args, Tokens tokens, Val side, Val *result, Nat *left, Failure *failure);
+int instantiate_result(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
+                       const struct Terms *args, Tokens tokens, const LType *result, const LType **instantiated,
+                       Nat *left, Failure *failure);
+const Params *instantiate_params(Fuel fuel, Nat budget, const Bindings *environment, const Params *params,
+                                 const Values *values, const struct Terms *args, Tokens tokens,
+                                 const Params *remaining, Nat *left);
 const Bindings *argument_bindings(Nat index, const Params *params, const Values *values,
                                   const Bindings *environment);
 
@@ -645,12 +647,15 @@ int parse_arguments(Fuel fuel, Nat budget, Nat atom, const LTypes *types, const 
 int dependent_arguments(Fuel fuel, Nat budget, const Bindings *chosen, const Bindings *environment,
                         const Params *params, const Params *remaining, const Values *seen, Tokens start,
                         Tokens tokens, const Values **values, Tokens *rest, Nat *left, const struct Terms **terms, Failure *failure);
-int close_side(Fuel fuel, const Bindings *bound, const LType *a, Val side, Val *closed);
-int close_body_side(Fuel fuel, const Bindings *environment, const LType *a, Val side, Val *closed);
-int close_result(Fuel fuel, const Bindings *environment, const Params *params, const Values *values, int resolved,
-                 const LType *result, const LType **closed);
-const Params *close_params(Fuel fuel, const Bindings *environment, const Params *params, const Values *values,
-                           const Params *remaining);
+int close_side(Fuel fuel, Nat budget, const Bindings *bound, const LType *a, Val side, Val *closed, Nat *left,
+               Failure *failure);
+int close_body_side(Fuel fuel, Nat budget, const Bindings *environment, const LType *a, Val side, Val *closed,
+                    Nat *left, Failure *failure);
+int close_result(Fuel fuel, Nat budget, const Bindings *environment, const Params *params, const Values *values,
+                 int resolved, const LType *result, const LType **closed, Nat *left, Failure *failure);
+int close_params(Fuel fuel, Nat budget, const Bindings *environment, const Params *params,
+                 const Values *values, const Params *remaining, const Params **closed, Nat *left,
+                 Failure *failure);
 int unary_term(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, Tokens tokens, Unary *op,
                Tokens *rest, Nat *left, const struct Term **term, Failure *failure);
 int partial_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *environment, Tokens tokens, Unary *op,
@@ -872,9 +877,10 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
               const Value **value, Nat *left, Failure *failure);
 int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *term, Typed *typed, Nat *left, Failure *failure);
 /* checker.c: the normal form of a side node in the scope, or 0 (D4 part C). */
-int side_normal(Fuel fuel, const Bindings *scope, const Term *node, const Term **normal, Failure *failure);
-int side_normal_at(Fuel fuel, const Bindings *scope, const LType *type, const Term *node,
-                   const Term **normal, Failure *failure);
+int side_normal(Fuel fuel, Nat budget, const Bindings *scope, const Term *node, const Term **normal, Nat *left,
+                Failure *failure);
+int side_normal_at(Fuel fuel, Nat budget, const Bindings *scope, const LType *type, const Term *node,
+                   const Term **normal, Nat *left, Failure *failure);
 
 #include "literals.h"
 

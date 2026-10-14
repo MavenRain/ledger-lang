@@ -64,6 +64,71 @@ static Val bare_side(Val side) {
   return node->tag == TERM_VAR ? (Val){.kind = VAL_VAR, .index = node->index} : (Val){.kind = VAL_TERM, .node = node};
 }
 
+/* The letter that the lexer reads after a backslash for this byte, or 0. */
+static Nat escape_letter(Nat byte) {
+  switch (byte) {
+    case 34: case 92: return byte;
+    case 10: return 110;
+    case 13: return 114;
+    case 9: return 116;
+    case 8: return 98;
+    case 12: return 102;
+  }
+  return 0;
+}
+
+static Text string_source(Text text) {
+  TextBuilder builder = builder_new();
+  builder_push(&builder, 34);
+  for (; !text_is_end(text); text = text_tail(text)) {
+    Nat letter = escape_letter(text_head(text));
+    if (letter != 0) builder_push(&builder, 92);
+    builder_push(&builder, letter != 0 ? letter : text_head(text));
+  }
+  builder_push(&builder, 34);
+  return builder_text(&builder);
+}
+
+/* The lexer gives `:=` as 61, `->` as 62 and `=>` as 63. */
+static Text mark_source(Nat mark) {
+  switch (mark) {
+    case 61: return text_byte(58, text_one(61));
+    case 62: return text_byte(45, text_one(62));
+    case 63: return text_byte(61, text_one(62));
+  }
+  return text_one(mark);
+}
+
+/* One token of token_text in source form (2 identifier, 3 number, 4 string,
+   5 mark). */
+static Text token_source(Nat kind, Nat item, Text word) {
+  switch (kind) {
+    case 2: return word;
+    case 3: return number_text(item);
+    case 4: return string_source(word);
+  }
+  return mark_source(item);
+}
+
+/* The display text of an open side (key 0) is its term in source form
+   (USER rulings 2 and 3): the term_text tokens, decoded, with a space between
+   two tokens but not after `(` and not before `)`. */
+static Text side_source(const Term *node) {
+  TextBuilder builder = builder_new();
+  Nat open = 1;
+  Text rest = term_text(node);
+  while (!text_is_end(rest)) {
+    Nat kind = text_head(rest);
+    Nat item = text_head(text_tail(rest));
+    Nat size = kind == 2 || kind == 4 ? item : 0;
+    if (!open && !(kind == 5 && item == 41)) builder_push(&builder, 32);
+    builder_append(&builder, token_source(kind, item, text_take(text_drop(rest, 2), size)));
+    open = kind == 5 && item == 40;
+    rest = text_drop(rest, 2 + size);
+  }
+  return builder_text(&builder);
+}
+
 static Text side_key(Nat key, Val given, const SigmaKey *scope) {
   Val side = key == 2 ? bare_side(given) : given;
   if (scope == NULL || side.kind == VAL_CLOSED) return val_text(side);
@@ -74,7 +139,8 @@ static Text side_key(Nat key, Val given, const SigmaKey *scope) {
     const Term *first = term_marker_first(side.node, index);
     table[index] = first == NULL ? NULL : term_var(first->position, 0, marker_key(key, index, scope), index);
   }
-  return val_text((Val){.kind = VAL_TERM, .node = term_with_markers(side.node, table, size)});
+  const Term *marked = term_with_markers(side.node, table, size);
+  return key == 0 ? side_source(marked) : val_text((Val){.kind = VAL_TERM, .node = marked});
 }
 
 /* `Sigma (x : A) (B)`, and `Sigma (A) (B)` for the short form. */
