@@ -96,32 +96,17 @@ The plan adds neutral values in two stages:
   evaluate the name of an earlier definition, so with
   `def one : Nat := 1`, `pf m one` did not prove `(pair m 1)`, and a
   parenthesized argument was refused.
-- D3 (syntax tree done). The checker checks a body once into a `Term` and
-  keeps its tokens as a fallback. Applications try the term evaluator;
-  body evaluation can still fall back to parsing the tokens. The work
-  budget and JSON output stay the same. D4 adds neutral evaluation and
+- D3 (done). The checker checks a body once into a `Term`, and each
+  application evaluates that `Term`. D8 removed the token fallbacks of
+  body evaluation. An application does not parse the body tokens again. A
+  computed side, a witness and a transport motive come from the checked
+  `Term` and the checked types, not from tokens. The work budget and JSON
+  output stay the same. D4 adds neutral evaluation and
   read-back for computed sides. A computed side keeps only its `Term`
   node, with a marker variable for each parameter. Computed sides compare with
   `same_term`; shifting and renaming markers walk the tree. `close_side`
   evaluates the tree with `eval_term` and refuses an unknown answer without
-  replaying tokens. These token uses remain after D6:
-  - `synth_term`, `eval_apply` and `apply_body` (`compiler/checker.c`):
-    body evaluation can fall back to `parse_term`.
-  - `unary_of`, `stepper_argument` and the inline, partial and bound
-    callback helpers (`compiler/checker.c`): parser routes for structure
-    forms and folds keep token-only `TERM_BODY` carriers, which
-    `apply_body` parses again.
-  - `mark_side` and `marker_bindings` (`compiler/program.c`) and
-    `body_term_side` (`compiler/checker.c`): the parse input of a computed
-    side and of a parenthesized argument in a body. A `Val` keeps no
-    tokens.
-  - `pack_term` and `neutral_witness` (`compiler/checker.c`, D5): the
-    argument tokens of `pack` and of a projection give the side of the
-    witness, as for a parenthesized argument in a body.
-  - `eval_synth` (`compiler/checker.c`, D6): the `TERM_TRANSPORT` node
-    keeps the source tokens of the motive. Each evaluation parses the
-    motive again in the scope of the application, so a type parameter or a
-    value parameter of the body gets its argument.
+  replaying tokens.
 - D4 (done). Computed sides. A side can be a term of value parameters,
   literals, constructor forms, names of earlier definitions and
   applications of earlier definitions, such as `(natAdd n 1)` or

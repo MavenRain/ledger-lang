@@ -224,7 +224,7 @@ check at the definition does not know the argument values, so it checks an
 application in the body only by type. Thus a constructor
 error in the body, such as `textByte n textEnd` with `n` above 255, is
 reported at its byte in the body when an application supplies that value.
-Each application parses the body again with the fuel that remains at the
+Each application evaluates the body again with the fuel that remains at the
 application site. A body evaluates in the scope of its definition. Thus a
 name in the body refers to the definition before the function, also when a
 caller has a parameter with the same name. Each evaluated body uses one unit

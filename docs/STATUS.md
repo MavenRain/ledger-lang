@@ -42,10 +42,10 @@ not complete the M0 milestone in `SPEC.md`.
   argument that names a parameter of the body gives the neutral side of
   that parameter. Step D2b: the type of a proof parameter `(e : Eq A x y)`
   can name earlier value parameters, and an application checks a proof
-  argument with the sides of the earlier arguments. The syntax tree
-  portion of D3 is done: the checker checks a body once into a `Term`,
-  and applications try its evaluator with token fallbacks (see step D3
-  in `docs/DEPENDENT-TYPES.md`). Step D3a: a side is a
+  argument with the sides of the earlier arguments. Step D3: the checker
+  checks a body once into a `Term`, and applications evaluate that `Term`
+  with no token fallback (see step D3 in `docs/DEPENDENT-TYPES.md`).
+  Step D3a: a side is a
   closed, neutral or computed value, and `refl` and `trans` compare sides
   the same way. Step D4a: a side can be an atom of constructor forms and
   literals that names a value parameter, such as `(some n)` (a computed
@@ -185,11 +185,10 @@ not complete the M0 milestone in `SPEC.md`.
    These need an internal value domain with neutral terms. Then
    add Sigma checking and evaluation, `transport`, and `cong`, and allow
    `Eq` inside Sigma and Pi types. `docs/DEPENDENT-TYPES.md` gives the plan
-   in steps D1 to D7. Steps D1, D2, D2b, D3a, D4a, D4b, D4c, D4, D5, D6 and
-   D7 and the syntax tree portion of D3 are done. D5 adds Sigma checking and
-   evaluation and `Eq` inside Sigma. D6 adds `cong` and `transport`. D7 adds
-   `Query` parameters and `ReadPath`. Body evaluation keeps token fallbacks
-   (step D3).
+   in steps D1 to D7. Steps D1, D2, D2b, D3, D3a, D4a, D4b, D4c, D4, D5, D6
+   and D7 are done. D5 adds Sigma checking and evaluation and `Eq` inside
+   Sigma. D6 adds `cong` and `transport`. D7 adds `Query` parameters and
+   `ReadPath`.
 2. `ReadPath` is done (step D7). It is a function type in `Type 1`. The
    compiler does not run the read path of M2.
 3. Extend diagnostics with declaration context and improve source/output
@@ -236,8 +235,8 @@ not complete the M0 milestone in `SPEC.md`.
   structurally recursive definition to examine its recursive argument at the
   start of its body, so the argument parser cannot skip this step. README.md
   gives the measured limits for the original scalar and container forms.
-- A function keeps the tokens of its body, not a syntax tree. Each
-  application parses and evaluates the body again. A body can apply an
+- A function keeps its body as a checked syntax tree (`Term`). Each
+  application evaluates the body again. A body can apply an
   earlier function, so the work budget limits the number of evaluated
   bodies to 8 per source byte plus 64. The body check at the definition
   binds each parameter to null. Thus a constructor error that depends on a
