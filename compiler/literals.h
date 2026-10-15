@@ -88,6 +88,7 @@ extern const Text sType;
 extern const Text sfun;
 extern const Text sSigma;
 extern const Text spack;
+extern const Text swrite;
 extern const Text switness;
 extern const Text spayload;
 extern const Text sEq;

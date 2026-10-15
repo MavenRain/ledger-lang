@@ -536,6 +536,8 @@ static const Nat spack_items[] = {
   'p', 'a', 'c', 'k',
 };
 const Text spack = {spack_items, 4};
+static const Nat swrite_items[] = {119, 114, 105, 116, 101};
+const Text swrite = {swrite_items, 5};
 
 /* "witness" */
 static const Nat switness_items[] = {

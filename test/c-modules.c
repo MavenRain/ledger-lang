@@ -3920,6 +3920,132 @@ static void test_m1_entry_hash(void) {
   assert(same_text(fuel_failure.message, eOutput));
 }
 
+/* M1 part B: write_step (design items 7 and 8). An append on an empty log, a
+   second append (prev is the hash of the first entry), a conflict, an expect
+   on an empty log, a Command with no Body, and an append with a budget of 1.
+   Each hash is the SHA-256 of the compact JSON of its Entry. */
+static void test_m1_write(void) {
+  Value actor = {.kind = VALUE_TEXT, .text = text("p1")};
+  Value event = {.kind = VALUE_TEXT, .text = text("e1")};
+  Value record = {.kind = VALUE_TEXT, .text = text("commandRecord")};
+  Attrs event_field = {text("event"), &event, NULL};
+  Attrs record_tag = {text("tag"), &record, &event_field};
+  Value record_command = {.kind = VALUE_ATTRS, .attrs = &record_tag};
+  Value no_expect = {.kind = VALUE_NULL};
+  Attrs record_field = {text("command"), &record_command, NULL};
+  Attrs open_expect = {text("expect"), &no_expect, &record_field};
+  Attrs open_actor = {text("actor"), &actor, &open_expect};
+  Value append = {.kind = VALUE_ATTRS, .attrs = &open_actor};
+  Value empty_log = {.kind = VALUE_ITEMS, .items = NULL};
+  const Value *step;
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(write_step(1000, 5, 3, &empty_log, &append, &step, &left, &failure));
+  assert(left == 3);
+  assert(same_text(printed(step), text("{\"log\":[{\"prev\":null,\"actor\":\"p1\",\"body\":{\"tag\":\"createsEvent\","
+                                       "\"event\":\"e1\"}}],\"outcome\":{\"tag\":\"outcomeAppended\",\"entries\":"
+                                       "[\"800dac44d958e090f55ffa74989519570f2c25f609421e70450dc3bff8bc4e86\"],"
+                                       "\"policy\":null}}")));
+  assert(step->kind == VALUE_ATTRS && same_text(step->attrs->key, text("log")));
+  const Value *logged = step->attrs->value;
+  Value head = {.kind = VALUE_TEXT, .text = text("800dac44d958e090f55ffa74989519570f2c25f609421e70450dc3bff8bc4e86")};
+  Attrs head_expect = {text("expect"), &head, &record_field};
+  Attrs head_actor = {text("actor"), &actor, &head_expect};
+  Value chained = {.kind = VALUE_ATTRS, .attrs = &head_actor};
+  assert(write_step(1000, 5, 3, logged, &chained, &step, &left, &failure));
+  assert(left == 3);
+  assert(same_text(printed(step), text("{\"log\":[{\"prev\":null,\"actor\":\"p1\",\"body\":{\"tag\":\"createsEvent\","
+                                       "\"event\":\"e1\"}},{\"prev\":\"800dac44d958e090f55ffa74989519570f2c25f609421e70"
+                                       "450dc3bff8bc4e86\",\"actor\":\"p1\",\"body\":{\"tag\":\"createsEvent\",\"event\""
+                                       ":\"e1\"}}],\"outcome\":{\"tag\":\"outcomeAppended\",\"entries\":[\"cba586dacac6"
+                                       "e256d8674d8c715e95fd2abd63271f64e1cad36a5766a88d2008\"],\"policy\":null}}")));
+  Value wrong = {.kind = VALUE_TEXT, .text = text("e9")};
+  Attrs wrong_expect = {text("expect"), &wrong, &record_field};
+  Attrs wrong_actor = {text("actor"), &actor, &wrong_expect};
+  Value stale = {.kind = VALUE_ATTRS, .attrs = &wrong_actor};
+  assert(write_step(1000, 5, 3, logged, &stale, &step, &left, &failure));
+  assert(left == 4);
+  assert(same_text(printed(step), text("{\"log\":[{\"prev\":null,\"actor\":\"p1\",\"body\":{\"tag\":\"createsEvent\","
+                                       "\"event\":\"e1\"}}],\"outcome\":{\"tag\":\"outcomeConflict\",\"head\":"
+                                       "\"800dac44d958e090f55ffa74989519570f2c25f609421e70450dc3bff8bc4e86\"}}")));
+  assert(write_step(1000, 5, 3, &empty_log, &chained, &step, &left, &failure));
+  assert(left == 4);
+  assert(same_text(printed(step), text("{\"log\":[],\"outcome\":{\"tag\":\"outcomeDenied\",\"policy\":null,"
+                                       "\"missing\":[]}}")));
+  Value transition = {.kind = VALUE_TEXT, .text = text("commandTransition")};
+  Attrs transition_tag = {text("tag"), &transition, NULL};
+  Value transition_command = {.kind = VALUE_ATTRS, .attrs = &transition_tag};
+  Attrs transition_field = {text("command"), &transition_command, NULL};
+  Attrs transition_expect = {text("expect"), &no_expect, &transition_field};
+  Attrs transition_actor = {text("actor"), &actor, &transition_expect};
+  Value no_body = {.kind = VALUE_ATTRS, .attrs = &transition_actor};
+  assert(write_step(1000, 5, 3, logged, &no_body, &step, &left, &failure));
+  assert(left == 4);
+  assert(same_text(printed(step), text("{\"log\":[{\"prev\":null,\"actor\":\"p1\",\"body\":{\"tag\":\"createsEvent\","
+                                       "\"event\":\"e1\"}}],\"outcome\":{\"tag\":\"outcomeDenied\",\"policy\":null,"
+                                       "\"missing\":[]}}")));
+  assert(!write_step(1000, 1, 3, &empty_log, &append, &step, &left, &failure));
+  assert(left == 0 && failure.position == 3 && same_text(failure.message, eBudget));
+  assert(!write_step(1000, 0, 3, logged, &no_body, &step, &left, &failure));
+  assert(left == 0 && failure.position == 3 && same_text(failure.message, eBudget));
+  assert(!write_step(1000, 0, 3, &empty_log, &chained, &step, &left, &failure));
+  assert(left == 0 && failure.position == 3 && same_text(failure.message, eBudget));
+  assert(!write_step(1000, 0, 3, logged, &stale, &step, &left, &failure));
+  assert(left == 0 && failure.position == 3 && same_text(failure.message, eBudget));
+  Failure hash_failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(!write_step(10, 5, 3, &empty_log, &append, &step, &left, &hash_failure));
+  assert(same_text(hash_failure.message, eOutput));
+}
+
+/* Hashing serializes an entry independently of the parser's depth limit.
+   Cover short sources, entries over 512 bytes, and each call path. */
+static void test_m1_write_hash_budget(void) {
+  const char *calls[] = {
+      "def s : Step := write history request",
+      "def w : WritePath := write def s : Step := w history request",
+      "def f : (log : Log) -> (x : Write) -> Step := "
+      "fun (log : Log) (x : Write) => write log x def s : Step := f history request",
+      "def apply : (p : WritePath) -> (log : Log) -> (x : Write) -> Step := "
+      "fun (p : WritePath) (log : Log) (x : Write) => p log x "
+      "def s : Step := apply write history request"};
+  for (Nat length = 4; length <= 1024; length *= 256) {
+    TextBuilder source = builder_new();
+    builder_append(&source, text("def history : Log := nil def request : Write := "
+                                "makeWrite (actorHuman (refTo (hashOf \"p\"))) none "
+                                "(commandResolveParty partyOrg \""));
+    for (Nat i = 0; i < length; i++) builder_push(&source, 'a');
+    builder_append(&source, text("\" nil) "));
+    Text prefix = builder_text(&source);
+    Text direct;
+    Failure failure = {0, {NULL, 0}, {NULL, 0}};
+    assert(compile_program(append_text(prefix, text(calls[0])), &direct, &failure));
+    for (Nat i = 1; i < sizeof calls / sizeof calls[0]; i++) {
+      Text output;
+      assert(compile_program(append_text(prefix, text(calls[i])), &output, &failure));
+      assert(same_text(output, direct));
+    }
+  }
+
+  /* The old head is serialized too, even when the new request is small. */
+  TextBuilder source = builder_new();
+  builder_append(&source, text("def previous : Entry := makeEntry none (actorHuman (refTo (hashOf \"p\"))) "
+                              "(createsParty (makeParty partyOrg \""));
+  for (Nat i = 0; i < 1024; i++) builder_push(&source, 'a');
+  builder_append(&source, text("\" none nil attrsEnd none none)) "
+                              "def history : Log := cons previous nil "
+                              "def request : Write := makeWrite (actorHuman (refTo (hashOf \"p\"))) none "
+                              "(commandResolveParty partyOrg \"new\" nil) "));
+  Text prefix = builder_text(&source);
+  Text direct;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(compile_program(append_text(prefix, text(calls[0])), &direct, &failure));
+  for (Nat i = 1; i < sizeof calls / sizeof calls[0]; i++) {
+    Text output;
+    assert(compile_program(append_text(prefix, text(calls[i])), &output, &failure));
+    assert(same_text(output, direct));
+  }
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3981,6 +4107,8 @@ int main(void) {
   test_d12_named_motive_scope();
   test_m1_sha256();
   test_m1_entry_hash();
+  test_m1_write_hash_budget();
+  test_m1_write();
   puts("C module tests passed");
   return 0;
 }

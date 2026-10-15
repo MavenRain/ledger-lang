@@ -778,7 +778,12 @@ Binding opaque_closure(Text name, const LType *ty) {
 
 Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings *caller) {
   const Binding *item;
-  if (!lookup(target, caller, &item)) return opaque_closure(name, ty);
+  /* The builtin write as an argument (M1 part B, delta B-3). */
+  if (!lookup(target, caller, &item))
+    return same_text(target, swrite) == 1 && same_type(ty, write_path_type()) == 1
+               ? closure_binding(name, write_binders(), arrow_result(ty),
+                                 write_body(0, (Tokens){NULL, 0}, (Tokens){NULL, 0}), caller)
+               : opaque_closure(name, ty);
   switch (item->kind) {
   case BIND_VALUE:
   case BIND_FAMILY:
@@ -2466,6 +2471,182 @@ static int pack_term(Fuel fuel, Nat budget, Nat atom, Nat position, const LType 
                    built);
 }
 
+/* M1 part B (design items 5 to 8): the builtin write. */
+
+/* The body of a WritePath function: write log command, with the names of
+   write_binders (delta B-2). The body is the TERM_CONSTRUCT, not a
+   TERM_BODY (delta B-4). */
+const Term *write_body(Nat position, Tokens body, Tokens rest) {
+  const Terms *args =
+      terms_item(term_named(TERM_NAME, position, 0, text_of_cstring("log"), NULL, NULL),
+                 terms_item(term_named(TERM_NAME, position, 0, text_of_cstring("command"), NULL, NULL), NULL));
+  return term_call(TERM_CONSTRUCT, position, 0, taken_tokens(body, rest), first_position(rest), swrite, NULL, NULL,
+                   args);
+}
+
+static const LType *write_schema_type(const char *name) {
+  LType *made = arena_alloc(sizeof *made);
+  *made = (LType){.tag = TY_SCHEMA, .name = text_of_cstring(name)};
+  return made;
+}
+
+/* The value of a constructor of a schema family, from its plan. Thus the
+   tag and the field order are the normal ones. */
+static int write_value(const char *family, const char *name, const Values *values, const Value **value,
+                       Failure *failure) {
+  Plan selected;
+  if (!constructor_plan(write_schema_type(family), text_of_cstring(name), &selected))
+    return fail_at(failure, 0, eTerm);
+  return evaluate_plan(&selected, values, value, failure);
+}
+
+static const Value *write_attr(Text key, const Attrs *attrs) {
+  return attrs == NULL ? &null_value : same_text(attrs->key, key) == 1 ? attrs->value : write_attr(key, attrs->rest);
+}
+
+/* The field key of an attrs value. A missing field is null. */
+static const Value *write_field(Text key, const Value *value) {
+  return value->kind == VALUE_ATTRS ? write_attr(key, value->attrs) : &null_value;
+}
+
+static const Value *write_last(const Values *items) {
+  return items == NULL ? NULL : items->tail == NULL ? items->head : write_last(items->tail);
+}
+
+/* The Commands with a Body (k5 item 12): the Command, its field, and the
+   Body constructor. The Body field has the same name. */
+static const char *const write_bodies[6][3] = {
+    {"commandStartMembership", "membership", "createsMembership"},
+    {"commandOpenCommercial", "commercial", "createsCommercial"},
+    {"commandPropose", "commitment", "createsCommitment"},
+    {"commandIngest", "artifact", "createsArtifact"},
+    {"commandRecord", "event", "createsEvent"},
+    {"commandAssign", "assignment", "createsAssignment"}};
+
+/* commandResolveParty kind displayName identifiers gives createsParty of
+   makeParty kind displayName none identifiers attrsEnd none none. */
+static int write_party_body(const Value *command, const Value **body, Failure *failure) {
+  const Value *party;
+  const Values *fields =
+      values_item(write_field(text_of_cstring("kind"), command),
+                  values_item(write_field(text_of_cstring("displayName"), command),
+                              values_item(&null_value,
+                                          values_item(write_field(text_of_cstring("identifiers"), command),
+                                                      values_item(make_value((Value){.kind = VALUE_ATTRS}),
+                                                                  values_item(&null_value,
+                                                                              values_item(&null_value, NULL)))))));
+  if (!write_value("Party", "makeParty", fields, &party, failure)) return 0;
+  return write_value("Body", "createsParty", values_item(party, NULL), body, failure);
+}
+
+static int write_no_body(const Value **body) {
+  *body = NULL;
+  return 1;
+}
+
+/* The Body of the Command with the tag, from the row index on. body is
+   NULL when the Command has no Body. */
+static int write_command_body(const Value *command, Text tag, Nat index, const Value **body, Failure *failure) {
+  if (index == 6 && same_text(tag, text_of_cstring("commandResolveParty")) == 1)
+    return write_party_body(command, body, failure);
+  if (index == 6) return write_no_body(body);
+  if (same_text(tag, text_of_cstring(write_bodies[index][0])) != 1)
+    return write_command_body(command, tag, index + 1, body, failure);
+  return write_value("Body", write_bodies[index][2],
+                     values_item(write_field(text_of_cstring(write_bodies[index][1]), command), NULL), body, failure);
+}
+
+/* makeStep log (outcome fields). */
+static int write_answer(const Value *log, const char *outcome, const Values *fields, const Value **value,
+                        Failure *failure) {
+  const Value *made;
+  if (!write_value("Outcome", outcome, fields, &made, failure)) return 0;
+  return write_value("Step", "makeStep", values_item(log, values_item(made, NULL)), value, failure);
+}
+
+static int write_denied(const Value *log, const Value **value, Failure *failure) {
+  return write_answer(log, "outcomeDenied", values_item(&null_value, values_item(items_value(NULL), NULL)), value,
+                      failure);
+}
+
+/* write log w (design items 7 and 8). The apply takes one work step. No
+   Body, or an expect on an empty log: outcomeDenied none nil. An expect
+   that is not the hash of the last entry: outcomeConflict with that hash.
+   Else the new Entry goes at the end of the log, and its hash takes one
+   more work step. The hash of the last entry takes no work step (delta
+   B-5). */
+int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const Value *write, const Value **value,
+               Nat *left, Failure *failure) {
+  if (budget == 0) {
+    *left = 0;
+    return fail_at(failure, position, eBudget);
+  }
+  Nat ready = budget - 1;
+  const Value *command = write_field(text_of_cstring("command"), write);
+  const Value *expect = write_field(text_of_cstring("expect"), write);
+  const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
+  const Value *last = write_last(items);
+  const Value *body;
+  if (!write_command_body(command, write_field(kSchemaTag(), command)->text, 0, &body, failure)) return 0;
+  *left = ready;
+  if (body == NULL) return write_denied(log, value, failure);
+  if (last == NULL && expect->kind == VALUE_TEXT) return write_denied(log, value, failure);
+  Text head = {NULL, 0};
+  Nat unused;
+  if (last != NULL && !entry_hash(hash_fuel, 1, position, last, &head, &unused, failure)) return 0;
+  if (expect->kind == VALUE_TEXT && same_text(expect->text, head) != 1)
+    return write_answer(log, "outcomeConflict", values_item(text_value(head), NULL), value, failure);
+  const Value *entry;
+  const Values *fields = values_item(last != NULL ? text_value(head) : &null_value,
+                                     values_item(write_field(text_of_cstring("actor"), write), values_item(body, NULL)));
+  if (!write_value("Entry", "makeEntry", fields, &entry, failure)) return 0;
+  Text hash;
+  if (!entry_hash(hash_fuel, ready, position, entry, &hash, left, failure)) return 0;
+  return write_answer(items_value(append_values(items, values_item(entry, NULL))), "outcomeAppended",
+                      values_item(items_value(values_item(text_value(hash), NULL)), values_item(&null_value, NULL)),
+                      value, failure);
+}
+
+/* The builtin write on the token path (the model of pack_term). At the
+   WritePath type the name is a function argument (the first test of
+   partial_argument). Else the expected type is Step, then the log and the
+   Write, as atoms. A wrong use gives eTerm. */
+static int write_term(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected,
+                      const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest, Nat *left,
+                      const Term **term, Failure *failure) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  const LType *path = write_path_type();
+  if (same_type(expected, path) == 1)
+    return with_term(worked_value(text_value(swrite), tokens, budget, value, rest, left), term,
+                     term != NULL ? reference_term(position, swrite, environment) : NULL);
+  if (same_type(expected, arrow_result(path)) != 1) return fail_at(failure, position, eTerm);
+  if (atom == 1) return fail_at(failure, position, eParen);
+  const Params *params = arrow_params(path);
+  const Value *log;
+  Tokens after;
+  Nat spent;
+  const Term *first = NULL;
+  if (!parse_term(more, budget, 1, params->head.type, environment, tokens, &log, &after, &spent,
+                  want_term(term, &first), failure))
+    return 0;
+  const Value *write;
+  Tokens later;
+  Nat used;
+  const Term *second = NULL;
+  if (!parse_term(more, spent, 1, params->tail->head.type, environment, after, &write, &later, &used,
+                  want_term(term, &second), failure))
+    return 0;
+  const Value *step;
+  Nat done;
+  if (!write_step(OUTPUT_LIMIT, used, position, log, write, &step, &done, failure)) return 0;
+  const Term *built = term != NULL ? named_term(TERM_CONSTRUCT, position, swrite, NULL,
+                                                terms_item(first, terms_item(second, NULL)),
+                                                taken_tokens(tokens, later), first_position(later), environment)
+                                   : NULL;
+  return with_term(worked_value(step, later, done, value, rest, left), term, built);
+}
+
 /* checkWorked position expected (synthTerm fuel budget atom environment tokens). */
 static int checked_synth(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected,
                          const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest, Nat *left,
@@ -2541,6 +2722,9 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
     if (same_text(head.text, spack))
       return pack_term(more, budget, atom, head.position, expected, environment, tail, value, rest, left, term,
                        failure);
+    if (same_text(head.text, swrite))
+      return write_term(more, budget, atom, head.position, expected, environment, tail, value, rest, left, term,
+                        failure);
     Plan selected;
     if (!constructor_plan(expected, head.text, &selected)) {
       if (synth_form(head.text) != 0)
@@ -2732,6 +2916,25 @@ static int eval_pack(Fuel fuel, Nat budget, const LType *expected, const Binding
   Nat used;
   if (!eval_argument(more, spent, b, environment, second, &payload, &used, failure)) return 0;
   return eval_worked(object_two(kWitness, witness, kPayload, payload), used, value, left);
+}
+
+/* write_term on the write Term (TERM_CONSTRUCT swrite, args log and Write).
+   The same fuel steps, failures and budget. */
+static int eval_write(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
+                      const Value **value, Nat *left, Failure *failure) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  const LType *path = write_path_type();
+  const Term *second = second_arg(term);
+  if (same_type(expected, arrow_result(path)) != 1 || second == NULL) return fail_at(failure, term->position, eTerm);
+  const Params *params = arrow_params(path);
+  const Value *log;
+  Nat spent;
+  if (!eval_argument(more, budget, params->head.type, environment, first_arg(term), &log, &spent, failure)) return 0;
+  const Value *write;
+  Nat used;
+  if (!eval_argument(more, spent, params->tail->head.type, environment, second, &write, &used, failure)) return 0;
+  return write_step(OUTPUT_LIMIT, used, term->position, log, write, value, left, failure);
 }
 
 /* dependent_arguments on the argument terms. start is the argument span
@@ -3723,7 +3926,12 @@ static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, cons
                               const Term *term, const Value **value, Nat *left, Failure *failure) {
   const Binding *item;
   int found = term->tag == TERM_VAR ? var_binding(term, environment, &item) : lookup(term->name, environment, &item);
-  if (!found) return 0;
+  /* The builtin write at the WritePath type (M1 part B, delta B-3). */
+  if (!found)
+    return term->tag == TERM_NAME && same_text(term->name, swrite) == 1 &&
+                   same_type(expected, write_path_type()) == 1
+               ? eval_worked(text_value(swrite), budget, value, left)
+               : 0;
   switch (item->kind) {
   case BIND_VALUE:
     /* The test of the token path: eTerm at the name (D3-s8 U5). */
@@ -3836,6 +4044,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
       return eval_construct_name(fuel, budget, expected, environment, term, item, value, left, failure);
     /* pack: the order of parse_term (pack_term before constructor_plan). */
     if (same_text(term->name, spack)) return eval_pack(more, budget, expected, environment, term, value, left, failure);
+    if (same_text(term->name, swrite)) return eval_write(more, budget, expected, environment, term, value, left, failure);
     if (!constructor_plan(expected, term->name, &selected)) return 0;
     const Values *values;
     Nat spent;

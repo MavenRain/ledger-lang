@@ -9,6 +9,9 @@
    computation wraps. Subtraction stops at zero (nat_sub). */
 typedef uint32_t Nat;
 
+/* The byte limit for compiler output and an entry's hash encoding. */
+#define OUTPUT_LIMIT ((Nat)4 * 1024 * 1024)
+
 /* A text is a sequence of Nat items. Most texts hold bytes. A token text
    or a type name can hold larger items. A text never changes after it is
    made, so slices share their items. */
@@ -904,6 +907,18 @@ Tokens taken_tokens(Tokens body, Tokens rest);
 /* checker.c: the TERM_BODY of the body tokens before rest, with end at the
    first token of rest (D8 part A). */
 const Term *spanned_body(Tokens body, Tokens rest, const Term *callee);
+
+/* M1 part B (design items 5 to 8): the builtin write. write_path_type is
+   the WritePath type. write_binders are the binders of a WritePath
+   function: log and command (delta B-2). write_body is its body, write log
+   command. write_step is write log w: one work step, and one more for the
+   hash of a new entry. hash_fuel bounds the serialized bytes of each hash,
+   independently of the parser's depth fuel. */
+const LType *write_path_type(void);
+const Params *write_binders(void);
+const Term *write_body(Nat position, Tokens body, Tokens rest);
+int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const Value *write, const Value **value,
+               Nat *left, Failure *failure);
 
 /* eval_term evaluates a checked body term at run time (D3-s3). It follows
    parse_term with atom 0 on the tokens of the term: the same expected type,

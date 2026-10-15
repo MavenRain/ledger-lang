@@ -169,6 +169,19 @@ static Signature write_path_signature(void) {
   return (Signature){params, schema_type_of(text_of_cstring("Step"))};
 }
 
+/* M1 part B (design items 5 and 6): the WritePath type, and the binders of
+   the builtin write. The second binder is command, not write: a binder write
+   hides the builtin in the body (delta B-2). */
+const LType *write_path_type(void) {
+  Signature found = write_path_signature();
+  return arrow_type(found.params, found.result);
+}
+
+const Params *write_binders(void) {
+  const Params *params = write_path_signature().params;
+  return param_cons(params->head, param_cons((Param){text_of_cstring("command"), params->tail->head.type}, NULL));
+}
+
 /* ReadPath is the function type of core/ops.def (step D7b):
    (answer : Type 0) -> (log : Log) -> (query : Query answer) -> answer.
    The query type and the result keep the type parameter answer as a schema
@@ -779,6 +792,19 @@ static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *envi
     return 0;
   Tokens after_assign;
   if (!expect_mark(61, after_type, &after_assign, failure)) return 0;
+  const Binding *hidden;
+  /* M1 part B (design item 6, delta B-2): the one name write is the body of
+     a WritePath definition when no binding hides the builtin. */
+  if (is_word(swrite, after_assign) == 1 && !lookup(swrite, environment, &hidden) &&
+      same_type(arrow_type(found.params, found.result), write_path_type()) == 1) {
+    *rest = drop_token(after_assign);
+    *item = (Binding){.kind = BIND_FUN,
+                      .name = name,
+                      .type = found.result,
+                      .params = write_binders(),
+                      .term = write_body(first_position(after_assign), after_assign, *rest)};
+    return 1;
+  }
   if (is_word(sfun, after_assign) != 1) return fail_at(failure, first_position(after_assign), eFun);
   const Params *binders;
   Tokens body;

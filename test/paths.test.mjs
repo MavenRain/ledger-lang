@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createCompiler } from '../bin/bridge.mjs';
@@ -174,6 +175,86 @@ test('a type definition names WritePath and a function type can end with it', ()
 
 test('an application of a WritePath function takes both arguments', () => {
   assert.deepEqual(Object.keys(run(`${actors}${refuse}def s : Step := refuse history`)), ['error']);
+});
+
+// M1 part B: the builtin write. Each hash is the SHA-256 of the compact JSON of its Entry.
+const note = 'def note : Event := makeEvent eventNoteAdded (subjectParty acme) none none attrsEnd none ' +
+  'def noted : Write := makeWrite (actorHuman acme) none (commandRecord note) ';
+const named = source => Object.fromEntries(values(source));
+const sha256 = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const human = { tag: 'actorHuman', party: { kind: 'kindParty', hash: 'party-acme' } };
+const appended = (log, entry) => ({ log, outcome: { tag: 'outcomeAppended', entries: [sha256(entry)], policy: null } });
+const chained = head => 'def e1 : Entry := makeEntry none (actorHuman acme) (createsEvent note) ' +
+  `def log1 : Log := cons e1 nil def next : Write := makeWrite (actorHuman acme) (some (hashOf "${head}")) ` +
+  '(commandRecord note) ';
+
+test('the builtin write is the body of a WritePath definition', () => {
+  assert.deepEqual(instances('def w : WritePath := write'), []);
+});
+
+test('write of a Command with no Body gives outcomeDenied and the same log', () => {
+  assert.deepEqual(values(`${actors}def s : Step := write history advance`).at(-1), ['s', denied]);
+});
+
+test('write appends one entry and gives the hash of the entry', () => {
+  const { note: event, s } = named(`${actors}${note}def s : Step := write history noted`);
+  const entry = { prev: null, actor: human, body: { tag: 'createsEvent', event } };
+  assert.deepEqual(s, appended([entry], entry));
+  assert.match(s.outcome.entries[0], /^[0-9a-f]{64}$/);
+});
+
+test('a second write gives the chain: prev is the hash of the last entry', () => {
+  const { note: event, e1 } = named(`${actors}${note}${chained('h')}`);
+  const head = sha256(e1);
+  const { s } = named(`${actors}${note}${chained(head)}def s : Step := write log1 next`);
+  const entry = { prev: head, actor: human, body: { tag: 'createsEvent', event } };
+  assert.deepEqual(s, appended([e1, entry], entry));
+});
+
+test('an expect that is not the hash of the last entry gives outcomeConflict', () => {
+  const { e1, s } = named(`${actors}${note}${chained('e9')}def s : Step := write log1 next`);
+  assert.deepEqual(s, { log: [e1], outcome: { tag: 'outcomeConflict', head: sha256(e1) } });
+});
+
+test('an expect on an empty log gives outcomeDenied', () => {
+  const guarded = 'def guarded : Write := makeWrite (actorHuman acme) (some (hashOf "entry-0")) ';
+  assert.deepEqual(values(`${actors}${guarded}(commandTransition deal "won") def s : Step := write history guarded`)
+    .at(-1), ['s', denied]);
+  assert.deepEqual(named(`${actors}${note}${guarded}(commandRecord note) def s : Step := write history guarded`).s,
+    denied);
+});
+
+test('the def form, the argument form and a write in a function body give the same Step', () => {
+  const source = `${actors}${note}def w : WritePath := write ` +
+    'def apply : (p : WritePath) -> (log : Log) -> (x : Write) -> Step := ' +
+    'fun (p : WritePath) (log : Log) (x : Write) => p log x ' +
+    'def f : (log : Log) -> Step := fun (log : Log) => write log noted def a : Step := write history noted ' +
+    'def b : Step := w history noted def c : Step := apply write history noted def d : Step := f history';
+  const { a, b, c, d } = named(source);
+  assert.deepEqual([b, c, d], [a, a, a]);
+  assert.equal(a.log.length, 1);
+});
+
+test('a binding with the name write hides the builtin', () => {
+  const { noted: made, s } = named(`${actors}${note}def write : Write := noted def s : Write := write`);
+  assert.deepEqual(s, made);
+  reject(`${actors}def write : Write := advance def w : WritePath := write`, funError, 'write');
+});
+
+test('a wrong use of write is refused', () => {
+  reject(`${actors}def s : Step := write 3`, termError, '3');
+  reject(`${actors}def s : Step := write history def t : Nat := 1`, 'unknown name or constructor', 'def t');
+  reject(`${actors}def w : WritePath := write history`, 'expected def NAME : TYPE := TERM', 'history');
+});
+
+test('commandResolveParty gives createsParty with empty attrs', () => {
+  const { s } = named(`${actors}def who : Write := makeWrite (actorHuman acme) none ` +
+    '(commandResolveParty partyOrg "Acme" nil) def s : Step := write history who');
+  const party = {
+    kind: 'partyOrg', displayName: 'Acme', legalName: null, identifiers: [], attrs: {}, lastEvent: null, deletedBy: null,
+  };
+  const entry = { prev: null, actor: human, body: { tag: 'createsParty', party } };
+  assert.deepEqual(s, appended([entry], entry));
 });
 
 test('ReadPath is a function type in Type 1', () => {

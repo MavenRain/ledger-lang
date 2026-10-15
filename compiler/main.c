@@ -16,7 +16,6 @@
 #include "ledger.h"
 
 #define SOURCE_LIMIT 65536
-#define OUTPUT_LIMIT ((Nat)4 * 1024 * 1024)
 /* The compiler recurses once per nested term and per list item. */
 #define STACK_SIZE ((size_t)1 << 30)
 
