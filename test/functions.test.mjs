@@ -64,7 +64,7 @@ const rejected = [
   ['too few binders', 'def f : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) => a', funError, '=>'],
   ['a reserved binder name', 'def f : (n : Nat) -> Nat := fun (none : Nat) => 1', 'reserved definition name', 'none'],
   ['a repeated binder name', 'def f : (a : Nat) -> (b : Nat) -> Nat := fun (a : Nat) (a : Nat) => a', 'duplicate definition name', 'a : Nat) =>'],
-  ['a universe as the result type', 'def f : (n : Nat) -> Type 0 := fun (n : Nat) => Nat', 'expected a data type', 'Type 0'],
+  ['a universe as the result type', 'def f : (n : Nat) -> Type 1 := fun (n : Nat) => Nat', 'expected a data type', 'Type 1'],
   ['Type 1 as a parameter type', 'def f : (t : Type 1) -> Nat := fun (t : Type 1) => 1', 'expected a data type', 'Type 1) ->'],
   ['a function as a type', `${id}def x : id := 1`, 'expected a supported type', 'id :='],
   ['a missing arrow', 'def f : (n : Nat) Nat := fun (n : Nat) => n', 'expected def NAME : TYPE := TERM', 'Nat :='],

@@ -742,6 +742,7 @@ Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings 
   if (!lookup(target, caller, &item)) return opaque_closure(name, ty);
   switch (item->kind) {
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW:
     return opaque_closure(name, ty);
@@ -874,6 +875,7 @@ Binding bound_binding(const Value *value, Text name, const LType *ty, const Bind
   if (!lookup(target, caller, &item)) return opaque_closure(name, ty);
   switch (item->kind) {
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW:
     return opaque_closure(name, ty);
@@ -996,6 +998,7 @@ int unary_from(const Bindings *scope, const Params *params, const LType *result,
 static int unary_checked(const Bindings *scope, const Binding *item, Unary *op) {
   switch (item->kind) {
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW:
     return 0;
@@ -1194,6 +1197,7 @@ int stepper_argument(const Bindings *environment, Tokens tokens, Stepper *op, To
     *op = (Stepper){item->params, item->type, item->scope, item->term};
     break;
   case BIND_VALUE: return fail_at(failure, head.position, eStep);
+  case BIND_FAMILY:
   case BIND_TYPE: return fail_at(failure, head.position, eStep);
   case BIND_ARROW: return fail_at(failure, head.position, eStep);
   }
@@ -2213,6 +2217,7 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
           return with_term(worked_typed((Typed){item->type, item->value}, tail, budget, typed, rest, left), term,
                            term != NULL ? value_term(head.position, item, environment) : NULL);
         return fail_at(failure, head.position, eTerm);
+      case BIND_FAMILY:
       case BIND_TYPE:
       case BIND_ARROW: return fail_at(failure, head.position, eInfer);
       case BIND_FUN: {
@@ -2478,6 +2483,7 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
           return with_term(worked_value(item->value, tail, budget, value, rest, left), term,
                            term != NULL ? value_term(head.position, item, environment) : NULL);
         return fail_at(failure, head.position, eTerm);
+      case BIND_FAMILY:
       case BIND_TYPE:
       case BIND_ARROW: return fail_at(failure, head.position, eTerm);
       case BIND_FUN:
@@ -2736,6 +2742,7 @@ static int eval_apply(Fuel fuel, Nat budget, const Bindings *environment, const 
   if (!lookup(term->name, environment, &item)) return 0;
   switch (item->kind) {
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW: return 0;
   case BIND_FUN: {
@@ -2908,6 +2915,7 @@ static int eval_inline_unary(Fuel fuel, Nat budget, const LType *wanted, const B
 static Nat partial_callee(const Binding *item) {
   switch (item->kind) {
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW: return 0;
   case BIND_FUN: return dependent_params(item->params) == 1 ? 0 : 1;
@@ -3082,6 +3090,7 @@ static int eval_stepper_argument(const Bindings *environment, const Term *term, 
   if (term == NULL || !lookup(term->name, environment, &item)) return 0;
   switch (item->kind) {
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW: return 0;
   case BIND_FUN:
@@ -3232,6 +3241,7 @@ static int eval_bound_stepper(Fuel fuel, Nat budget, const Bindings *environment
   const Term *body = made.term;
   switch (made.kind) {
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW: return fail_at(failure, term->position, eStep);
   case BIND_FUN:
@@ -3677,6 +3687,7 @@ static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, cons
     if (!proof_in_scope(item->name, item->type, environment) || same_declared_type(expected, item->type) != 1)
       return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW: return fail_at(failure, term->position, eTerm);
   case BIND_FUN:
@@ -3707,6 +3718,7 @@ static int eval_construct_name(Fuel fuel, Nat budget, const LType *expected, con
     if (!proof_in_scope(item->name, item->type, environment) || same_declared_type(expected, item->type) != 1)
       return fail_at(failure, term->position, eTerm);
     return eval_worked(item->value, budget, value, left);
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW: return fail_at(failure, term->position, eTerm);
   case BIND_FUN:
@@ -4293,6 +4305,7 @@ int partial_unary(Fuel fuel, Nat budget, const LType *wanted, const Bindings *en
     if (!lookup(head.text, environment, &item)) return fail_at(failure, head.position, eUnary);
     switch (item->kind) {
     case BIND_VALUE:
+    case BIND_FAMILY:
     case BIND_TYPE:
     case BIND_ARROW: return fail_at(failure, head.position, eUnary);
     case BIND_FUN:
@@ -4444,6 +4457,7 @@ int partial_stepper(Fuel fuel, Nat budget, Nat mode, const LType *expected, cons
     if (!lookup(head.text, environment, &item)) return fail_at(failure, head.position, eStep);
     switch (item->kind) {
     case BIND_VALUE:
+    case BIND_FAMILY:
     case BIND_TYPE:
     case BIND_ARROW: return fail_at(failure, head.position, eStep);
     case BIND_FUN:
@@ -4530,6 +4544,7 @@ int bound_stepper(Fuel fuel, Nat budget, Nat position, Text name, const Params *
                                     : NULL;
   switch (made.kind) {
   case BIND_VALUE: return fail_at(failure, position, eStep);
+  case BIND_FAMILY:
   case BIND_TYPE: return fail_at(failure, position, eStep);
   case BIND_ARROW: return fail_at(failure, position, eStep);
   case BIND_FUN: {

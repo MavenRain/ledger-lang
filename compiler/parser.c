@@ -58,6 +58,7 @@ Nat type_former(Text name) {
 int kind_binding(const Binding *item, Text *kind) {
   switch (item->kind) {
   case BIND_VALUE: return same_type(item->type, &kind_type) == 1 && as_text(item->value, kind);
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW:
   case BIND_FUN:
@@ -95,7 +96,8 @@ int parse_kind_index(Fuel fuel, const Bindings *environment, Tokens tokens, Text
 }
 
 /* A universe is Type 0 or Type 1. An earlier type definition stands for its
-   type. The name of a function type is not a data type. */
+   type. The name of a function type is not a data type, and the name of a
+   type family with no argument is not one (D12). */
 int named_type(Nat position, Text name, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
                Failure *failure) {
   const Binding *found;
@@ -108,6 +110,7 @@ int named_type(Nat position, Text name, const Bindings *environment, Tokens toke
   if (lookup(name, environment, &found)) {
     switch (found->kind) {
     case BIND_TYPE: return parsed_type(found->defined, tokens, type, rest);
+    case BIND_FAMILY:
     case BIND_ARROW: return fail_at(failure, position, eData);
     case BIND_VALUE:
     case BIND_FUN:

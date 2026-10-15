@@ -3680,6 +3680,63 @@ static void test_d11_print_failure_name(void) {
   assert(same_text(failure.name, text("a8")));
 }
 
+/* D12 part A: a one-binder type family keeps the motive form of sigma_type.
+   put_marker is static, thus the transport path puts the side 1 in place of
+   the binder (delta F3). */
+static void test_d12_family_definition(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text("def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat\n"), &environment, &failure));
+  const Binding *family;
+  assert(lookup(text("P"), environment, &family) && family->kind == BIND_FAMILY);
+  assert(family->type->tag == TY_SIGMA && family->type->level == 0);
+  assert(family->type->left->tag == TY_NAT && family->type->right->tag == TY_NAT);
+
+  environment = NULL;
+  assert(check_definitions(text("def Q : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat z 1\n"
+                                "def pf : Eq Nat 1 1 := refl\n"),
+                           &environment, &failure));
+  assert(lookup(text("Q"), environment, &family) && family->kind == BIND_FAMILY);
+  const LType *motive;
+  Tokens rest;
+  Nat left = 0;
+  assert(sigma_type(1000, 100, environment, NULL, lexed("(z : Nat) (Eq Nat z 1)"), &motive, &rest, &left, &failure));
+  assert(rest.size == 0 && motive->tag == TY_SIGMA);
+  assert(family->type->tag == motive->tag && family->type->level == motive->level);
+  assert(same_type(family->type->left, motive->left) == 1 && same_type(family->type->right, motive->right) == 1);
+
+  Bindings scope = {.head = check_marker(), .tail = environment};
+  Typed found;
+  assert(synth_term(1000, 100, 0, &scope, lexed("transport (z : Nat) (Eq Nat z 1) pf refl"), &found, &rest, &left,
+                    NULL, &failure));
+  assert(rest.size == 0 && found.type->tag == TY_EQ);
+  assert(found.type->lhs.kind == VAL_CLOSED && same_text(found.type->lhs.text, text("1")));
+  assert(found.type->rhs.kind == VAL_CLOSED && same_text(found.type->rhs.text, text("1")));
+}
+
+static void test_d12_parenthesized_family_body(void) {
+  const char *sources[] = {
+    "def P : (x : Nat) -> Type 0 := fun (z : Nat) => (Eq Nat z 1)",
+    "def P : (x : Nat) -> Type 0 := fun (z : Nat) => ((Eq Nat z 1))",
+    "def P : (x : Nat) -> Type 0 := fun (z : Nat) => ((Prod Nat Nat))",
+  };
+  for (Nat index = 0; index < sizeof sources / sizeof *sources; index++) {
+    const Bindings *environment = NULL;
+    Failure failure = {0};
+    assert(check_definitions(text(sources[index]), &environment, &failure));
+    const Binding *family;
+    assert(lookup(text("P"), environment, &family) && family->kind == BIND_FAMILY);
+    assert(family->type->tag == TY_SIGMA && family->type->level == 0);
+    if (index < 2) {
+      const LType *body = family->type->right;
+      assert(body->tag == TY_EQ && body->lhs.kind == VAL_VAR && body->lhs.index == 0);
+      assert(body->rhs.kind == VAL_CLOSED && same_text(body->rhs.text, text("1")));
+    } else {
+      assert(family->type->right->tag == TY_PROD);
+    }
+  }
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3733,6 +3790,8 @@ int main(void) {
   test_d11_closed_transport_motive();
   test_d11_failure_name();
   test_d11_print_failure_name();
+  test_d12_family_definition();
+  test_d12_parenthesized_family_body();
   puts("C module tests passed");
   return 0;
 }

@@ -199,6 +199,7 @@ static int named_signature(const Bindings *environment, Tokens tokens, Signature
     *found = (Signature){item->params, item->type};
     return 1;
   case BIND_VALUE:
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_FUN:
   case BIND_CLOSURE: return 0;
@@ -581,21 +582,61 @@ static int parse_param(Fuel fuel, Nat budget, const Bindings *environment, const
   return close_parsed(after, rest, failure);
 }
 
+/* The result rule of a signature. RESULT_DATA: the result is a data type or
+   a Query type. RESULT_FAMILY: the result can also be Type 0 after one
+   parameter, the domain of a type family (D12). */
+typedef enum { RESULT_DATA, RESULT_FAMILY } ResultRule;
+
+/* The family rule accepts the result Type 0 when done has one parameter, and
+   the type of that parameter is a data type of level 0 that is not an
+   equality (as the domain of sigma_type). */
+static Nat family_result(ResultRule rule, const Params *done, const LType *result) {
+  switch (rule) {
+  case RESULT_DATA: return 0;
+  case RESULT_FAMILY:
+    return result->tag == TY_UNIVERSE && result->level == 0 && param_count(done) == 1 &&
+                   type_level(done->head.type) == 0 && done->head.type->tag != TY_EQ
+               ? 1
+               : 0;
+  }
+  return 0;
+}
+
+/* The end of a chain: an `Eq` result, or a type with the level that the
+   rule accepts. Each other result gives eData at its first token. */
+static int chain_result(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
+                        ResultRule rule, const LType **result, Tokens *rest, Nat *left, Failure *failure) {
+  if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+  if (mark_of(tokens) == 40) {
+    Tokens inside;
+    return chain_result(fuel - 1, budget, environment, done, drop_token(tokens), rule, result, &inside, left, failure)
+      && close_parsed(inside, rest, failure);
+  }
+  if (is_word(sEq, tokens) == 1)
+    return eq_result(fuel, budget, environment, done, drop_token(tokens), result, rest, left, failure);
+  if (!parse_type_in(fuel, budget, 0, environment, done, tokens, result, rest, left, failure)) return 0;
+  /* The result can also be a Query type (step D7a). */
+  if (type_level(*result) != 0 && is_query_type(*result) != 1 && family_result(rule, done, *result) != 1)
+    return fail_at(failure, first_position(tokens), eData);
+  return 1;
+}
+
 /* `(x : A) -> ... -> B` with data types. A data type B cannot refer to a
    value parameter. An equality B = `Eq A x y` can name value parameters as
    its sides, and so can the type of a proof parameter. A type parameter
    `(A : Type 0)` comes before each value parameter, and the later types and
    B can refer to it. Its name is not a reserved name. Parameters hide outer
    names in subsequent type annotations. The name of a function type can end
-   the chain. Its parameters follow the earlier ones. */
+   the chain. Its parameters follow the earlier ones. The rule tells which
+   results end the chain (chain_result). */
 static int parse_signature(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
-                           Signature *found, Tokens *rest, Nat *left, Failure *failure) {
+                           ResultRule rule, Signature *found, Tokens *rest, Nat *left, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   Fuel more = fuel - 1;
   if (starts_param(tokens) != 1) {
     if (mark_of(tokens) == 40) {
       Tokens inside;
-      if (!parse_signature(more, budget, environment, done, drop_token(tokens), found, &inside, left, failure))
+      if (!parse_signature(more, budget, environment, done, drop_token(tokens), rule, found, &inside, left, failure))
         return 0;
       return close_parsed(inside, rest, failure);
     }
@@ -611,14 +652,7 @@ static int parse_signature(Fuel fuel, Nat budget, const Bindings *environment, c
       *left = budget;
       return 1;
     }
-    if (is_word(sEq, tokens) == 1) {
-      if (!eq_result(more, budget, environment, done, drop_token(tokens), &result, rest, left, failure)) return 0;
-      *found = (Signature){reverse_params_onto(NULL, done), result};
-      return 1;
-    }
-    if (!parse_type_in(more, budget, 0, environment, done, tokens, &result, rest, left, failure)) return 0;
-    /* The result can also be a Query type (step D7a). */
-    if (type_level(result) != 0 && is_query_type(result) != 1) return fail_at(failure, first_position(tokens), eData);
+    if (!chain_result(more, budget, environment, done, tokens, rule, &result, rest, left, failure)) return 0;
     *found = (Signature){reverse_params_onto(NULL, done), result};
     return 1;
   }
@@ -632,7 +666,7 @@ static int parse_signature(Fuel fuel, Nat budget, const Bindings *environment, c
     return fail_at(failure, first_position(drop_token(tokens)), eTypeParam);
   if (mark_of(after) != 62) return fail_at(failure, first_position(after), eDef);
   return parse_signature(more, spent, bind_params(param_cons(item, NULL), NULL, environment), param_cons(item, done),
-                         drop_token(after), found, rest, left, failure);
+                         drop_token(after), rule, found, rest, left, failure);
 }
 
 static Nat param_named(Text name, const Params *params) {
@@ -690,15 +724,40 @@ static int parse_binders(Fuel fuel, Nat budget, const Bindings *environment, con
                        binders, rest, left, failure);
 }
 
+/* `def P : (x : A) -> Type 0 := fun (x : A) => T` is a type family. T is a
+   data type in the scope of the binder, with the end of a chain of a
+   signature. The binding keeps the form of the motive of sigma_type: A in
+   left, T in right and the binder at level 0. It is not an instance (D12). */
+static int parse_family(Fuel fuel, Nat budget, Text name, const Bindings *environment, const Params *binders,
+                        Tokens body, Binding *item, Tokens *rest, Nat *left, Failure *failure) {
+  const LType *family;
+  if (!chain_result(fuel, budget, bind_params(binders, NULL, environment), binders, body, RESULT_DATA, &family, rest,
+                    left, failure))
+    return 0;
+  /* A Query type is not a data type. */
+  if (type_level(family) != 0) return fail_at(failure, first_position(body), eData);
+  *item = (Binding){.kind = BIND_FAMILY,
+                    .name = name,
+                    .type = make_type((LType){.tag = TY_SIGMA,
+                                              .name = binders->head.name,
+                                              .level = 0,
+                                              .left = binders->head.type,
+                                              .right = family}),
+                    .params = binders};
+  return 1;
+}
+
 /* A function definition checks its body once. It is not an instance. The Eq
    sides of its signature and closed side work in its body share the work
    budget, and left gets the rest. The binders check the same types again,
-   thus they do not take more budget. */
+   thus they do not take more budget. The result Type 0 makes a type family
+   (parse_family). */
 static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *environment, Tokens tokens, Binding *item,
                           Tokens *rest, Nat *left, Failure *failure) {
   Signature found;
   Tokens after_type;
-  if (!parse_signature(fuel, budget, environment, NULL, tokens, &found, &after_type, left, failure)) return 0;
+  if (!parse_signature(fuel, budget, environment, NULL, tokens, RESULT_FAMILY, &found, &after_type, left, failure))
+    return 0;
   Tokens after_assign;
   if (!expect_mark(61, after_type, &after_assign, failure)) return 0;
   if (is_word(sfun, after_assign) != 1) return fail_at(failure, first_position(after_assign), eFun);
@@ -709,6 +768,8 @@ static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *envi
                      &used, failure))
     return 0;
   const LType *result = subst_type(param_renames(found.params, binders, NULL), found.result);
+  if (result->tag == TY_UNIVERSE)
+    return parse_family(fuel, *left, name, environment, binders, body, item, rest, left, failure);
   const Value *value;
   const Term *term = NULL;
   if (!parse_term(fuel, *left, 0, result,
@@ -751,7 +812,8 @@ static int parse_definition(Fuel fuel, Nat budget, const Bindings *environment, 
   }
   if (starts_arrow(fuel, environment, after_assign) == 1) {
     Signature found;
-    if (!parse_signature(fuel, spent, environment, NULL, after_assign, &found, rest, left, failure)) return 0;
+    if (!parse_signature(fuel, spent, environment, NULL, after_assign, RESULT_DATA, &found, rest, left, failure))
+      return 0;
     if (type_level(type) != 1 + (has_type_param(found.params) == 1 || has_query_type(found) == 1))
       return fail_at(failure, first_position(after_assign), eUniverse);
     *item = (Binding){.kind = BIND_ARROW, .name = name, .type = found.result, .params = found.params};
@@ -791,8 +853,8 @@ static const Located *located_cons(Nat position, Text name, const Value *value, 
   return cell;
 }
 
-/* Type definitions, names of function types, proofs and Query values are
-   not instances, so the output omits them. */
+/* Type definitions, type families, names of function types, proofs and
+   Query values are not instances, so the output omits them. */
 static const Located *record_instance(Nat position, Binding item, const Located *done) {
   const LType *a;
   Val lhs;
@@ -801,6 +863,7 @@ static const Located *record_instance(Nat position, Binding item, const Located 
   case BIND_VALUE:
     if (is_query_type(item.type) == 1 || sides_of(item.type, &a, &lhs, &rhs)) return done;
     return located_cons(position, item.name, instance_value(item.name, item.type, item.value), done);
+  case BIND_FAMILY:
   case BIND_TYPE:
   case BIND_ARROW:
   case BIND_FUN:

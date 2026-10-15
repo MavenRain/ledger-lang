@@ -302,13 +302,16 @@ struct Params {
    BIND_ARROW keeps params and the result in type. BIND_FUN keeps params,
    the result in type, the checked body and its TERM_BODY term (the callee
    is NULL if parse_term built no term). BIND_CLOSURE also keeps the
-   scope of its function argument. A list of bindings (also a Scope); NULL
-   is the end, and the head is the latest binding. */
+   scope of its function argument. BIND_FAMILY keeps a one-binder type
+   family in type, in the form of a transport motive: a TY_SIGMA with the
+   domain in left, the body in right and the binder at level (D12). A list
+   of bindings (also a Scope); NULL is the end, and the head is the latest
+   binding. */
 struct Term;
 struct Terms;
 struct TermTypes;
 
-typedef enum { BIND_VALUE, BIND_TYPE, BIND_ARROW, BIND_FUN, BIND_CLOSURE } BindingKind;
+typedef enum { BIND_VALUE, BIND_TYPE, BIND_ARROW, BIND_FUN, BIND_CLOSURE, BIND_FAMILY } BindingKind;
 
 typedef struct Bindings Bindings;
 

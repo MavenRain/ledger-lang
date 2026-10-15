@@ -243,3 +243,29 @@ test('a file-mode refusal line names the declaration', () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+// D12 part A: a one-binder type family `def P : (x : A) -> Type 0 := fun (x : A) => T`
+// checks and writes no instance. Each other result, and a family name with no argument
+// in a type, give "expected a data type".
+const familyNat = 'def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat';
+[
+  ['a family with a data body', familyNat],
+  ['a family with the binder n', 'def F : (n : Nat) -> Type 0 := fun (n : Nat) => Nat'],
+  ['a family with an equality body', 'def P : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat z 1'],
+].forEach(([label, source]) =>
+  test(`${label} checks with no instance`, () => {
+    assert.deepEqual(values(source), []);
+    assert.deepEqual(run(source), { 'ledger-lang': 1, instances: [] });
+  }),
+);
+
+[
+  ['the result Type 1', 'def G : (T : Type 0) -> Type 1 := fun (T : Type 0) => Query T', 'Type 1'],
+  ['a domain of level 1', 'def P : (T : Type 0) -> Type 0 := fun (T : Type 0) => Nat', 'Type 0 :='],
+  ['two binders', 'def P : (x : Nat) -> (y : Nat) -> Type 0 := fun (x : Nat) (y : Nat) => Nat', 'Type 0'],
+  ['a body of level 1', 'def P : (x : Nat) -> Type 0 := fun (x : Nat) => Type 0', 'Type 0'],
+  ['a proof domain', 'def P : (e : Eq Nat 1 1) -> Type 0 := fun (e : Eq Nat 1 1) => Nat', 'Type 0'],
+  ['a family name with no argument', `${familyNat}\ndef v : P := 3`, 'P :='],
+].forEach(([label, source, at]) =>
+  test(`a type family refuses ${label}`, () => reject(source, 'expected a data type', at)),
+);
