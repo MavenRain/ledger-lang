@@ -96,10 +96,11 @@ int parse_kind_index(Fuel fuel, const Bindings *environment, Tokens tokens, Text
 }
 
 /* A universe is Type 0 or Type 1. An earlier type definition stands for its
-   type. The name of a function type is not a data type, and the name of a
-   type family with no argument is not one (D12). */
-int named_type(Nat position, Text name, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
-               Failure *failure) {
+   type, with its markers moved into the scope of done. The name of a function
+   type is not a data type. A type family with one argument gives its reduced
+   type (D12 part B), and with no argument it is not a data type. */
+int named_type(Fuel fuel, Nat budget, Nat position, Text name, const Bindings *environment, const Params *done,
+               Tokens tokens, const LType **type, Tokens *rest, Nat *left, Failure *failure) {
   const Binding *found;
   if (same_text(name, sType) == 1) {
     if (tokens.size == 0) return fail_at(failure, position, eType);
@@ -109,8 +110,14 @@ int named_type(Nat position, Text name, const Bindings *environment, Tokens toke
   }
   if (lookup(name, environment, &found)) {
     switch (found->kind) {
-    case BIND_TYPE: return parsed_type(found->defined, tokens, type, rest);
+    case BIND_TYPE: {
+      Nat offset = 0;
+      for (const Params *cell = done; cell != NULL; cell = cell->tail) offset++;
+      return parsed_type(shift_type_markers(offset, found->defined), tokens, type, rest);
+    }
     case BIND_FAMILY:
+      return family_application(fuel, budget, position, found->type, environment, done, tokens, type, rest, left,
+                                failure);
     case BIND_ARROW: return fail_at(failure, position, eData);
     case BIND_VALUE:
     case BIND_FUN:
@@ -207,7 +214,10 @@ int parse_type_in(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, 
   case TOKEN_IDENTIFIER: break;
   }
   Text name = head.text;
-  if (atom == 1 && type_former(name) == 1) return fail_at(failure, head.position, eParen);
+  const Binding *found;
+  if (atom == 1 && (type_former(name) == 1 ||
+                    (lookup(name, environment, &found) && found->kind == BIND_FAMILY)))
+    return fail_at(failure, head.position, eParen);
   *left = budget;
   if (same_text(name, sNat) == 1) return parsed_type(&nat_type, tail, type, rest);
   if (same_text(name, sText) == 1) return parsed_type(&text_type, tail, type, rest);
@@ -230,9 +240,5 @@ int parse_type_in(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, 
       && parsed_type(make_type(TY_REF, kind, 0, NULL, NULL), after, type, rest);
   if (same_text(name, opsTextQuery()) == 1)
     return former_one(more, budget, TY_QUERY, environment, done, tail, type, rest, left, failure);
-  if (!named_type(head.position, name, environment, tail, type, rest, failure)) return 0;
-  Nat offset = 0;
-  for (const Params *cell = done; cell != NULL; cell = cell->tail) offset++;
-  *type = shift_type_markers(offset, *type);
-  return 1;
+  return named_type(more, budget, head.position, name, environment, done, tail, type, rest, left, failure);
 }

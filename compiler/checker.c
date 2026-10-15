@@ -551,6 +551,19 @@ static int transport_type(Fuel fuel, Nat budget, const Bindings *environment, Na
   return 1;
 }
 
+/* D12 part B (design items 8 and 9): T of the family (x : A) T with the side
+   of the argument for the marker of x. The reduction uses one step of the
+   work budget, then transport_type uses the rest. At budget 0 the result is
+   eBudget at position, and left keeps the budget (D10 delta 7). */
+int family_type(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const LType *family, Val side,
+                const LType **result, Nat *left, Failure *failure) {
+  if (budget == 0) {
+    *left = budget;
+    return fail_at(failure, position, eBudget);
+  }
+  return transport_type(fuel, budget - 1, environment, position, family, side, result, left, failure);
+}
+
 /* D6 part B (design items 7 and 8): transport (z : A') B e t. e has the type
    Eq A x y, and A' must be A. t checks against B with x for z. The result
    type is B with y for z. A neutral e and a closed e use this one path. */

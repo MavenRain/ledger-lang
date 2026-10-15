@@ -389,8 +389,8 @@ Nat type_former(Text name);
 int kind_binding(const Binding *item, Text *kind);
 int parse_kind_index(Fuel fuel, const Bindings *environment, Tokens tokens, Text *kind, Tokens *rest,
                      Failure *failure);
-int named_type(Nat position, Text name, const Bindings *environment, Tokens tokens, const LType **type, Tokens *rest,
-               Failure *failure);
+int named_type(Fuel fuel, Nat budget, Nat position, Text name, const Bindings *environment, const Params *done,
+               Tokens tokens, const LType **type, Tokens *rest, Nat *left, Failure *failure);
 int data_type(Nat position, const LType *argument, const LType *result, Tokens tokens, const LType **type,
               Tokens *rest, Failure *failure);
 int data_types(Nat at, const LType *a, Nat bt, const LType *b, const LType *result, Tokens tokens, const LType **type,
@@ -403,6 +403,11 @@ int parse_type_in(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, 
    Eq side takes the work budget, and left gets the rest. */
 int sigma_type(Fuel fuel, Nat budget, const Bindings *environment, const Params *done, Tokens tokens,
                const LType **type, Tokens *rest, Nat *left, Failure *failure);
+/* program.c (D12 part B): the type `P a` for the type family P. The argument
+   a has the form of an Eq side, and left gets the rest of the budget. */
+int family_application(Fuel fuel, Nat budget, Nat position, const LType *family, const Bindings *environment,
+                       const Params *done, Tokens tokens, const LType **type, Tokens *rest, Nat *left,
+                       Failure *failure);
 /* parser.c: the parameters of the body in check, for a type in a term
    position (D6 part B, the motive of transport). */
 const Params *body_params(const Bindings *environment);
@@ -440,6 +445,10 @@ int check_synthesized(Nat position, const LType *expected, Typed found, Tokens t
 Nat synth_form(Text name);
 Nat structure_form(Text name);
 int sides_of(const LType *ty, const LType **a, Val *lhs, Val *rhs);
+/* D12 part B: T of the family (x : A) T with side for x. One step of the
+   work budget, then the substitution. */
+int family_type(Fuel fuel, Nat budget, const Bindings *environment, Nat position, const LType *family, Val side,
+                const LType **result, Nat *left, Failure *failure);
 Nat is_neutral_side(Val side);
 Nat dependent_result(const LType *ty);
 Nat dependent_params(const Params *params);

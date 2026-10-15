@@ -470,6 +470,25 @@ static int eq_side(Fuel fuel, Nat budget, const LType *a, const Bindings *enviro
   return 1;
 }
 
+/* D12 part B (design items 7 to 9): the type `P a` for the type family P.
+   The argument a has the form of an Eq side and checks against A. The family
+   moves into the scope of done before the substitution (delta F-B2), so the
+   marker of a parameter in a stays as written. No argument (no token, or
+   punctuation other than `(`) gives eData at the name. */
+int family_application(Fuel fuel, Nat budget, Nat position, const LType *family, const Bindings *environment,
+                       const Params *done, Tokens tokens, const LType **type, Tokens *rest, Nat *left,
+                       Failure *failure) {
+  if (tokens.size == 0 || (tokens.items[0].kind == TOKEN_PUNCTUATION && tokens.items[0].number != 40)) {
+    *left = budget;
+    return fail_at(failure, position, eData);
+  }
+  const LType *shifted = shift_type_markers(param_count(done), family);
+  Val side;
+  Nat spent;
+  return eq_side(fuel, budget, shifted->left, environment, done, tokens, &side, rest, &spent, failure)
+    && family_type(fuel, spent, environment, position, shifted, side, type, left, failure);
+}
+
 /* `Eq A x y` as the result of a function type. A is a data type. The
    definition checks the body with neutral sides, so `refl` needs the same
    parameter or the same closed value on both sides. D8 part B: the first side

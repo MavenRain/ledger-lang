@@ -3737,6 +3737,64 @@ static void test_d12_parenthesized_family_body(void) {
   }
 }
 
+/* D12 part B: family_type gives T of the family with the side for the
+   binder, and uses one step of the work budget. */
+static void test_d12_family_reduce(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text("def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat\n"
+                                "def Q : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat z 1\n"),
+                           &environment, &failure));
+  const Binding *p;
+  const Binding *q;
+  assert(lookup(text("P"), environment, &p) && p->kind == BIND_FAMILY);
+  assert(lookup(text("Q"), environment, &q) && q->kind == BIND_FAMILY);
+  Val three = {.kind = VAL_CLOSED, .text = text("3")};
+  Val one = {.kind = VAL_CLOSED, .text = text("1")};
+  const LType *result = NULL;
+  Nat left = 0;
+  assert(family_type(1000, 100, environment, 7, p->type, three, &result, &left, &failure));
+  assert(result->tag == TY_NAT);
+  LType nat = {.tag = TY_NAT};
+  LType equality = {.tag = TY_EQ, .left = &nat, .lhs = one, .rhs = one};
+  assert(family_type(1000, 100, environment, 7, q->type, one, &result, &left, &failure));
+  assert(result->tag == TY_EQ && same_type(result, &equality) == 1);
+
+  left = 9;
+  assert(!family_type(1000, 0, environment, 7, p->type, three, &result, &left, &failure));
+  assert(failure.position == 7 && same_text(failure.message, eBudget) && left == 0);
+  left = 9;
+  assert(family_type(1000, 1, environment, 7, p->type, three, &result, &left, &failure));
+  assert(result->tag == TY_NAT && left == 0);
+}
+
+static void test_d12_family_type_atoms(void) {
+  const char *sources[] = {
+    "def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat\n"
+    "def v : Option P 1 := none",
+    "def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat\n"
+    "def v : Prod P 1 Nat := pair 2 3",
+    "def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat\n"
+    "def v : Prod Nat P 1 := pair 2 3",
+  };
+  for (size_t index = 0; index < sizeof sources / sizeof sources[0]; index++) {
+    const Bindings *environment = NULL;
+    Failure failure = {0};
+    assert(!check_definitions(text(sources[index]), &environment, &failure));
+    assert(same_text(failure.message, eParen));
+    assert(failure.position == (Nat)(strstr(sources[index], "P 1") - sources[index]));
+  }
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text("def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat\n"
+                                "def a : Option (P 1) := none\n"
+                                "def b : Prod (P 1) Nat := pair 2 3\n"
+                                "def c : Prod Nat (P 1) := pair 2 3\n"
+                                "def f : (P : Type 0) -> (x : Option P) -> Option P := "
+                                "fun (P : Type 0) (x : Option P) => x\n"),
+                           &environment, &failure));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3792,6 +3850,8 @@ int main(void) {
   test_d11_print_failure_name();
   test_d12_family_definition();
   test_d12_parenthesized_family_body();
+  test_d12_family_reduce();
+  test_d12_family_type_atoms();
   puts("C module tests passed");
   return 0;
 }

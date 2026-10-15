@@ -269,3 +269,28 @@ const familyNat = 'def P : (x : Nat) -> Type 0 := fun (x : Nat) => Nat';
 ].forEach(([label, source, at]) =>
   test(`a type family refuses ${label}`, () => reject(source, 'expected a data type', at)),
 );
+
+// D12 part B: `P a` in a result type, a parameter type or the type of a definition
+// gives the reduced type of the family. A proof type writes no instance.
+const familyEq = 'def Q : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat z 1';
+[
+  ['a result type', `${familyNat}\ndef f : (x : Nat) -> P x := fun (x : Nat) => x`, []],
+  [
+    'a parameter type',
+    `${familyNat}\ndef g : (x : Nat) -> (y : P x) -> Nat := fun (x : Nat) (y : P x) => y`,
+    [],
+  ],
+  ['the type of a definition', `${familyNat}\ndef v : P 3 := 3`, [{ name: 'v', type: 'Nat', value: 3 }]],
+  ['a proof type', `${familyEq}\ndef r : Q 1 := refl`, []],
+].forEach(([label, source, instances]) =>
+  test(`a family application in ${label} checks`, () =>
+    assert.deepEqual(run(source), { 'ledger-lang': 1, instances })),
+);
+
+[
+  ['an argument that does not check against A', `${familyNat}\ndef v : P "a" := 3`, '"a" :='],
+  ['a value that does not check against the reduced type', `${familyNat}\ndef v : P 3 := "a"`, '"a"'],
+].forEach(([label, source, at]) =>
+  test(`a family application refuses ${label}`, () =>
+    reject(source, 'term does not have the declared type', at)),
+);
