@@ -15,11 +15,12 @@ typedef struct {
   const LType *result;
 } Signature;
 
-/* A checked instance keeps the source byte of its definition for print
-   errors. NULL is the end. */
+/* A checked instance keeps the source byte and name of its definition for
+   print errors. NULL is the end. */
 typedef struct Located Located;
 struct Located {
   Nat position;
+  Text name;
   const Value *value;
   const Located *tail;
 };
@@ -784,9 +785,9 @@ static const Value *instance_value(Text name, const LType *type, const Value *va
   return instance;
 }
 
-static const Located *located_cons(Nat position, const Value *value, const Located *tail) {
+static const Located *located_cons(Nat position, Text name, const Value *value, const Located *tail) {
   Located *cell = arena_alloc(sizeof *cell);
-  *cell = (Located){position, value, tail};
+  *cell = (Located){position, name, value, tail};
   return cell;
 }
 
@@ -799,7 +800,7 @@ static const Located *record_instance(Nat position, Binding item, const Located 
   switch (item.kind) {
   case BIND_VALUE:
     if (is_query_type(item.type) == 1 || sides_of(item.type, &a, &lhs, &rhs)) return done;
-    return located_cons(position, instance_value(item.name, item.type, item.value), done);
+    return located_cons(position, item.name, instance_value(item.name, item.type, item.value), done);
   case BIND_TYPE:
   case BIND_ARROW:
   case BIND_FUN:
@@ -811,8 +812,15 @@ static const Located *record_instance(Nat position, Binding item, const Located 
 static const Located *reverse_located(const Located *done) {
   const Located *reversed = NULL;
   for (const Located *cell = done; cell != NULL; cell = cell->tail)
-    reversed = located_cons(cell->position, cell->value, reversed);
+    reversed = located_cons(cell->position, cell->name, cell->value, reversed);
   return reversed;
+}
+
+/* A failure in a declaration keeps the name of the declaration: the token
+   after `def` when it is an identifier. Else the name has size 0. */
+static int name_failure(Failure *failure, Tokens tokens) {
+  failure->name = tokens.size > 1 && tokens.items[1].kind == TOKEN_IDENTIFIER ? tokens.items[1].text : text_end();
+  return 0;
 }
 
 static int parse_program(Fuel fuel, Nat budget, Fuel checking_fuel, const Bindings *environment, const Located *done,
@@ -829,20 +837,31 @@ static int parse_program(Fuel fuel, Nat budget, Fuel checking_fuel, const Bindin
   Binding item;
   Tokens rest;
   Nat left;
-  if (!parse_definition(checking_fuel, budget, environment, drop_token(tokens), &item, &rest, &left, failure)) return 0;
+  if (!parse_definition(checking_fuel, budget, environment, drop_token(tokens), &item, &rest, &left, failure))
+    return name_failure(failure, tokens);
   return parse_program(fuel - 1, left, checking_fuel, binding_cons(item, environment),
                        record_instance(head.position, item, done), rest, instances, checked, failure);
 }
 
-/* A print error reports the first byte of the definition being printed. */
+/* A print error reports the first byte and name of the definition being printed. */
 static int print_instances(Printer *printer, Nat first, const Located *instances, Failure *failure) {
   Failure printing;
+  const Located *last = NULL;
   for (const Located *cell = instances; cell != NULL; cell = cell->tail) {
-    if (!emit_text(printer, separator(first), &printing)) return fail_at(failure, cell->position, printing.message);
-    if (!print_value(printer, cell->value, &printing)) return fail_at(failure, cell->position, printing.message);
+    if (!emit_text(printer, separator(first), &printing) || !print_value(printer, cell->value, &printing)) {
+      fail_at(failure, cell->position, printing.message);
+      failure->name = cell->name;
+      return 0;
+    }
     first = 0;
+    last = cell;
   }
-  return emit_text(printer, jEnd, failure);
+  if (emit_text(printer, jEnd, failure)) return 1;
+  if (last != NULL) {
+    failure->position = last->position;
+    failure->name = last->name;
+  }
+  return 0;
 }
 
 Text error_text(Nat position, Text message) {

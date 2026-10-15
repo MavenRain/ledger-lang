@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createCompiler } from '../bin/bridge.mjs';
 
 const compile = await createCompiler();
@@ -216,4 +220,26 @@ test('cong and transport read a closed side back from its text', () => {
     `def pl : Eq (List Nat) ${list} ${list} := refl\n` +
       `def p : Eq (List Nat) ${list} ${list} := transport (z : List Nat) (Eq (List Nat) z ${list}) pl pl\n`,
   );
+});
+
+// D11 part C: in file mode, a refusal line names the declaration that fails.
+test('a file-mode refusal line names the declaration', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ledger-lang-test-'));
+  const path = join(directory, 'program.ledger');
+  const launcher = fileURLToPath(new URL('../bin/ledgerc', import.meta.url));
+  const invoke = () => spawnSync('sh', [launcher, path], { encoding: 'utf8', timeout: 30_000 });
+  try {
+    writeFileSync(path, 'def a : Nat := 1\ndef b : Nat := c\n');
+    const named = invoke();
+    assert.equal(named.status, 1);
+    assert.equal(named.stdout, '');
+    assert.equal(named.stderr, `${path}: byte 32: unknown name or constructor (in b)\n`);
+    writeFileSync(path, 'a : Nat := 1\n');
+    const outside = invoke();
+    assert.equal(outside.status, 1);
+    assert.match(outside.stderr, /: byte 0: /);
+    assert.doesNotMatch(outside.stderr, /\(in /);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

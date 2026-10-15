@@ -2,6 +2,9 @@
 
    ledgerc PROGRAM.ledger  writes the JSON document and a newline to stdout,
                            or "PROGRAM.ledger: byte N: message" to stderr.
+                           For a checking or printing failure in a declaration, the line is
+                           "PROGRAM.ledger: byte N: message (in NAME)",
+                           where NAME is the name of the declaration.
    ledgerc --stdin         reads the source from stdin and writes the exact
                            compiler output (a document or an error) to stdout. */
 #include <errno.h>
@@ -122,6 +125,11 @@ static int compile_file(const char *path) {
   if (job.ok) return write_output(job.output, "\n");
   fprintf(stderr, "%s: byte %u: ", path, (unsigned)job.failure.position);
   print_bytes(stderr, job.failure.message);
+  if (job.failure.name.size > 0) {
+    fputs(" (in ", stderr);
+    print_bytes(stderr, job.failure.name);
+    fputc(')', stderr);
+  }
   fputc('\n', stderr);
   return 1;
 }

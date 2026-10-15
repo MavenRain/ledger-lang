@@ -22,10 +22,14 @@ typedef uint64_t Fuel;
 
 /* A failure keeps a source byte offset and a message text. An empty message
    (size 0) is "no failure": each caller sets {0, {NULL, 0}} before the call.
-   An eval function writes a failure only on a failed answer (D3-s5 part E). */
+   An eval function writes a failure only on a failed answer (D3-s5 part E).
+   The name identifies the declaration that fails while checking or printing.
+   A failure before declaration parsing or outside a declaration has a name
+   of size 0 (D11 part C). */
 typedef struct {
   Nat position;
   Text message;
+  Text name;
 } Failure;
 
 /* A growable text that collects output in order. */

@@ -3617,6 +3617,69 @@ static void test_d11_closed_transport_motive(void) {
   assert(same_text(failure.message, eBudget));
 }
 
+/* D11 part C: a failure in a declaration keeps the name of that declaration
+   (design item 10). A failure outside a declaration, or after a `def` with no
+   identifier, has a name of size 0. */
+static void test_d11_failure_name(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(!check_definitions(text("def a : Nat := 1\ndef b : Nat := c\n"), &environment, &failure));
+  assert(failure.position == 32 && same_text(failure.message, text("unknown name or constructor")));
+  assert(same_text(failure.name, text("b")));
+
+  environment = NULL;
+  failure = (Failure){0};
+  assert(!check_definitions(text("a : Nat := 1\n"), &environment, &failure));
+  assert(failure.position == 0 && failure.name.size == 0);
+
+  environment = NULL;
+  failure = (Failure){0};
+  assert(!check_definitions(text("def 1 : Nat := 1\n"), &environment, &failure));
+  assert(failure.name.size == 0);
+}
+
+static Text d11_shared_values(Nat text_size, Nat levels) {
+  TextBuilder payload = builder_new();
+  for (Nat index = 0; index < text_size; index++) builder_push(&payload, 'x');
+  Text source = append_text(text("def a0 : Values := valuesItem (valueText \""),
+                            append_text(builder_text(&payload), text("\") valuesEnd\n")));
+  for (Nat index = 1; index <= levels; index++) {
+    Text previous = append_text(text("a"), number_text(index - 1));
+    Text declaration = append_text(text("def a"), append_text(number_text(index), text(" : Values := valuesItem (valueItems ")));
+    declaration = append_text(declaration, append_text(previous, append_text(text(") "), append_text(previous, text("\n")))));
+    source = append_text(source, declaration);
+  }
+  return source;
+}
+
+static void test_d11_print_failure_name(void) {
+  Text output;
+  Failure failure = {0};
+  Text source = text("def a : Nat := 1 def b : Attrs := attrsField (textByte 255 textEnd) valueNull attrsEnd def c : Nat := 3");
+  assert(!compile_program(source, &output, &failure));
+  assert(failure.position == 17 && same_text(failure.message, eUtf8));
+  assert(same_text(failure.name, text("b")));
+
+  source = d11_shared_values(100, 18);
+  failure = (Failure){0};
+  assert(!compile_program(source, &output, &failure));
+  assert(same_text(failure.message, eOutput));
+  assert(failure.name.size > 0);
+  Text declaration = append_text(text("def "), append_text(failure.name, text(" :")));
+  assert(same_text(text_take(text_drop(source, failure.position), declaration.size), declaration));
+
+  /* The document needs 59138 bytes. Padding gives a budget of 59136, so
+     only the final two closing bytes fail, after every instance printed. */
+  source = d11_shared_values(110, 8);
+  TextBuilder padding = builder_new();
+  for (Nat index = 0; index < 1287; index++) builder_push(&padding, ' ');
+  source = append_text(source, builder_text(&padding));
+  failure = (Failure){0};
+  assert(!compile_program(source, &output, &failure));
+  assert(failure.position == 508 && same_text(failure.message, eOutput));
+  assert(same_text(failure.name, text("a8")));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3668,6 +3731,8 @@ int main(void) {
   test_d11_body_closed_side();
   test_d11_closed_reader();
   test_d11_closed_transport_motive();
+  test_d11_failure_name();
+  test_d11_print_failure_name();
   puts("C module tests passed");
   return 0;
 }

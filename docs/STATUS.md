@@ -192,8 +192,12 @@ not complete the M0 milestone in `SPEC.md`.
    `ReadPath`.
 2. `ReadPath` is done (step D7). It is a function type in `Type 1`. The
    compiler does not run the read path of M2.
-3. Extend diagnostics with declaration context and improve source/output
-   budgets as measurements justify changes.
+3. Diagnostics with declaration context are done (D11 part C). In file
+   mode, a checking or printing refusal in a declaration gives
+   "byte N: message (in NAME)". UTF-8 and lexer failures happen before
+   declaration parsing and give a byte offset without a declaration name.
+   The source and output budgets do not change, because no measurement
+   shows the need. No item of this section is open.
 
 ## Known limits of this slice
 
