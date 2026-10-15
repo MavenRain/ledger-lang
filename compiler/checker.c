@@ -778,6 +778,10 @@ Binding opaque_closure(Text name, const LType *ty) {
 
 Binding closure_of_name(Text name, const LType *ty, Text target, const Bindings *caller) {
   const Binding *item;
+  /* The builtin read as an argument (M2 part A, design item 3). */
+  if (!lookup(target, caller, &item) && same_text(target, sread) == 1 && same_type(ty, read_path_type()) == 1)
+    return closure_binding(name, read_binders(), arrow_result(ty),
+                           read_body(0, (Tokens){NULL, 0}, (Tokens){NULL, 0}), caller);
   /* The builtin write as an argument (M1 part B, delta B-3). */
   if (!lookup(target, caller, &item))
     return same_text(target, swrite) == 1 && same_type(ty, write_path_type()) == 1
@@ -2484,6 +2488,17 @@ const Term *write_body(Nat position, Tokens body, Tokens rest) {
                    args);
 }
 
+/* M2 part A (design item 2): the body of a ReadPath function: read log
+   query, with the names of read_binders. It has no type token: its answer
+   type is the expected type (delta A-3). */
+const Term *read_body(Nat position, Tokens body, Tokens rest) {
+  const Terms *args =
+      terms_item(term_named(TERM_NAME, position, 0, text_of_cstring("log"), NULL, NULL),
+                 terms_item(term_named(TERM_NAME, position, 0, text_of_cstring("query"), NULL, NULL), NULL));
+  return term_call(TERM_CONSTRUCT, position, 0, taken_tokens(body, rest), first_position(rest), sread, NULL, NULL,
+                   args);
+}
+
 static const LType *write_schema_type(const char *name) {
   LType *made = arena_alloc(sizeof *made);
   *made = (LType){.tag = TY_SCHEMA, .name = text_of_cstring(name)};
@@ -2614,6 +2629,20 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
                       value, failure);
 }
 
+/* M2 part A (design items 5 to 7): read log query on the answer type. One
+   work step; budget 0 gives eBudget with left 0. The tag of the Query value
+   selects the answer. In part A no tag has an answer: each read gives eRead
+   at position (the read application). */
+int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
+              const Value **value, Nat *left, Failure *failure) {
+  if (budget == 0) {
+    *left = 0;
+    return fail_at(failure, position, eBudget);
+  }
+  *left = budget - 1;
+  return fail_at(failure, position, eRead);
+}
+
 /* The builtin write on the token path (the model of pack_term). At the
    WritePath type the name is a function argument (the first test of
    partial_argument). Else the expected type is Step, then the log and the
@@ -2652,6 +2681,68 @@ static int write_term(Fuel fuel, Nat budget, Nat atom, Nat position, const LType
                                                 taken_tokens(tokens, later), first_position(later), environment)
                                    : NULL;
   return with_term(worked_value(step, later, done, value, rest, left), term, built);
+}
+
+/* M2 part A (design items 3 and 4): the builtin read on the token path. At
+   the ReadPath type the name is a function argument. Else read T log q: T
+   by type_arguments on the ReadPath binders (step D7b, delta A-2), the
+   expected type must be T, then the log and the Query T, as atoms. A wrong
+   use gives eTerm. */
+/* 1 if a check_marker or a body_marker is in the environment: the check of a
+   body, where the parameters have no values. Neither read_term nor
+   eval_read executes read_step during this check (delta A-4 of M2). */
+static Nat body_check(const Bindings *environment) {
+  for (; environment != NULL; environment = environment->tail)
+    if (environment->head.kind == BIND_VALUE &&
+        (environment->head.name.size == 0 || same_text(environment->head.name, text_end()) == 1))
+      return 1;
+  return 0;
+}
+
+static int read_term(Fuel fuel, Nat budget, Nat atom, Nat position, const LType *expected,
+                     const Bindings *environment, Tokens tokens, const Value **value, Tokens *rest, Nat *left,
+                     const Term **term, Failure *failure) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  const LType *path = read_path_type();
+  if (same_type(expected, path) == 1)
+    return with_term(worked_value(text_value(sread), tokens, budget, value, rest, left), term,
+                     term != NULL ? reference_term(position, sread, environment) : NULL);
+  const Bindings *chosen;
+  Tokens after_types;
+  const TermTypes *types = NULL;
+  Nat typed;
+  if (!type_arguments(more, budget, arrow_params(path), environment, NULL, tokens, &chosen, &after_types,
+                      term != NULL ? &types : NULL, &typed, failure))
+    return 0;
+  const LType *answer = closure_result(chosen, arrow_result(path));
+  if (same_type(expected, answer) != 1) return fail_at(failure, position, eTerm);
+  if (atom == 1) return fail_at(failure, position, eParen);
+  const Params *formal = closure_params(chosen, arrow_params(path));
+  const Value *log;
+  Tokens after;
+  Nat spent;
+  const Term *first = NULL;
+  if (!parse_term(more, typed, 1, formal->head.type, environment, after_types, &log, &after, &spent,
+                  want_term(term, &first), failure))
+    return 0;
+  const Value *query;
+  Tokens later;
+  Nat used;
+  const Term *second = NULL;
+  if (!parse_term(more, spent, 1, formal->tail->head.type, environment, after, &query, &later, &used,
+                  want_term(term, &second), failure))
+    return 0;
+  const Value *found = &null_value;
+  Nat done = used;
+  if (body_check(environment) != 1 &&
+      !read_step(OUTPUT_LIMIT, used, position, answer, log, query, &found, &done, failure))
+    return 0;
+  const Term *built = term != NULL ? named_term(TERM_CONSTRUCT, position, sread, types,
+                                                terms_item(first, terms_item(second, NULL)),
+                                                taken_tokens(tokens, later), first_position(later), environment)
+                                   : NULL;
+  return with_term(worked_value(found, later, done, value, rest, left), term, built);
 }
 
 /* checkWorked position expected (synthTerm fuel budget atom environment tokens). */
@@ -2732,6 +2823,9 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
     if (same_text(head.text, swrite))
       return write_term(more, budget, atom, head.position, expected, environment, tail, value, rest, left, term,
                         failure);
+    if (same_text(head.text, sread))
+      return read_term(more, budget, atom, head.position, expected, environment, tail, value, rest, left, term,
+                       failure);
     Plan selected;
     if (!constructor_plan(expected, head.text, &selected)) {
       if (synth_form(head.text) != 0)
@@ -2942,6 +3036,36 @@ static int eval_write(Fuel fuel, Nat budget, const LType *expected, const Bindin
   Nat used;
   if (!eval_argument(more, spent, params->tail->head.type, environment, second, &write, &used, failure)) return 0;
   return write_step(OUTPUT_LIMIT, used, term->position, log, write, value, left, failure);
+}
+
+/* read_term on the read Term (TERM_CONSTRUCT sread, args log and query).
+   The source form keeps T in its types and tokens: type_arguments reads it
+   again. read_body has no types: its answer type is the expected type
+   (delta A-3). The same fuel steps, failures and budget. */
+static int eval_read(Fuel fuel, Nat budget, const LType *expected, const Bindings *environment, const Term *term,
+                     const Value **value, Nat *left, Failure *failure) {
+  if (fuel == 0) return 0;
+  Fuel more = fuel - 1;
+  const LType *path = read_path_type();
+  const Params *params = arrow_params(path);
+  const Bindings *chosen = bindings_item(type_binding(params->head.name, params->head.type, expected), NULL);
+  Tokens after_types;
+  Nat typed = budget;
+  if (term->types != NULL && !type_arguments(more, budget, params, environment, NULL, term->tokens, &chosen,
+                                             &after_types, NULL, &typed, failure))
+    return 0;
+  const LType *answer = closure_result(chosen, arrow_result(path));
+  const Term *second = second_arg(term);
+  if (same_type(expected, answer) != 1 || second == NULL) return fail_at(failure, term->position, eTerm);
+  const Params *formal = closure_params(chosen, params);
+  const Value *log;
+  Nat spent;
+  if (!eval_argument(more, typed, formal->head.type, environment, first_arg(term), &log, &spent, failure)) return 0;
+  const Value *query;
+  Nat used;
+  if (!eval_argument(more, spent, formal->tail->head.type, environment, second, &query, &used, failure)) return 0;
+  if (body_check(environment) == 1) return eval_worked(&null_value, used, value, left);
+  return read_step(OUTPUT_LIMIT, used, term->position, answer, log, query, value, left, failure);
 }
 
 /* dependent_arguments on the argument terms. start is the argument span
@@ -3933,6 +4057,10 @@ static int eval_name_argument(Fuel fuel, Nat budget, const LType *expected, cons
                               const Term *term, const Value **value, Nat *left, Failure *failure) {
   const Binding *item;
   int found = term->tag == TERM_VAR ? var_binding(term, environment, &item) : lookup(term->name, environment, &item);
+  /* The builtin read at the ReadPath type (M2 part A, design item 3). */
+  if (!found && term->tag == TERM_NAME && same_text(term->name, sread) == 1 &&
+      same_type(expected, read_path_type()) == 1)
+    return eval_worked(text_value(sread), budget, value, left);
   /* The builtin write at the WritePath type (M1 part B, delta B-3). */
   if (!found)
     return term->tag == TERM_NAME && same_text(term->name, swrite) == 1 &&
@@ -4052,6 +4180,7 @@ int eval_term(Fuel fuel, Nat budget, const LType *expected, const Bindings *envi
     /* pack: the order of parse_term (pack_term before constructor_plan). */
     if (same_text(term->name, spack)) return eval_pack(more, budget, expected, environment, term, value, left, failure);
     if (same_text(term->name, swrite)) return eval_write(more, budget, expected, environment, term, value, left, failure);
+    if (same_text(term->name, sread)) return eval_read(more, budget, expected, environment, term, value, left, failure);
     if (!constructor_plan(expected, term->name, &selected)) return 0;
     const Values *values;
     Nat spent;

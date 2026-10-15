@@ -4130,6 +4130,98 @@ static void test_m1_write_hash_budget(void) {
   }
 }
 
+/* M2 part A: read_step on nil refuses a Query of each tag with eRead at the
+   position, and budget 0 gives eBudget with left 0. */
+static void read_refused(const char *tag) {
+  Value name = {.kind = VALUE_TEXT, .text = text(tag)};
+  Attrs field = {text("tag"), &name, NULL};
+  Value query = {.kind = VALUE_ATTRS, .attrs = &field};
+  Value empty_log = {.kind = VALUE_ITEMS, .items = NULL};
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(!read_step(1000, 5, 7, answer, &empty_log, &query, &value, &left, &failure));
+  assert(left == 4 && failure.position == 7 && same_text(failure.message, eRead));
+  left = 9;
+  assert(!read_step(1000, 0, 7, answer, &empty_log, &query, &value, &left, &failure));
+  assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
+}
+
+/* M2 part A: read_path_type has the three ReadPath binders answer, log and
+   query; read_step refuses each M2 tag and one S4 tag. */
+static void test_m2_read_path(void) {
+  assert(same_text(arrow_params(read_path_type())->head.name, text("answer")));
+  const Params *binders = read_binders();
+  assert(binders != NULL && same_text(binders->head.name, text("answer")));
+  assert(binders->tail != NULL && same_text(binders->tail->head.name, text("log")));
+  assert(binders->tail->tail != NULL && same_text(binders->tail->tail->head.name, text("query")));
+  assert(binders->tail->tail->tail == NULL);
+  read_refused("queryReplay");
+  read_refused("queryTail");
+  read_refused("queryAuditByActor");
+  read_refused("queryCommercial");
+  read_refused("queryProjectionSound");
+  read_refused("queryAmountReconciled");
+}
+
+static void test_m2_read_callback_check(void) {
+  const char *prefix =
+      "def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
+      "def ask : Query Flag := queryAmountReconciled deal "
+      "def F : Type 0 := (n : Nat) -> Flag "
+      "def ignore : (f : F) -> Nat := fun (f : F) => 3 ";
+  char source[2048];
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  snprintf(source, sizeof source,
+           "%sdef wrap : (n : Nat) -> Nat := fun (n : Nat) => "
+           "ignore (fun (k : Nat) => read Flag nil ask) def out : Nat := wrap 0", prefix);
+  assert(check_definitions(text(source), &environment, &failure));
+  const Binding *out;
+  assert(lookup(text("out"), environment, &out));
+  assert(same_text(printed(out->value), text("3")));
+
+  /* Checking a callback must not suppress refusal when it is invoked. */
+  snprintf(source, sizeof source,
+           "%sdef call : (f : F) -> Flag := fun (f : F) => f 0 "
+           "def wrap : (n : Nat) -> Flag := fun (n : Nat) => "
+           "call (fun (k : Nat) => read Flag nil ask) def out : Flag := wrap 0", prefix);
+  environment = NULL;
+  failure = (Failure){0};
+  assert(!check_definitions(text(source), &environment, &failure));
+  assert(same_text(failure.message, eRead));
+  assert(failure.position == (Nat)(strstr(source, "read Flag") - source));
+}
+
+static void test_m2_read_check_parity(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text("def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
+                                "def ask : Query Flag := queryAmountReconciled deal"),
+                           &environment, &failure));
+  const LType *flag;
+  Tokens rest;
+  Nat left;
+  assert(parse_type(1000, 1000, 0, environment, lexed("Flag"), &flag, &rest, &left, &failure));
+  Binding markers[] = {check_marker(), body_marker(0)};
+  for (Nat i = 0; i < 2; i++) {
+    Bindings scope = {.head = markers[i], .tail = environment};
+    const Value *value;
+    const Term *node = NULL;
+    assert(parse_term(1000, 1, 0, flag, &scope, lexed("read Flag nil ask"), &value, &rest, &left, &node, &failure));
+    assert(left == 1 && same_text(printed(value), text("null")));
+    assert(eval_term(1000, 1, flag, &scope, node, &value, &left, &failure));
+    assert(left == 1 && same_text(printed(value), text("null")));
+    failure = (Failure){0};
+    assert(!eval_term(1000, 1, flag, environment, node, &value, &left, &failure));
+    assert(left == 0 && same_text(failure.message, eRead));
+    failure = (Failure){0};
+    assert(!parse_term(1000, 1, 0, flag, &scope, lexed("read Flag nil 3"), &value, &rest, &left, NULL, &failure));
+    assert(same_text(failure.message, eTerm));
+  }
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -4193,6 +4285,9 @@ int main(void) {
   test_m1_entry_hash();
   test_m1_write_hash_budget();
   test_m1_write();
+  test_m2_read_path();
+  test_m2_read_callback_check();
+  test_m2_read_check_parity();
   test_m1_records();
   test_m1_projection_hash_failure();
   test_m1_projection_print_failure();

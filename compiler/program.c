@@ -197,6 +197,15 @@ static Signature read_path_signature(void) {
   return (Signature){params, answer};
 }
 
+/* M2 part A (design item 2): the ReadPath type, and the binders of the
+   builtin read: answer, log and query. */
+const LType *read_path_type(void) {
+  Signature found = read_path_signature();
+  return arrow_type(found.params, found.result);
+}
+
+const Params *read_binders(void) { return read_path_signature().params; }
+
 /* A type definition can name a function type. A parameter hides this name. */
 static int named_signature(const Bindings *environment, Tokens tokens, Signature *found) {
   Text name;
@@ -803,6 +812,18 @@ static int parse_function(Fuel fuel, Nat budget, Text name, const Bindings *envi
                       .type = found.result,
                       .params = write_binders(),
                       .term = write_body(first_position(after_assign), after_assign, *rest)};
+    return 1;
+  }
+  /* M2 part A (design item 3): the one name read is the body of a ReadPath
+     definition when no binding hides the builtin. */
+  if (is_word(sread, after_assign) == 1 && !lookup(sread, environment, &hidden) &&
+      same_type(arrow_type(found.params, found.result), read_path_type()) == 1) {
+    *rest = drop_token(after_assign);
+    *item = (Binding){.kind = BIND_FUN,
+                      .name = name,
+                      .type = found.result,
+                      .params = read_binders(),
+                      .term = read_body(first_position(after_assign), after_assign, *rest)};
     return 1;
   }
   if (is_word(sfun, after_assign) != 1) return fail_at(failure, first_position(after_assign), eFun);

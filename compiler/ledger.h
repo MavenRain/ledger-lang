@@ -924,6 +924,18 @@ const Term *write_body(Nat position, Tokens body, Tokens rest);
 int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const Value *write, const Value **value,
                Nat *left, Failure *failure);
 
+/* M2 part A (design items 2 to 7): the builtin read. read_path_type is the
+   ReadPath type. read_binders are the binders of a ReadPath function:
+   answer, log and query. read_body is its body, read log query; its answer
+   type is the expected type (delta A-3). read_step is read log query on the
+   answer type: one work step. In part A no Query tag has an answer: each
+   read gives eRead at position. */
+const LType *read_path_type(void);
+const Params *read_binders(void);
+const Term *read_body(Nat position, Tokens body, Tokens rest);
+int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
+              const Value **value, Nat *left, Failure *failure);
+
 /* eval_term evaluates a checked body term at run time (D3-s3). It follows
    parse_term with atom 0 on the tokens of the term: the same expected type,
    the same fuel steps and the same work charges in the same order. A

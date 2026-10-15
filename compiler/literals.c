@@ -341,6 +341,13 @@ static const Nat eUnknown_items[] = {
 };
 const Text eUnknown = {eUnknown_items, 27};
 
+/* "the read path does not answer this query" */
+static const Nat eRead_items[] = {
+  't', 'h', 'e', ' ', 'r', 'e', 'a', 'd', ' ', 'p', 'a', 't', 'h', ' ', 'd', 'o', 'e', 's', ' ',
+  'n', 'o', 't', ' ', 'a', 'n', 's', 'w', 'e', 'r', ' ', 't', 'h', 'i', 's', ' ', 'q', 'u', 'e', 'r', 'y',
+};
+const Text eRead = {eRead_items, 40};
+
 /* "duplicate definition name" */
 static const Nat eDuplicate_items[] = {
   'd', 'u', 'p', 'l', 'i', 'c', 'a', 't', 'e', ' ', 'd', 'e', 'f', 'i', 'n', 'i', 't', 'i', 'o',
@@ -538,6 +545,8 @@ static const Nat spack_items[] = {
 const Text spack = {spack_items, 4};
 static const Nat swrite_items[] = {119, 114, 105, 116, 101};
 const Text swrite = {swrite_items, 5};
+static const Nat sread_items[] = {114, 101, 97, 100};
+const Text sread = {sread_items, 4};
 
 /* "witness" */
 static const Nat switness_items[] = {

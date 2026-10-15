@@ -372,6 +372,45 @@ test('a type argument after a value argument is not read (D-B5)', () => {
     'fun (r : ReadPath) (log : Log) (ask : Query Flag) => lift r Flag log ask', 'unknown name or constructor', 'Flag');
 });
 
+const readError = 'the read path does not answer this query';
+const readPre = 'def deal : Ref kindCommercial := refTo (hashOf "deal-1") def history : Log := nil ' +
+  'def ask : Query Flag := queryAmountReconciled deal ';
+
+test('read is a builtin ReadPath term', () => {
+  assert.deepEqual(instances('def r : ReadPath := read'), []);
+});
+
+test('a binding of read hides the builtin', () => {
+  assert.deepEqual(values('def read : Nat := 3 def x : Nat := read'), [['read', 3], ['x', 3]]);
+});
+
+test('read with the answer type first checks in a function body', () => {
+  assert.deepEqual(instances('def f : (log : Log) -> (q : Query Flag) -> Flag := ' +
+    'fun (log : Log) (q : Query Flag) => read Flag log q'), []);
+});
+
+test('a read of a query out of the read path gives the new refusal', () => {
+  reject(`${readPre}def a : Flag := read Flag history ask`, readError, 'read');
+});
+
+test('read as a ReadPath argument', () => {
+  const source = `${readPre}def lift : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Flag := ` +
+    'fun (r : ReadPath) (log : Log) (ask : Query Flag) => r Flag log ask def a : Flag := lift read history ask';
+  assert.ok(Array.isArray(instances(source.slice(0, source.lastIndexOf(' def a')))));
+  const result = run(source);
+  assert.deepEqual(Object.keys(result), ['error'], JSON.stringify(result));
+  assert.equal(result.error.message, readError);
+});
+
+test('a wrong answer type gives term does not have the declared type', () => {
+  reject(`${readPre}def a : Log := read Log history ask`, termError, 'ask');
+  reject(`${readPre}def b : Flag := read Log history ask`, termError, 'read');
+});
+
+test('a wrong argument gives term does not have the declared type', () => {
+  reject(`${readPre}def a : Flag := read Flag history 3`, termError, '3');
+});
+
 test('the paths example compiles to its literal steps', async () => {
   const source = await readFile(new URL('../examples/paths.ledger', import.meta.url), 'utf8');
   const found = instances(source);
