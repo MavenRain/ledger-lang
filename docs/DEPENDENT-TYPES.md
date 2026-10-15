@@ -196,8 +196,7 @@ The plan adds neutral values in two stages:
   The reader accepts the forms written by the value printer: null, flags,
   natural numbers, UTF-8 strings, arrays and objects. Text outside those
   forms gives "term does not have the declared type". A neutral side gives
-  null for z. A named family `P` in place of the motive moves to D7 or a
-  later step.
+  null for z. A named family `P` in place of the motive is in step D12.
 - D7 (done). `Query` parameters and `ReadPath` (STATUS item 2). A function
   parameter can have the type `Query T`, also with a type parameter `T`.
   `ReadPath` is the function type
@@ -210,6 +209,28 @@ The plan adds neutral values in two stages:
   parameters, as in `(head : Hash) -> ReadPath`. A type argument after a
   value argument stays refused (an M0 limit). Two function types that
   differ only in the names of their type parameters are the same type.
+- D12 (done). Type families. A family is a definition
+  `def P : (x : A) -> Type 0 := fun (x : A) => T` with one binder. A is a
+  data type, and T is a data type that can name x. A family writes no
+  instance. `P a` is a type: a parameter type, a result type or the type
+  of a definition. `P a` reduces to T with a for x, and the reduction uses
+  one step of the work budget. The checker compares the reduced types, so
+  with `def FamA : (x : Nat) -> Type 0 := fun (x : Nat) => Nat`,
+  `def famV : FamA 3 := 3` checks. An instance of type `P a` writes the
+  reduced type. A type argument is an atom, thus `P a` as a type argument
+  needs parentheses: `Option (P 1)` checks, and `Option P 1` is refused at
+  `P 1`. `P` with no argument in a type gives "expected a data type".
+  A family name can be the motive of `transport`. If P is
+  `fun (z : A) => B`, then `transport P e t` is the same as
+  `transport (z : A) B e t` (D6), at the top level and in a function body,
+  with the same refusals. Thus, with
+  `def MotA : (z : Nat) -> Type 0 := fun (z : Nat) => Option Nat`,
+  `def u : Option Nat := transport MotA pf (some 1)` writes the instance of
+  the D6 example. A name that is not a family or a binder gives "expected
+  a supported type". These forms stay refused, each with its refusal from
+  before D12: more than one binder, a domain of `Type 0` or `Type 1`, a
+  body T that is not a data type, a family as a parameter of a function,
+  and a family in a function body (a local family).
 
 ## Limits that stay
 

@@ -578,6 +578,32 @@ static int transport_types(Fuel fuel, Nat budget, const Bindings *environment, N
          transport_type(fuel, spent, environment, position, motive, y, by, left, failure);
 }
 
+/* D12 part C (design items 12, 13 and 15): the motive of form 9. A family
+   name gives the family LType. In a body, the family moves by the count of
+   the body parameters, as in family_application. The lookup parses nothing,
+   thus left keeps the budget. Else sigma_type parses (z : A') B. */
+static int transport_motive(Fuel fuel, Nat budget, const Bindings *environment, Tokens tokens, const LType **motive,
+                            const Bindings **scope, Tokens *rest, Nat *left, Failure *failure) {
+  const Params *done = body_params(environment);
+  *scope = NULL;
+  const Bindings *named = environment;
+  if (tokens.size != 0 && tokens.items[0].kind == TOKEN_IDENTIFIER) {
+    for (; named != NULL; named = named->tail)
+      if (same_text(tokens.items[0].text, named->head.name)) break;
+  } else {
+    named = NULL;
+  }
+  if (named == NULL || named->head.kind != BIND_FAMILY)
+    return sigma_type(fuel, budget, environment, done, tokens, motive, rest, left, failure);
+  /* Keep the family binding as well, so an otherwise empty definition
+     scope remains distinct from the current scope of an inline motive. */
+  *scope = named;
+  *motive = shift_type_markers(param_count(done), named->head.type);
+  *rest = (Tokens){tokens.items + 1, tokens.size - 1};
+  *left = budget;
+  return 1;
+}
+
 /* The definition of a function checks its body once, with null for each
    parameter. An unnamed binding marks this check. */
 Binding check_marker(void) { return value_binding((Text){0}, &nat_type, &null_value); }
@@ -2094,11 +2120,12 @@ static const Term *form_term(TermTag tag, Nat position, const Terms *args) {
    type, and e and t in args. D8 part C (design item 12): the motive is the
    LType of the check, with the parameters of the body as markers. It has no
    source tokens. */
-static const Term *transport_term(Nat position, const LType *motive, const Term *proof, const Term *value) {
+static const Term *transport_term(Nat position, const LType *motive, const Bindings *scope, const Term *proof,
+                                  const Term *value) {
   const Terms *args = terms_item(proof, terms_item(value, NULL));
   return terms_built(args) == 1
              ? term_named(TERM_TRANSPORT, position, 0, stransport,
-                          term_types_item((TermType){.position = position, .type = motive}, NULL), args)
+                          term_types_item((TermType){.position = position, .type = motive, .scope = scope}, NULL), args)
              : NULL;
 }
 
@@ -2343,17 +2370,19 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
     if (form == 9) {
       /* D6 part B (design items 6 and 7): the motive (z : A') B, then e, then t. */
       const LType *motive;
+      const Bindings *motive_scope;
       Tokens proof_tokens;
-      /* D10: the motive runs on the work budget, and the proof takes the rest. */
-      if (!sigma_type(more, budget, environment, body_params(environment), tail, &motive, &proof_tokens, &spent,
-                      failure))
+      /* D10: the motive runs on the work budget, and the proof takes the rest.
+         D12 part C: a family name is also a motive (transport_motive). */
+      if (!transport_motive(more, budget, environment, tail, &motive, &motive_scope, &proof_tokens, &spent, failure))
         return 0;
       const Term *proof = NULL;
       if (!synth_term(more, spent, 1, environment, proof_tokens, &found, &after, &spent, want_term(term, &proof),
                       failure))
         return 0;
       const LType *bx, *by;
-      if (!transport_types(more, spent, environment, head.position, motive, found, &bx, &by, &spent, failure)) return 0;
+      if (!transport_types(more, spent, motive_scope != NULL ? motive_scope : environment,
+                           head.position, motive, found, &bx, &by, &spent, failure)) return 0;
       const Value *value;
       Tokens later;
       Nat used;
@@ -2361,7 +2390,7 @@ int synth_term(Fuel fuel, Nat budget, Nat atom, const Bindings *environment, Tok
       if (!parse_term(more, spent, 1, bx, environment, after, &value, &later, &used, want_term(term, &second), failure))
         return 0;
       return with_term(worked_typed((Typed){by, value}, later, used, typed, rest, left), term,
-                       term != NULL ? transport_term(head.position, motive, proof, second) : NULL);
+                       term != NULL ? transport_term(head.position, motive, motive_scope, proof, second) : NULL);
     }
     const Term *first = NULL;
     if (!synth_term(more, budget, 1, environment, tail, &found, &after, &spent, &first, failure))
@@ -3535,7 +3564,8 @@ int eval_synth(Fuel fuel, Nat budget, const Bindings *environment, const Term *t
       return 0;
     const LType *bx, *by;
     if (!eval_synth(more, ready, environment, first_arg(term), &found, &spent, failure) ||
-        !transport_types(more, spent, environment, term->position, motive, found, &bx, &by, &spent, failure))
+        !transport_types(more, spent, term->types->head.scope != NULL ? term->types->head.scope : environment,
+                         term->position, motive, found, &bx, &by, &spent, failure))
       return 0;
     const Value *value;
     Nat used;

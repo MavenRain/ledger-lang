@@ -3795,6 +3795,72 @@ static void test_d12_family_type_atoms(void) {
                            &environment, &failure));
 }
 
+/* D12 part C (design item 12): form 9 with a family name gives the same type as
+   the inline motive of the same family. */
+static void test_d12_named_motive(void) {
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text("def P : (z : Nat) -> Type 0 := fun (z : Nat) => Option Nat\n"
+                                "def Q : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat z 1\n"
+                                "def pf : Eq Nat 1 1 := refl\n"),
+                           &environment, &failure));
+  const char *pairs[][2] = {
+    {"transport P pf (some 1)", "transport (z : Nat) (Option Nat) pf (some 1)"},
+    {"transport Q pf pf", "transport (z : Nat) (Eq Nat z 1) pf pf"},
+  };
+  for (size_t index = 0; index < sizeof pairs / sizeof pairs[0]; index++) {
+    Tokens tokens;
+    Tokens rest;
+    Nat left;
+    Typed named;
+    Typed inline_motive;
+    assert(lex(512, text(pairs[index][0]), &tokens, &failure));
+    assert(synth_term(512, 512, 0, environment, tokens, &named, &rest, &left, NULL, &failure));
+    assert(rest.size == 1);
+    assert(lex(512, text(pairs[index][1]), &tokens, &failure));
+    assert(synth_term(512, 512, 0, environment, tokens, &inline_motive, &rest, &left, NULL, &failure));
+    assert(rest.size == 1);
+    assert(named.type->tag == (index == 0 ? TY_OPTION : TY_EQ));
+    assert(same_type(named.type, inline_motive.type) == 1);
+  }
+}
+
+/* A family's computed sides keep their definition scope when a caller
+   shadows a function name with a value or a function parameter. */
+static void test_d12_named_motive_scope(void) {
+  const char *sources[] = {
+    "def id : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+    "def P : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat (id z) z\n"
+    "def f : (id : Nat) -> (e : Eq Nat 1 1) -> Eq Nat 1 1 :=\n"
+    "fun (id : Nat) (e : Eq Nat 1 1) => transport P e refl\n"
+    "def u : Eq Nat 1 1 := f 9 refl\n",
+    "def id : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+    "def P : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat (id z) z\n"
+    "def other : (n : Nat) -> Nat := fun (n : Nat) => 2\n"
+    "def One : Type 0 := (n : Nat) -> Nat\n"
+    "def f : (id : One) -> (e : Eq Nat 1 1) -> Eq Nat 1 1 :=\n"
+    "fun (id : One) (e : Eq Nat 1 1) => transport P e refl\n"
+    "def u : Eq Nat 1 1 := f other refl\n",
+    "def id : (n : Nat) -> Nat := fun (n : Nat) => n\n"
+    "def P : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat (id z) z\n"
+    "def f : (id : Nat) -> (x : Nat) -> (e : Eq Nat x x) -> (t : P x) -> P x :=\n"
+    "fun (id : Nat) (x : Nat) (e : Eq Nat x x) (t : P x) => transport P e t\n"
+    "def u : Eq Nat 1 1 := f 9 1 refl refl\n",
+  };
+  for (size_t index = 0; index < sizeof sources / sizeof sources[0]; index++) {
+    const Bindings *environment = NULL;
+    Failure failure = {0};
+    int checked = check_definitions(text(sources[index]), &environment, &failure);
+    if (!checked) fprintf(stderr, "named motive scope case %zu failed at byte %u\n", index, failure.position);
+    assert(checked);
+    const Binding *result;
+    assert(lookup(text("u"), environment, &result));
+    assert(result->type->tag == TY_EQ && result->type->left->tag == TY_NAT);
+    assert(result->type->lhs.kind == VAL_CLOSED && same_text(result->type->lhs.text, text("1")));
+    assert(result->type->rhs.kind == VAL_CLOSED && same_text(result->type->rhs.text, text("1")));
+  }
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3852,6 +3918,8 @@ int main(void) {
   test_d12_parenthesized_family_body();
   test_d12_family_reduce();
   test_d12_family_type_atoms();
+  test_d12_named_motive();
+  test_d12_named_motive_scope();
   puts("C module tests passed");
   return 0;
 }

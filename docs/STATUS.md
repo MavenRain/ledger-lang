@@ -197,7 +197,12 @@ not complete the M0 milestone in `SPEC.md`.
    "byte N: message (in NAME)". UTF-8 and lexer failures happen before
    declaration parsing and give a byte offset without a declaration name.
    The source and output budgets do not change, because no measurement
-   shows the need. No item of this section is open.
+   shows the need.
+4. Type families are done (D12). A family
+   `def P : (x : A) -> Type 0 := fun (x : A) => T` has one binder. `P a`
+   in a type reduces to T with a for x, and `transport P e t` takes a named
+   family as the motive. `docs/DEPENDENT-TYPES.md` gives the forms and the
+   refusals. No item of this section is open.
 
 ## Known limits of this slice
 

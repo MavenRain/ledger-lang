@@ -294,3 +294,67 @@ const familyEq = 'def Q : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat z 1';
   test(`a family application refuses ${label}`, () =>
     reject(source, 'term does not have the declared type', at)),
 );
+
+// D12 part C: a family name in place of the motive of transport gives the output of
+// the inline motive of the same family, also in a function body.
+const familyOption = 'def P : (z : Nat) -> Type 0 := fun (z : Nat) => Option Nat';
+const proofOne = 'def pf : Eq Nat 1 1 := refl';
+const equalityHead = 'def f : (e : Eq Nat 1 2) -> (t : Eq Nat 1 1) ->';
+const equalityBody = 'fun (e : Eq Nat 1 2) (t : Eq Nat 1 1) =>';
+const optionBody = 'def g : (x : Nat) -> (e : Eq Nat x 1) -> Option Nat := fun (x : Nat) (e : Eq Nat x 1) =>';
+const sameBody = 'def h : (x : Nat) -> (e : Eq Nat x 3) -> Eq Nat 3 3 := fun (x : Nat) (e : Eq Nat x 3) =>';
+[
+  [
+    'a data type',
+    `${familyOption}\n${proofOne}\ndef u : Option Nat := transport P pf (some 1)`,
+    `${proofOne}\ndef u : Option Nat := transport (z : Nat) (Option Nat) pf (some 1)`,
+    [{ name: 'u', type: 'Option (Nat)', value: 1 }],
+  ],
+  [
+    'an equality with the result Eq Nat 2 1',
+    `${familyEq}\n${equalityHead} Eq Nat 2 1 := ${equalityBody} transport Q e t`,
+    `${equalityHead} Eq Nat 2 1 := ${equalityBody} transport (z : Nat) (Eq Nat z 1) e t`,
+    [],
+  ],
+  [
+    'a data type in a function body',
+    `${familyOption}\n${optionBody} transport P e (some x)\ndef w : Option Nat := g 1 refl`,
+    `${optionBody} transport (z : Nat) (Option Nat) e (some x)\ndef w : Option Nat := g 1 refl`,
+    [{ name: 'w', type: 'Option (Nat)', value: 1 }],
+  ],
+  [
+    'an equality in a function body',
+    `def F : (z : Nat) -> Type 0 := fun (z : Nat) => Eq Nat z z\n${sameBody} transport F e refl\n` +
+      'def p : Eq Nat 3 3 := h 3 refl',
+    `${sameBody} transport (z : Nat) (Eq Nat z z) e refl\ndef p : Eq Nat 3 3 := h 3 refl`,
+    [],
+  ],
+].forEach(([label, named, inline, instances]) =>
+  test(`a family name as the transport motive of ${label} checks`, () => {
+    assert.deepEqual(run(named), { 'ledger-lang': 1, instances });
+    assert.deepEqual(run(named), run(inline));
+  }),
+);
+
+[
+  [
+    'a family with the domain Text against Eq Nat',
+    `def R : (s : Text) -> Type 0 := fun (s : Text) => Nat\n${proofOne}\ndef u : Nat := transport R pf 3`,
+    'the parameter type does not match the equality type',
+    'transport',
+  ],
+  [
+    'an unknown name',
+    `${proofOne}\ndef u : Option Nat := transport P pf (some 1)`,
+    'expected a supported type',
+    'P pf',
+  ],
+  [
+    'the result Eq Nat 1 1',
+    `${familyEq}\n${equalityHead} Eq Nat 1 1 := ${equalityBody} transport Q e t`,
+    'term does not have the declared type',
+    'transport',
+  ],
+].forEach(([label, source, message, at]) =>
+  test(`a family name as the transport motive refuses ${label}`, () => reject(source, message, at)),
+);

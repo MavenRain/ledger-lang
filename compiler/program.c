@@ -241,7 +241,7 @@ static Nat starts_arrow(Fuel fuel, const Bindings *environment, Tokens tokens) {
 
 static Nat reserved_param(Param item) { return reserved_name(item.name); }
 
-static Nat param_count(const Params *params) {
+Nat param_count(const Params *params) {
   Nat count = 0;
   for (const Params *cell = params; cell != NULL; cell = cell->tail) count++;
   return count;

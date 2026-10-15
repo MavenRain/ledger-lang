@@ -413,6 +413,7 @@ int family_application(Fuel fuel, Nat budget, Nat position, const LType *family,
 const Params *body_params(const Bindings *environment);
 /* Move the markers of a closed type into a signature's parameter scope. */
 const LType *shift_type_markers(Nat offset, const LType *type);
+Nat param_count(const Params *params);
 
 /* checker.c (S4: checker.mech lines 1..614). A checked term keeps its type
    and its value. A unary function argument keeps the parameter name and
@@ -761,6 +762,9 @@ typedef struct {
   Tokens source;
   /* Structural comparison uses binder positions for local type names. */
   const LType *identity;
+  /* A named transport motive keeps the scope starting at its family binding.
+     NULL marks an inline motive, which uses the current environment. */
+  const Bindings *scope;
 } TermType;
 
 typedef struct TermTypes TermTypes;
