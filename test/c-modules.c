@@ -3861,6 +3861,65 @@ static void test_d12_named_motive_scope(void) {
   }
 }
 
+/* M1 part A (design item 1): the FIPS 180-4 vectors, and messages of 55, 56
+   and 64 bytes for the last block. An item of 256 or more gives 0. */
+static void test_m1_sha256(void) {
+  const char *rows[][2] = {
+    {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+    {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+    {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+     "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"},
+    {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"},
+    {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"},
+    {"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"},
+  };
+  assert(strlen(rows[3][0]) == 55 && strlen(rows[4][0]) == 56 && strlen(rows[5][0]) == 64);
+  for (Nat row = 0; row < sizeof rows / sizeof rows[0]; row++) {
+    Text hex;
+    assert(sha256_hex(text(rows[row][0]), &hex));
+    assert(same_text(hex, text(rows[row][1])));
+  }
+  Nat wide_items[] = {97, 256};
+  Text wide = {wide_items, 2};
+  Text hex;
+  assert(!sha256_hex(wide, &hex));
+}
+
+/* M1 part A (design items 2 to 4): the encoding of an Entry is the compact
+   JSON text of print_value, and its hash is the SHA-256 of that text. One
+   work step: budget 0 gives eBudget at the position and left 0. Too little
+   output fuel gives eOutput. */
+static void test_m1_entry_hash(void) {
+  Value prev = {.kind = VALUE_NULL};
+  Value actor = {.kind = VALUE_TEXT, .text = text("p1")};
+  Value amount = {.kind = VALUE_NAT, .number = 7};
+  Attrs body_fields = {text("amount"), &amount, NULL};
+  Value body = {.kind = VALUE_ATTRS, .attrs = &body_fields};
+  Attrs body_field = {text("body"), &body, NULL};
+  Attrs actor_field = {text("actor"), &actor, &body_field};
+  Attrs prev_field = {text("prev"), &prev, &actor_field};
+  Value entry = {.kind = VALUE_ATTRS, .attrs = &prev_field};
+  Text encoding = text("{\"prev\":null,\"actor\":\"p1\",\"body\":{\"amount\":7}}");
+  assert(same_text(printed(&entry), encoding));
+  Text hash;
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(entry_hash(1000, 5, 3, &entry, &hash, &left, &failure));
+  assert(left == 4);
+  assert(same_text(hash, text("4fb83f43ee11b6b57eb449fc0dda75674e87c32d8c837a183efcbf68bcdb2045")));
+  Text direct;
+  assert(sha256_hex(encoding, &direct) && same_text(hash, direct));
+  left = 9;
+  assert(!entry_hash(1000, 0, 3, &entry, &hash, &left, &failure));
+  assert(left == 0 && failure.position == 3 && same_text(failure.message, eBudget));
+  Failure fuel_failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(!entry_hash(10, 5, 3, &entry, &hash, &left, &fuel_failure));
+  assert(same_text(fuel_failure.message, eOutput));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3920,6 +3979,8 @@ int main(void) {
   test_d12_family_type_atoms();
   test_d12_named_motive();
   test_d12_named_motive_scope();
+  test_m1_sha256();
+  test_m1_entry_hash();
   puts("C module tests passed");
   return 0;
 }

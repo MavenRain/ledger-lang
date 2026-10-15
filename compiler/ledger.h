@@ -250,6 +250,14 @@ int print_value(Printer *printer, const Value *value, Failure *failure);
 /* D11 part B (design item 7): 1 and the value when the whole text is one
    value in a form that print_value writes, else 0. */
 int read_printed_value(Text text, const Value **value);
+/* M1 part A (design items 2 to 4): the hash of an Entry, 64 lowercase hex
+   digits. One work step; budget 0 gives eBudget at position. */
+int entry_hash(Fuel fuel, Nat budget, Nat position, const Value *entry, Text *hash, Nat *left, Failure *failure);
+
+/* sha256.c (M1 part A, design item 1): FIPS 180-4 SHA-256 on a text of
+   bytes. Each returns 0 when an item of the text is 256 or more. */
+int sha256(Text text, Nat digest[32]);
+int sha256_hex(Text text, Text *hex);
 
 /* schema.c: the families of core/schema.def. Only the added families
    (Account on) have plans and schema types. schema_constructor_plan and

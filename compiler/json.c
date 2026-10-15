@@ -115,6 +115,23 @@ int print_value(Printer *printer, const Value *value, Failure *failure) {
   return 0;
 }
 
+/* M1 part A (design items 2 to 4): the hash of an Entry is the SHA-256 of
+   the compact JSON text that print_value writes for it, as 64 lowercase hex
+   digits. One work step for each entry: at budget 0 it gives eBudget at
+   position, and left keeps the budget. The printer has fuel; a fuel failure
+   gives eOutput. */
+int entry_hash(Fuel fuel, Nat budget, Nat position, const Value *entry, Text *hash, Nat *left, Failure *failure) {
+  if (budget == 0) {
+    *left = budget;
+    return fail_at(failure, position, eBudget);
+  }
+  *left = budget - 1;
+  Printer printer = {fuel, builder_new()};
+  if (!print_value(&printer, entry, failure)) return 0;
+  if (!sha256_hex(builder_text(&printer.output), hash)) return fail_at(failure, position, eUtf8);
+  return 1;
+}
+
 /* D11 part B (design item 7): the reader of the canonical JSON text of a
    closed side. It accepts only the forms that print_value writes, thus a
    value that it reads prints back to the same text. */
