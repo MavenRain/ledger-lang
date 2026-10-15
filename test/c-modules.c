@@ -3997,6 +3997,90 @@ static void test_m1_write(void) {
   assert(same_text(hash_failure.message, eOutput));
 }
 
+/* M1 part C: the records of the logs. The createsEvent entry sets lastEvent on
+   the Party record of its subject. The log again holds a known entry, thus it
+   changes nothing. A program with no record has no records key. */
+#define M1_PARTY "67c41c5e875d43c1aa25db2818c267421dd6fddced90fa9aa267c116de2b5cd6"
+#define M1_EVENT "f641629be89139d8229891b6e29d02e01ebbdfc85d6fab311fd5ace36cc19d9e"
+/* 1 when the text holds the part at a position. */
+static Nat text_holds(Text whole, Text part) {
+  return whole.size >= part.size &&
+         (same_text(text_take(whole, part.size), part) == 1 || text_holds(text_drop(whole, 1), part) == 1);
+}
+
+static void test_m1_records(void) {
+  Text source = text("def acme : Ref kindParty := refTo (hashOf \"party-acme\")\n"
+                     "def company : Party := makeParty partyOrg \"Acme\" none nil attrsEnd none none\n"
+                     "def pe : Entry := makeEntry none (actorHuman acme) (createsParty company)\n"
+                     "def note : Event := makeEvent eventNoteAdded (subjectParty (refTo (hashOf \"" M1_PARTY "\"))) "
+                     "none none attrsEnd none\n"
+                     "def ee : Entry := makeEntry (some (hashOf \"" M1_PARTY "\")) (actorHuman acme) (createsEvent note)\n"
+                     "def book : Log := cons pe (cons ee nil)\n"
+                     "def again : Log := cons pe nil\n");
+  Text records = text("],\"records\":[{\"ref\":\"" M1_PARTY "\",\"type\":\"Party\",\"value\":{\"kind\":\"partyOrg\","
+                      "\"displayName\":\"Acme\",\"legalName\":null,\"identifiers\":[],\"attrs\":{},\"lastEvent\":"
+                      "{\"kind\":\"kindEvent\",\"hash\":\"" M1_EVENT "\"},\"deletedBy\":null}},{\"ref\":\"" M1_EVENT
+                      "\",\"type\":\"Event\",\"value\":{\"type\":\"eventNoteAdded\",\"subject\":{\"tag\":\"subjectParty\","
+                      "\"party\":{\"kind\":\"kindParty\",\"hash\":\"" M1_PARTY "\"}},\"artifact\":null,\"parent\":null,"
+                      "\"payload\":{},\"policy\":null}}]}");
+  Text output;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(compile_program(source, &output, &failure));
+  assert(output.size > records.size);
+  assert(same_text(text_drop(output, output.size - records.size), records));
+  /* A Step from makeStep makes no record, also with a createsParty entry in its log (default C-9). */
+  assert(compile_program(text("def acme : Ref kindParty := refTo (hashOf \"party-acme\")\n"
+                              "def company : Party := makeParty partyOrg \"Acme\" none nil attrsEnd none none\n"
+                              "def pe : Entry := makeEntry none (actorHuman acme) (createsParty company)\n"
+                              "def s : Step := makeStep (cons pe nil) (outcomeDenied none nil)\n"),
+                         &output, &failure));
+  assert(text_holds(output, text("\"name\":\"s\",\"type\":\"Step\"")) == 1);
+  assert(text_holds(output, text("\"tag\":\"createsParty\"")) == 1);
+  assert(text_holds(output, text("\"records\"")) == 0);
+  assert(compile_program(text("def history : Log := nil\ndef n : Nat := 3\n"), &output, &failure));
+  assert(same_text(output, text("{\"ledger-lang\":1,\"instances\":[{\"name\":\"history\",\"type\":\"List (Entry)\","
+                                "\"value\":[]},{\"name\":\"n\",\"type\":\"Nat\",\"value\":3}]}")));
+}
+
+/* Projection failures belong to the definition of the log being read. */
+static void test_m1_projection_hash_failure(void) {
+  Text source = text("def n : Nat := 0 def book : Log := cons "
+                     "(makeEntry none (actorHuman (refTo (hashOf \"p\"))) "
+                     "(createsParty (makeParty partyOrg (textByte 255 textEnd) none nil attrsEnd none none))) nil");
+  Text output;
+  Failure failure = {0};
+  assert(!compile_program(source, &output, &failure));
+  assert(same_text(failure.message, eUtf8));
+  assert(same_text(failure.name, text("book")));
+  assert(failure.position == 17);
+}
+
+/* An unrelated declaration after a log cannot own its record's print error. */
+static void test_m1_projection_print_failure(void) {
+  Text prefix = d11_shared_values(100, 6);
+  Text source = append_text(prefix, text("def book : Log := cons "
+                                        "(makeEntry none (actorHuman (refTo (hashOf \"p\"))) "
+                                        "(createsParty (makeParty partyOrg \"Acme\" none nil "
+                                        "(attrsField \"data\" (valueItems a6) attrsEnd) none none))) nil\n"
+                                        "def tail : Nat := 0\n"));
+  TextBuilder padded = builder_new();
+  builder_append(&padded, source);
+  for (Nat index = 0; index < 8000; index++) builder_push(&padded, ' ');
+  Text output;
+  Failure failure = {0};
+  assert(compile_program(builder_text(&padded), &output, &failure));
+  /* Keep enough budget to print all instances, but not all records. */
+  Nat size = (output.size - 129) / 32;
+  assert(size >= source.size);
+  padded = builder_new();
+  builder_append(&padded, source);
+  while (padded.size < size) builder_push(&padded, ' ');
+  assert(!compile_program(builder_text(&padded), &output, &failure));
+  assert(same_text(failure.message, eOutput));
+  assert(same_text(failure.name, text("book")));
+  assert(failure.position == prefix.size);
+}
+
 /* Hashing serializes an entry independently of the parser's depth limit.
    Cover short sources, entries over 512 bytes, and each call path. */
 static void test_m1_write_hash_budget(void) {
@@ -4109,6 +4193,9 @@ int main(void) {
   test_m1_entry_hash();
   test_m1_write_hash_budget();
   test_m1_write();
+  test_m1_records();
+  test_m1_projection_hash_failure();
+  test_m1_projection_print_failure();
   puts("C module tests passed");
   return 0;
 }

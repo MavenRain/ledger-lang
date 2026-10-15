@@ -2557,11 +2557,18 @@ static int write_command_body(const Value *command, Text tag, Nat index, const V
 }
 
 /* makeStep log (outcome fields). */
+/* The Step that write gives. Its copy gets written = 1, thus the projection
+   reads its log (ruling R1). A Step from makeStep keeps written = 0. */
 static int write_answer(const Value *log, const char *outcome, const Values *fields, const Value **value,
                         Failure *failure) {
   const Value *made;
+  const Value *step;
   if (!write_value("Outcome", outcome, fields, &made, failure)) return 0;
-  return write_value("Step", "makeStep", values_item(log, values_item(made, NULL)), value, failure);
+  if (!write_value("Step", "makeStep", values_item(log, values_item(made, NULL)), &step, failure)) return 0;
+  Value marked = *step;
+  marked.written = 1;
+  *value = make_value(marked);
+  return 1;
 }
 
 static int write_denied(const Value *log, const Value **value, Failure *failure) {

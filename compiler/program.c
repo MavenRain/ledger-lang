@@ -932,13 +932,15 @@ static int name_failure(Failure *failure, Tokens tokens) {
 }
 
 static int parse_program(Fuel fuel, Nat budget, Fuel checking_fuel, const Bindings *environment, const Located *done,
-                         Tokens tokens, const Located **instances, const Bindings **checked, Failure *failure) {
+                         Tokens tokens, const Located **instances, const Bindings **checked, Nat *remaining,
+                         Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
   if (tokens.size == 0) return fail_at(failure, 0, eDef);
   Token head = tokens.items[0];
   if (head.kind == TOKEN_PUNCTUATION && head.number == 0) {
     *instances = reverse_located(done);
     *checked = environment;
+    *remaining = budget;
     return 1;
   }
   if (head.kind != TOKEN_IDENTIFIER || same_text(head.text, sdef) != 1) return fail_at(failure, head.position, eDef);
@@ -948,11 +950,12 @@ static int parse_program(Fuel fuel, Nat budget, Fuel checking_fuel, const Bindin
   if (!parse_definition(checking_fuel, budget, environment, drop_token(tokens), &item, &rest, &left, failure))
     return name_failure(failure, tokens);
   return parse_program(fuel - 1, left, checking_fuel, binding_cons(item, environment),
-                       record_instance(head.position, item, done), rest, instances, checked, failure);
+                       record_instance(head.position, item, done), rest, instances, checked, remaining, failure);
 }
 
-/* A print error reports the first byte and name of the definition being printed. */
-static int print_instances(Printer *printer, Nat first, const Located *instances, Failure *failure) {
+/* A print error reports the first byte and name of the definition being printed.
+   end closes the list of instances. */
+static int print_instances(Printer *printer, Nat first, const Located *instances, Text end, Failure *failure) {
   Failure printing;
   const Located *last = NULL;
   for (const Located *cell = instances; cell != NULL; cell = cell->tail) {
@@ -964,7 +967,7 @@ static int print_instances(Printer *printer, Nat first, const Located *instances
     first = 0;
     last = cell;
   }
-  if (emit_text(printer, jEnd, failure)) return 1;
+  if (emit_text(printer, end, failure)) return 1;
   if (last != NULL) {
     failure->position = last->position;
     failure->name = last->name;
@@ -981,19 +984,152 @@ Text error_text(Nat position, Text message) {
                      append_text(builder_text(&printer.output), jErrorEnd))));
 }
 
+/* The records of the logs (M1 design items 10 to 13). */
+
+static const Value projection_null = {.kind = VALUE_NULL};
+
+static const Value *projection_attrs(const Attrs *attrs) {
+  Value *value = arena_alloc(sizeof *value);
+  *value = (Value){.kind = VALUE_ATTRS, .attrs = attrs};
+  return value;
+}
+
+static const Value *projection_attr(Text key, const Attrs *attrs) {
+  return attrs == NULL ? &projection_null
+         : same_text(attrs->key, key) == 1 ? attrs->value
+                                           : projection_attr(key, attrs->rest);
+}
+
+/* The field key of an attrs value. A missing field is null. */
+static const Value *projection_field(Text key, const Value *value) {
+  return value->kind == VALUE_ATTRS ? projection_attr(key, value->attrs) : &projection_null;
+}
+
+/* The one field of a Body or a Subject value that is not the tag. */
+static const Value *projection_payload(const Value *value) {
+  const Attrs *attrs = value->kind == VALUE_ATTRS ? value->attrs : NULL;
+  return attrs == NULL ? &projection_null
+         : same_text(attrs->key, kSchemaTag()) == 1 ? projection_payload(projection_attrs(attrs->rest))
+                                                     : attrs->value;
+}
+
+/* The entries of an instance: the value of a Log (List (Entry)), or the log
+   of a Step that write gives (written = 1, ruling R1). A Step from makeStep
+   and each other instance have no entries. */
+static const Values *projection_log(const Value *instance) {
+  Text type = projection_field(kType, instance)->text;
+  const Value *value = projection_field(kValue, instance);
+  const Value *log = same_text(type, text_of_cstring("Step")) == 1 && value->written == 1
+                         ? projection_field(text_of_cstring("log"), value)
+                     : same_text(type, text_of_cstring("List (Entry)")) == 1 ? value
+                                                                              : &projection_null;
+  return log->kind == VALUE_ITEMS ? log->items : NULL;
+}
+
+/* One record: the identity (the hash of the creating entry), the family and
+   the state. */
+static const Value *projection_record(Text ref, Text family, const Value *state) {
+  return projection_attrs(attrs_field(text_of_cstring("ref"), text_value(ref),
+                                      attrs_field(kType, text_value(family), attrs_field(kValue, state, NULL))));
+}
+
+static Nat projection_known(Text ref, const Located *records) {
+  return records != NULL && (same_text(projection_field(text_of_cstring("ref"), records->value)->text, ref) == 1 ||
+                             projection_known(ref, records->tail) == 1);
+}
+
+static const Attrs *projection_replace(Text key, const Value *value, const Attrs *attrs) {
+  return attrs == NULL ? NULL
+         : same_text(attrs->key, key) == 1
+             ? attrs_field(key, value, attrs->rest)
+             : attrs_field(attrs->key, attrs->value, projection_replace(key, value, attrs->rest));
+}
+
+/* Item 11: the Party or Commercial record with the identity subject gets
+   lastEvent = some (refTo h). The value of some x is the value of x. */
+static const Value *projection_updated(Text subject, const Value *event, const Value *record) {
+  Text family = projection_field(kType, record)->text;
+  if (same_text(projection_field(text_of_cstring("ref"), record)->text, subject) != 1) return record;
+  if (same_text(family, text_of_cstring("Party")) != 1 && same_text(family, text_of_cstring("Commercial")) != 1)
+    return record;
+  const Value *state = projection_field(kValue, record);
+  return projection_record(subject, family,
+                           projection_attrs(projection_replace(text_of_cstring("lastEvent"), event, state->attrs)));
+}
+
+static const Located *projection_update(Text subject, const Value *event, const Located *records) {
+  return records == NULL ? NULL
+                         : located_cons(records->position, records->name,
+                                        projection_updated(subject, event, records->value),
+                                        projection_update(subject, event, records->tail));
+}
+
+/* Items 10, 11 and 13. The hash of the entry takes one work step. An entry
+   with a known hash is a known record, and it changes nothing. Else a
+   createsEvent entry first updates the record of its subject, and then the
+   entry makes the record of its Body. records holds the newest record first. */
+static int projection_entry(Nat position, Text name, const Value *entry, const Located **records, Nat *budget,
+                            Failure *failure) {
+  Text hash;
+  if (!entry_hash(OUTPUT_LIMIT, *budget, position, entry, &hash, budget, failure)) return 0;
+  if (projection_known(hash, *records) == 1) return 1;
+  const Value *body = projection_field(text_of_cstring("body"), entry);
+  Text tag = projection_field(kSchemaTag(), body)->text;
+  const Value *state = projection_payload(body);
+  const Value *subject = projection_payload(projection_field(text_of_cstring("subject"), state));
+  const Value *event = object_two(text_of_cstring("kind"), text_value(text_of_cstring("kindEvent")),
+                                  text_of_cstring("hash"), text_value(hash));
+  const Located *seen = same_text(tag, text_of_cstring("createsEvent")) == 1
+                           ? projection_update(projection_field(text_of_cstring("hash"), subject)->text, event, *records)
+                           : *records;
+  *records = located_cons(position, name, projection_record(hash, text_drop(tag, 7), state), seen);
+  return 1;
+}
+
+/* The records of the Log and Step instances, in log order. A failure reports
+   the definition of the log. */
+static int project_records(Nat budget, const Located *instances, const Located **records, Failure *failure) {
+  const Located *newest = NULL;
+  for (const Located *cell = instances; cell != NULL; cell = cell->tail)
+    for (const Values *item = projection_log(cell->value); item != NULL; item = item->tail)
+      if (!projection_entry(cell->position, cell->name, item->head, &newest, &budget, failure)) {
+        failure->position = cell->position;
+        failure->name = cell->name;
+        return 0;
+      }
+  *records = reverse_located(newest);
+  return 1;
+}
+
+/* The records key belongs to the first record's log. Each record keeps its
+   own definition for a failure in its value or the final closing bytes. */
+static int print_records(Printer *printer, const Located *records, Failure *failure) {
+  if (!emit_text(printer, text_of_cstring(",\"records\":["), failure)) {
+    failure->position = records->position;
+    failure->name = records->name;
+    return 0;
+  }
+  return print_instances(printer, 1, records, jEnd, failure);
+}
+
 int compile_program(Text source, Text *output, Failure *failure) {
   Nat position;
   Tokens tokens;
   const Located *instances;
   const Bindings *checked;
+  Nat left;
+  const Located *records;
   if (utf8_error(source, &position)) return fail_at(failure, position, eUtf8);
   if (!lex(fuel_for(source), source, &tokens, failure)) return 0;
   if (!parse_program(fuel_for(source), work_budget_from(65, source), depth_fuel_from(0, 0, source), NULL, NULL,
-                     tokens, &instances, &checked, failure))
+                     tokens, &instances, &checked, &left, failure))
     return 0;
+  if (!project_records(left, instances, &records, failure)) return 0;
   Printer printer = {output_fuel_from(0, source), builder_new()};
   if (!emit_text(&printer, jHeader, failure)) return 0;
-  if (!print_instances(&printer, 1, instances, failure)) return 0;
+  if (!print_instances(&printer, 1, instances, records == NULL ? jEnd : text_of_cstring("]"), failure))
+    return 0;
+  if (records != NULL && !print_records(&printer, records, failure)) return 0;
   *output = builder_text(&printer.output);
   return 1;
 }
@@ -1002,8 +1138,9 @@ int check_definitions(Text source, const Bindings **environment, Failure *failur
   Nat position;
   Tokens tokens;
   const Located *instances;
+  Nat left;
   if (utf8_error(source, &position)) return fail_at(failure, position, eUtf8);
   if (!lex(fuel_for(source), source, &tokens, failure)) return 0;
   return parse_program(fuel_for(source), work_budget_from(65, source), depth_fuel_from(0, 0, source), NULL, NULL,
-                       tokens, &instances, environment, failure);
+                       tokens, &instances, environment, &left, failure);
 }

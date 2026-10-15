@@ -221,7 +221,10 @@ struct Bindings;
 
 /* term is the TERM_BODY of an inline argument (D3-s4), else NULL. same_value
    and the printer do not read it. chosen keeps resolved type arguments in
-   the first bound Value of a typed partial application. */
+   the first bound Value of a typed partial application. written is 1 only on
+   a Step that write_step gives (ruling R1), else 0. The projection reads the
+   log of a Step only when written is 1. same_value and the printer do not
+   read written. */
 struct Value {
   ValueKind kind;
   Flag flag;
@@ -231,6 +234,7 @@ struct Value {
   const Attrs *attrs;
   const struct Term *term;
   const struct Bindings *chosen;
+  Nat written;
 };
 
 Nat has_field(Text key, const Attrs *attrs);

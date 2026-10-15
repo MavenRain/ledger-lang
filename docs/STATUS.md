@@ -179,6 +179,37 @@ not complete the M0 milestone in `SPEC.md`.
   partial application with type parameters can bind another one, also in
   the body of a function with type parameters.
 
+## M1
+
+M1 is the write path (C6).
+
+- The entry hash: the hash of an entry is the SHA-256 of the compact JSON
+  of the entry, as 64 hex digits.
+- The builtin `write : WritePath`. `write log x` gives a `Step`. A Command
+  with a Body appends one entry and gives `outcomeAppended` with the hash
+  of the entry. The `prev` of the entry is the hash of the last entry. An
+  `expect` that is not the hash of the last entry gives `outcomeConflict`.
+  An `expect` on an empty log or a Command with no Body gives
+  `outcomeDenied`.
+- The records. The compiler reads each instance of type `Log`, and the log
+  of each `Step` instance that `write` gives (a Step from `makeStep` makes no
+  record), in program order. Each entry with a `creates...` Body makes one
+  record, in log order. The identity of a record is the hash
+  of its entry. Thus the same entry in two logs, or two times in one log,
+  is one record. The first state of a record is the value in the Body.
+- The updates. A later `createsEvent` entry sets `lastEvent = some (refTo
+  h)` on the Party or Commercial record whose identity is the hash of the
+  `subject` Ref. h is the hash of the Event entry. A subject hash that names
+  no record changes nothing. `deletedBy`, `endedBy` and `verifiedBy` stay
+  `none`.
+- The target has the key `records` after `instances` only when a record
+  exists. Each record is one object `{"ref", "type", "value"}`: the hash,
+  the family name and the final state. The records are in the order of the
+  first entry of each record.
+- The hash of each entry of a log takes one work step. A budget or output
+  failure of the projection gives the position and the name of the `Log` or
+  `Step` definition.
+
 ## Remaining M0 work
 
 1. Add dependent function types and support computed function
@@ -231,10 +262,11 @@ not complete the M0 milestone in `SPEC.md`.
   application. A partial application of a function with type parameters
   gives all type arguments first.
   A function of type `WritePath`
-  is a function of the program. The compiler does not supply the write
-  path of M1.
-- Hash wraps a Text value. The compiler does not compute or validate digest
-  strings, resolve references to log entries, or apply record projections.
+  is a function of the program or the builtin `write` of M1.
+- Hash wraps a Text value. The compiler computes the SHA-256 hash of each
+  log entry (M1). It does not validate the digest strings of the source. It
+  resolves a reference to a log entry only for the `subject` of a
+  `createsEvent` entry in the record projection.
   Schema comments about business rules, such as a person's Party kind or a
   confidence percentage, do not add constraints beyond the declared types.
 - The compiler reserves all schema names and every form name of SPEC.md. It
@@ -252,8 +284,8 @@ not complete the M0 milestone in `SPEC.md`.
   binds each parameter to null. Thus a constructor error that depends on a
   parameter is reported at the application.
 
-M1 remains the write path, entry hashes, and record projection. M2 remains
-the indexed read path. The core files and full specification retain their
+M1 adds the write path, the entry hashes and the record projection (see
+`## M1`). M2 remains the indexed read path. The core files and full specification retain their
 original meaning.
 
 - Type parameters come before the value parameters. Only a named function

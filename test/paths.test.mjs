@@ -257,6 +257,81 @@ test('commandResolveParty gives createsParty with empty attrs', () => {
   assert.deepEqual(s, appended([entry], entry));
 });
 
+// M1 part C: the records of the logs. The identity of a record is the hash of its entry.
+const party = 'def company : Party := makeParty partyOrg "Acme" none nil attrsEnd none none ' +
+  'def pe : Entry := makeEntry none (actorHuman acme) (createsParty company) ';
+const about = hash => 'def about : Event := makeEvent eventNoteAdded ' +
+  `(subjectParty (refTo (hashOf "${hash}"))) none none attrsEnd none ` +
+  'def ee : Entry := makeEntry none (actorHuman acme) (createsEvent about) ';
+const record = (entry, type, value) => ({ ref: sha256(entry), type, value });
+const partyHash = () => sha256(named(`${actors}${party}`).pe);
+const projected = source => {
+  const result = run(source);
+  assert.deepEqual(Object.keys(result), ['ledger-lang', 'instances', 'records'], JSON.stringify(result));
+  return { ...Object.fromEntries(result.instances.map(item => [item.name, item.value])), records: result.records };
+};
+
+test('a later createsEvent entry sets lastEvent on the Party record of its subject', () => {
+  const { company, about: event, pe, ee, records } =
+    projected(`${actors}${party}${about(partyHash())}def book : Log := cons pe (cons ee nil)`);
+  assert.deepEqual(records, [
+    record(pe, 'Party', { ...company, lastEvent: { kind: 'kindEvent', hash: sha256(ee) } }),
+    record(ee, 'Event', event),
+  ]);
+});
+
+test('a Step from write gives the records of its log', () => {
+  const { s, records } = projected(`${actors}def who : Write := makeWrite (actorHuman acme) none ` +
+    '(commandResolveParty partyOrg "Acme" nil) def s : Step := write history who');
+  assert.deepEqual(records, [record(s.log[0], 'Party', s.log[0].body.party)]);
+  assert.equal(records[0].ref, partyHash());
+});
+
+test('an M0 program and an empty log have no records key', () => {
+  assert.deepEqual(Object.keys(run(`${rule}def n : Nat := 3`)), ['ledger-lang', 'instances']);
+  assert.deepEqual(Object.keys(run(`${actors}${party}def book : Log := nil`)), ['ledger-lang', 'instances']);
+});
+
+test('an event with a subject that names no record changes no record', () => {
+  const { company, about: event, pe, ee, records } =
+    projected(`${actors}${party}${about('nobody')}def book : Log := cons pe (cons ee nil)`);
+  assert.deepEqual(records, [record(pe, 'Party', company), record(ee, 'Event', event)]);
+});
+
+test('the same entry in two logs or two times in one log is one record', () => {
+  const source = `${actors}${party}${about(partyHash())}def book : Log := cons pe (cons ee nil) `;
+  const { records } = projected(source);
+  assert.deepEqual(projected(`${source}def copy : Log := cons ee (cons pe (cons pe nil))`).records, records);
+});
+
+test('the records follow the program order of the logs and the order of each log', () => {
+  const beta = `${actors}${party}def other : Party := makeParty partyOrg "Beta" none nil attrsEnd none none ` +
+    'def po : Entry := makeEntry none (actorHuman acme) (createsParty other) ';
+  const refs = source => projected(source).records.map(item => item.ref);
+  const { pe, po } = named(beta);
+  assert.deepEqual(refs(`${beta}def book : Log := cons po (cons pe nil)`), [sha256(po), sha256(pe)]);
+  assert.deepEqual(refs(`${beta}def early : Log := cons pe nil def book : Log := cons po (cons pe nil)`),
+    [sha256(pe), sha256(po)]);
+  const { company, about: event, ee, records } =
+    projected(`${actors}${party}${about(partyHash())}def book : Log := cons ee (cons pe nil)`);
+  assert.deepEqual(records, [record(ee, 'Event', event), record(pe, 'Party', company)]);
+});
+
+test('a Step from makeStep has no records and each write form gives the records of its log', () => {
+  const lone = actors.replace('def history : Log := nil ', '');
+  const keys = step => Object.keys(run(`${lone}${party}${note}${refuse}def s : Step := ${step}`));
+  assert.deepEqual(keys('makeStep (cons pe nil) (outcomeDenied none nil)'), ['ledger-lang', 'instances']);
+  assert.deepEqual(keys('refuse (cons pe nil) noted'), ['ledger-lang', 'instances']);
+  const forms = `${actors}${note}def w : WritePath := write ` +
+    'def apply : (p : WritePath) -> (log : Log) -> (x : Write) -> Step := ' +
+    'fun (p : WritePath) (log : Log) (x : Write) => p log x ' +
+    'def f : (log : Log) -> Step := fun (log : Log) => write log noted ';
+  ['w history noted', 'apply write history noted', 'f history'].forEach(step => {
+    const { s, records } = projected(`${forms}def s : Step := ${step}`);
+    assert.deepEqual(records, [record(s.log[0], 'Event', s.log[0].body.event)], step);
+  });
+});
+
 test('ReadPath is a function type in Type 1', () => {
   reject('def r : ReadPath := nil', funError, 'nil');
   reject('def R : Type 0 := ReadPath', universeError, 'ReadPath');

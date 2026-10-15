@@ -186,6 +186,17 @@ The target is one JSON document. Instances are in declaration order:
   "instances": [ { "name": "acme", "type": "Party", "value": { } } ] }
 ```
 
+M1 adds the key `records` after `instances`. The key is in the target only
+when a `Log` instance, or a `Step` instance that `write` gives, holds a
+`creates...` entry. A `Step` from `makeStep` makes no record. The key has one
+object for each record, in the order of the first entry of each record:
+
+```json
+{ "ledger-lang": 1,
+  "instances": [ ],
+  "records": [ { "ref": "<64 hex digits>", "type": "Party", "value": { } } ] }
+```
+
 Encoding rules:
 
 | Type | JSON |
@@ -211,8 +222,16 @@ Encoding rules:
 
 - M0: the final state of an instance is its value after evaluation.
 - M1: the write path. `write : WritePath` appends entries with sha256 entry
-  hashes. Each record that an entry creates is an instance. Its final state
-  is its projection at the end of the log, with the projected fields filled.
+  hashes. The hash of an entry is the SHA-256 of its compact JSON. `write
+  log x` gives a `Step`: `outcomeAppended`, `outcomeConflict` or
+  `outcomeDenied`. Each `creates...` entry of a `Log` instance, or of the
+  log of a `Step` instance that `write` gives, makes one record (a `Step`
+  from `makeStep` makes no record). The identity of a record is
+  the hash of its entry. Its first state is the value in the Body. A later
+  `createsEvent` entry sets `lastEvent` on the Party or Commercial record
+  whose identity is the hash of its `subject`. The final state of a record
+  is its state at the end of the logs. The records are in the key `records`
+  of the target (section 5).
 - M2: the read path. `read : ReadPath` answers each `Query` from the log.
   M0 checks `ReadPath` as a function type. The compiler does not run the
   read path.

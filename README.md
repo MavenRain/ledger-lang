@@ -434,7 +434,7 @@ def lift : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Flag :=
   fun (r : ReadPath) (log : Log) (ask : Query Flag) => r Flag log ask
 ```
 
-The compiler does not run the
-write path or the read path. `compiler/schema.c` and
+The compiler runs the write path of M1: the builtin `write` and the
+records of the logs (SPEC.md section 5). It does not run the read path. `compiler/schema.c` and
 `compiler/operations.c` take the constructor and field data from
 `core/schema.def` and `core/ops.def` when the compiler is built.
