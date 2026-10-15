@@ -193,7 +193,7 @@ static int put_side(Fuel fuel, Nat budget, const Bindings *environment, const LT
     case VAL_TERM:
       *result = witness;
       if (term_marker_bound(witness.node) > 0) return 1;
-      return close_side(fuel, budget, environment, a, witness, result, left, failure);
+      return close_side(fuel, budget, closed_environment(environment), a, witness, result, left, failure);
     }
     return 0;
   }
@@ -207,7 +207,10 @@ static int put_side(Fuel fuel, Nat budget, const Bindings *environment, const LT
     const Term *node = term_with_markers(side.node, table, size);
     *result = (Val){.kind = VAL_TERM, .node = node};
     if (term_marker_bound(node) > 0) return 1;
-    return close_side(fuel, budget, environment, a, (Val){.kind = VAL_TERM, .node = node}, result, left, failure);
+    /* A substituted side with no marker evaluates as at the top level,
+       including a computed transport motive in a function body. */
+    return close_side(fuel, budget, closed_environment(environment), a,
+                      (Val){.kind = VAL_TERM, .node = node}, result, left, failure);
   }
   }
   return 0;
@@ -435,13 +438,20 @@ static Nat side_number(Text text) {
 }
 
 /* D6 part A (design items 5 and 8): the argument node of a side (f x). A
-   closed x of type Nat gives a number node. A marker and a node give their
-   witness node. */
+   closed x of type Nat gives a number node. D11 part B (design item 8): a
+   closed x of another type gives a closed node of the value that
+   read_printed_value reads from its text. A text that the reader does not
+   accept gives eTerm. A marker and a node give their witness node. */
 static int cong_argument(Fuel fuel, Nat position, const LType *a, Val side, const Term **argument, Failure *failure) {
   switch (side.kind) {
   case VAL_CLOSED: {
-    if (a->tag != TY_NAT) return fail_at(failure, position, eTerm);
-    *argument = term_number(position, 0, side_number(side.text));
+    if (a->tag == TY_NAT) {
+      *argument = term_number(position, 0, side_number(side.text));
+      return 1;
+    }
+    const Value *value;
+    if (!read_printed_value(side.text, &value)) return fail_at(failure, position, eTerm);
+    *argument = term_closed(position, a, value, side.text);
     return 1;
   }
   case VAL_VAR:
@@ -506,15 +516,23 @@ static int cong_proof(Fuel fuel, Nat budget, const Bindings *environment, Nat po
 }
 
 /* D6 part B (design item 8, delta B-D2): the typed value of a side of e for
-   put_marker. A closed side of type Nat gives its number. A closed side of
-   another type has no value and gives eTerm, as for cong. A marker and a
-   node give null, as for a neutral Sigma witness. */
+   put_marker. A closed side of type Nat gives its number. D11 part B (design
+   item 8): a closed side of another type gives the value that
+   read_printed_value reads from its text, as for cong. A text that the
+   reader does not accept gives eTerm. A marker and a node give null, as for
+   a neutral Sigma witness. */
 static int transport_found(Nat position, const LType *a, Val side, Typed *found, Failure *failure) {
   switch (side.kind) {
-  case VAL_CLOSED:
-    if (a->tag != TY_NAT) return fail_at(failure, position, eTerm);
-    *found = (Typed){a, nat_value(side_number(side.text))};
+  case VAL_CLOSED: {
+    if (a->tag == TY_NAT) {
+      *found = (Typed){a, nat_value(side_number(side.text))};
+      return 1;
+    }
+    const Value *value;
+    if (!read_printed_value(side.text, &value)) return fail_at(failure, position, eTerm);
+    *found = (Typed){a, value};
     return 1;
+  }
   case VAL_VAR:
   case VAL_TERM: *found = (Typed){a, &null_value}; return 1;
   }

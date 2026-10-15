@@ -179,8 +179,8 @@ The plan adds neutral values in two stages:
   function with one data parameter". A and B come from e and f, so
   `cong f refl` gives "cannot infer the type of this term". The sides are
   computed sides (D4). An application with a parameter marker stays
-  neutral. A closed `Nat` side evaluates f and keeps the JSON encoding of
-  its result. `cong` is a proof.
+  neutral. A closed side evaluates f and keeps the JSON encoding of its
+  result. `cong` is a proof.
   `transport (z : A) B e t` checks t against B with x for z. Its type is B
   with y for z, and its value is the value of t, so
   `def u : Option Nat := transport (z : Nat) (Option Nat) pf (some 1)`
@@ -191,10 +191,13 @@ The plan adds neutral values in two stages:
   type". If e is not an equality, it gives "expected an equality proof".
   A t that does not check against B with x, or a declared type other than
   B with y, gives "term does not have the declared type". A closed side of
-  e keeps only its JSON text, and the compiler has no JSON reader. Thus a
-  closed side of a type other than `Nat` gives the same refusal in both
-  forms. A neutral side gives null for z. A named family `P` in place of
-  the motive moves to D7 or a later step.
+  e keeps its canonical JSON text. Both forms read back closed values of
+  data types other than `Nat`, including `Text`, `Option Nat` and `List Nat`.
+  The reader accepts the forms written by the value printer: null, flags,
+  natural numbers, UTF-8 strings, arrays and objects. Text outside those
+  forms gives "term does not have the declared type". A neutral side gives
+  null for z. A named family `P` in place of the motive moves to D7 or a
+  later step.
 - D7 (done). `Query` parameters and `ReadPath` (STATUS item 2). A function
   parameter can have the type `Query T`, also with a type parameter `T`.
   `ReadPath` is the function type

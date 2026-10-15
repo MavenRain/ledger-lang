@@ -243,6 +243,9 @@ int emit_text(Printer *printer, Text text, Failure *failure);
 int quote_bytes(Printer *printer, Text text, Failure *failure);
 int quoted(Printer *printer, Text text, Failure *failure);
 int print_value(Printer *printer, const Value *value, Failure *failure);
+/* D11 part B (design item 7): 1 and the value when the whole text is one
+   value in a form that print_value writes, else 0. */
+int read_printed_value(Text text, const Value **value);
 
 /* schema.c: the families of core/schema.def. Only the added families
    (Account on) have plans and schema types. schema_constructor_plan and

@@ -2688,10 +2688,13 @@ static void test_d6_cong(void) {
                 "def pf : Eq Nat 1 1 := refl\n"
                 "def c : Eq Nat (len \"a\") (len \"a\") := cong len pf\n",
                 "cong len pf", eMatch);
-  sigma_refused("def tx : (t : Text) -> Text := fun (t : Text) => t\n"
-                "def tp : Eq Text \"a\" \"a\" := refl\n"
-                "def c : Eq Text (tx \"a\") (tx \"a\") := cong tx tp\n",
-                "cong tx tp", eTerm);
+  /* D11 part B (USER ruling Q-D11-10 (a)): a closed side of type Text reads
+     back from its text, and cong tx tp checks. */
+  const Bindings *texts = NULL;
+  assert(check_definitions(text("def tx : (t : Text) -> Text := fun (t : Text) => t\n"
+                                "def tp : Eq Text \"a\" \"a\" := refl\n"
+                                "def c : Eq Text (tx \"a\") (tx \"a\") := cong tx tp\n"),
+                           &texts, &failure));
 }
 
 /* Closed congruence sides share the caller's remaining body budget on
@@ -3561,6 +3564,59 @@ static void test_d11_body_closed_side(void) {
   assert(same_text(failure.message, eBudget) && left == 1);
 }
 
+/* D11 part B (design item 7): each form that print_value writes reads back
+   with read_printed_value and prints to the same text. A text in another
+   form gives 0. */
+static void test_d11_closed_reader(void) {
+  const char *good[] = {"null", "0", "4294967295", "true", "false", "\"\"",
+                        "\"\\u001f\\\"\\\\\xc3\xa9\"", "[]", "[1,\"a\"]", "{}", "{\"k\":[null]}"};
+  for (Nat row = 0; row < sizeof good / sizeof good[0]; row++) {
+    const Value *value;
+    assert(read_printed_value(text(good[row]), &value));
+    assert(same_text(printed(value), text(good[row])));
+  }
+  const char *bad[] = {"01", "4294967296", " ", "\"\\U001f\"", "\"a", "1 2", "[1,]", "{\"k\"}", "", "\"\xff\""};
+  for (Nat row = 0; row < sizeof bad / sizeof bad[0]; row++) {
+    const Value *value;
+    assert(!read_printed_value(text(bad[row]), &value));
+  }
+}
+
+/* A closed product witness makes a computed transport motive closed, also
+   in a function body. Both motive sides consume the shared work budget. */
+static void test_d11_closed_transport_motive(void) {
+  const char *prefix =
+      "def fst : (p : Prod Nat Text) -> Nat := fun (p : Prod Nat Text) => first p\n"
+      "def p : Prod Nat Text := pair 7 \"a\"\n"
+      "def pf : Eq (Prod Nat Text) p p := refl\n";
+  const char *body =
+      "def top : Eq Nat 7 7 := transport (z : Prod Nat Text) (Eq Nat (fst z) 7) pf refl\n"
+      "def f : (m : Nat) -> Eq Nat 7 7 := fun (m : Nat) => "
+      "transport (z : Prod Nat Text) (Eq Nat (fst z) 7) pf refl\n"
+      "def out : Eq Nat 7 7 := f 1\n";
+  char source[1024];
+  int size = snprintf(source, sizeof source, "%s%s", prefix, body);
+  assert(size > 0 && (size_t)size < sizeof source);
+  const Bindings *environment = NULL;
+  Failure failure = {0};
+  assert(check_definitions(text(source), &environment, &failure));
+
+  environment = NULL;
+  assert(check_definitions(text(prefix), &environment, &failure));
+  Bindings scope = {.head = check_marker(), .tail = environment};
+  Tokens tokens = lexed("transport (z : Prod Nat Text) (Eq Nat (fst z) 7) pf refl");
+  Tokens rest;
+  Typed found;
+  Nat left = 0;
+  assert(synth_term(1000, 3, 0, &scope, tokens, &found, &rest, &left, NULL, &failure));
+  assert(rest.size == 0 && left == 1 && found.type->tag == TY_EQ);
+  assert(found.type->lhs.kind == VAL_CLOSED && same_text(found.type->lhs.text, text("7")));
+  assert(found.type->rhs.kind == VAL_CLOSED && same_text(found.type->rhs.text, text("7")));
+  failure = (Failure){0};
+  assert(!synth_term(1000, 1, 0, &scope, tokens, &found, &rest, &left, NULL, &failure));
+  assert(same_text(failure.message, eBudget));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -3610,6 +3666,8 @@ int main(void) {
   test_d10_type_budget();
   test_d10_partial_type_arguments();
   test_d11_body_closed_side();
+  test_d11_closed_reader();
+  test_d11_closed_transport_motive();
   puts("C module tests passed");
   return 0;
 }

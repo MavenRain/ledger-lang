@@ -202,3 +202,18 @@ test('the work of a closed side in a function body is charged to the work budget
   checks(`${doubled(10)}${k}def h : (m : Nat) -> Eq Nat 2 2 := fun (m : Nat) => k 2\n`);
   overBudget(`${doubled(10)}${k}def h : (m : Nat) -> Eq Nat (f10 2) (f10 2) := fun (m : Nat) => k 2\n`);
 });
+
+// D11 part B: a closed side of a type other than Nat reads back from its JSON text.
+test('cong and transport read a closed side back from its text', () => {
+  const tx = 'def tx : (t : Text) -> Text := fun (t : Text) => t\ndef tp : Eq Text "a" "a" := refl\n';
+  checks(`${tx}def c : Eq Text (tx "a") (tx "a") := cong tx tp\n`);
+  checks(`${tx}def p : Eq Text "a" "a" := transport (z : Text) (Eq Text z "a") tp tp\n`);
+  checks(`${tx}def u : Option Nat := transport (z : Text) (Option Nat) tp (some 1)\n`);
+  const so = 'def so : (o : Option Nat) -> Option Nat := fun (o : Option Nat) => o\n';
+  checks(`${so}def po : Eq (Option Nat) (some 7) (some 7) := refl\ndef c : Eq (Option Nat) (so (some 7)) (so (some 7)) := cong so po\n`);
+  const list = '(cons 1 (cons 2 nil))';
+  checks(
+    `def pl : Eq (List Nat) ${list} ${list} := refl\n` +
+      `def p : Eq (List Nat) ${list} ${list} := transport (z : List Nat) (Eq (List Nat) z ${list}) pl pl\n`,
+  );
+});

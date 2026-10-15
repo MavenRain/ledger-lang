@@ -300,9 +300,12 @@ test('D6 part A: cong refusals', () => {
     'expected an equality proof', 'cong');
   reject('def len : (t : Text) -> Nat := fun (t : Text) => 1\n' + d6Pf +
     'def c : Eq Nat (len "a") (len "a") := cong len pf', 'the parameter type does not match the equality type', 'cong');
-  // Delta D1: json.c has no reader, thus a closed e on Text is refused.
-  reject('def tx : (t : Text) -> Text := fun (t : Text) => t\ndef tp : Eq Text "a" "a" := refl\n' +
-    'def c : Eq Text (tx "a") (tx "a") := cong tx tp', typeError, 'cong');
+  // D11 part B (USER ruling Q-D11-10 (a)): json.c reads a closed side
+  // back from its text, thus cong on a closed e on Text checks.
+  const closed = run('def tx : (t : Text) -> Text := fun (t : Text) => t\n' +
+    'def tp : Eq Text "a" "a" := refl\n' +
+    'def c : Eq Text (tx "a") (tx "a") := cong tx tp');
+  assert.equal(closed['ledger-lang'], 1, JSON.stringify(closed));
 });
 
 // D6 part B: transport (z : A) B e t. The type text of Option Nat in an

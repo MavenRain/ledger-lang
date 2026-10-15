@@ -30,8 +30,9 @@ not complete the M0 milestone in `SPEC.md`.
   earlier definition with one data parameter and a data result that does
   not name the parameter. `cong` is a proof and is not an instance.
   `transport (z : A) B e t` checks t against B with x for z. Its type is B
-  with y for z, and its value is the value of t. In both forms, a closed
-  side of e must have the type `Nat`.
+  with y for z, and its value is the value of t. Both forms accept closed
+  sides of data types such as `Text`, `Option Nat` and `List Nat`, reading
+  the values back from their canonical JSON text.
 - Dependent equality results, steps D1, D2, D2b, D3, D3a, D4a, D4b, D4c and D4
   of `docs/DEPENDENT-TYPES.md`. A function type can end in `Eq A x y`, and
   a side can be the name of a value parameter of type A. Such a side is
