@@ -2751,12 +2751,189 @@ static int read_record(Fuel hash_fuel, Nat budget, Nat position, const Values *i
   return 1;
 }
 
+/* M3 part A (design item 3): 1 when record is a Commitment record whose
+   commercial field has the value of the Ref commercial. */
+static Nat commitment_of(const Value *record, const Value *commercial) {
+  return same_text(write_field(kType, record)->text, text_of_cstring("Commitment")) == 1 &&
+         read_same(write_field(text_of_cstring("commercial"), write_field(kValue, record)), commercial) == 1;
+}
+
+/* The name of a constructor with no field is its Text; a constructor with a
+   field is a tagged value. */
+static Text commitment_tag(const Value *value) {
+  return value->kind == VALUE_TEXT ? value->text : write_field(kSchemaTag(), value)->text;
+}
+
+/* The field key of the state of record (null for a missing field). */
+static const Value *commitment_field(const Value *record, const char *key) {
+  return write_field(text_of_cstring(key), write_field(kValue, record));
+}
+
+/* Design item 4: 1 when a Commitment record of records has supersedes = some
+   a Ref whose hash is ref. */
+static Nat commitment_superseded(Text ref, const Located *records) {
+  if (records == NULL) return 0;
+  Nat names = same_text(write_field(kType, records->value)->text, text_of_cstring("Commitment")) == 1 &&
+              same_text(write_field(kRefHash(), commitment_field(records->value, "supersedes"))->text, ref) == 1;
+  return names == 1 ? 1 : commitment_superseded(ref, records->tail);
+}
+
+/* Design item 4: 1 when the Commitment record is in force in records: its
+   status is not commitmentSuperseded and no record of records supersedes it. */
+static Nat commitment_in_force(const Value *record, const Located *records) {
+  Text status = commitment_tag(commitment_field(record, "status"));
+  return same_text(status, text_of_cstring("commitmentSuperseded")) != 1 &&
+         commitment_superseded(write_field(text_of_cstring("ref"), record)->text, records) != 1;
+}
+
+/* A Ref kindCommitment item with the ref of record (the form of read_audit). */
+static const Value *commitment_item(const Value *record) {
+  return object_two(kRefKind(), text_value(text_of_cstring("kindCommitment")), kRefHash(),
+                    write_field(text_of_cstring("ref"), record));
+}
+
+/* Design item 4: the in-force Commitment records of the commercial in walk
+   as Ref kindCommitment items, in log order: walk is newest first, and each
+   kept record goes in front of the items of the newer records. */
+static const Values *commitment_terms(const Value *commercial, const Located *walk, const Located *records,
+                                      const Values *items) {
+  if (walk == NULL) return items;
+  Nat keep = commitment_of(walk->value, commercial) == 1 && commitment_in_force(walk->value, records) == 1;
+  return commitment_terms(commercial, walk->tail, records,
+                          keep == 1 ? values_item(commitment_item(walk->value), items) : items);
+}
+
+/* The Commitment record of records whose ref is hash, or NULL (the form of
+   read_commercial). */
+static const Value *commitment_find(Text hash, const Located *records) {
+  const Value *record = project_find(hash, records);
+  return record != NULL && same_text(write_field(kType, record)->text, text_of_cstring("Commitment")) == 1 ? record
+                                                                                                           : NULL;
+}
+
+static Nat commitment_count(const Located *records) { return records == NULL ? 0 : 1 + commitment_count(records->tail); }
+
+/* Design item 5: the supersedes chain from record to older records as Ref
+   kindCommitment items oldest first, in front of newer. The walk stops at
+   supersedes = none, at a hash that names no Commitment record, and after
+   fuel steps (no loop on a cycle). */
+static const Values *commitment_chain(const Value *record, const Located *records, Nat fuel, const Values *newer) {
+  if (record == NULL || fuel == 0) return newer;
+  Text older = write_field(kRefHash(), commitment_field(record, "supersedes"))->text;
+  return commitment_chain(commitment_find(older, records), records, fuel - 1, values_item(commitment_item(record), newer));
+}
+
+/* Design items 6 and 8: 1 when record is a commitmentPrice record of the
+   commercial with the status (any status when status is NULL). */
+static Nat commitment_price_of(const Value *record, const Value *commercial, const char *status) {
+  return commitment_of(record, commercial) == 1 &&
+         same_text(commitment_tag(commitment_field(record, "kind")), text_of_cstring("commitmentPrice")) == 1 &&
+         (status == NULL || same_text(commitment_tag(commitment_field(record, "status")), text_of_cstring(status)) == 1);
+}
+
+/* Design item 6: the newest in-force commitmentAgreed commitmentPrice record
+   of the commercial, or NULL. */
+static const Value *commitment_agreed(const Value *commercial, const Located *walk, const Located *records) {
+  if (walk == NULL) return NULL;
+  Nat agreed = commitment_price_of(walk->value, commercial, "commitmentAgreed") == 1 &&
+               commitment_in_force(walk->value, records) == 1;
+  return agreed == 1 ? walk->value : commitment_agreed(commercial, walk->tail, records);
+}
+
+/* Design item 8: the oldest commitmentPrice record of the commercial in walk
+   (any status), or NULL. */
+static const Value *commitment_first(const Value *commercial, const Located *walk) {
+  if (walk == NULL) return NULL;
+  const Value *older = commitment_first(commercial, walk->tail);
+  return older != NULL ? older : commitment_price_of(walk->value, commercial, NULL) == 1 ? walk->value : NULL;
+}
+
+/* The records older than the record whose ref is ref (after it in the
+   newest-first list), or NULL. */
+static const Located *commitment_before(Text ref, const Located *records) {
+  return records == NULL ? NULL
+         : same_text(write_field(text_of_cstring("ref"), records->value)->text, ref) == 1 ? records->tail
+                                                                                          : commitment_before(ref, records->tail);
+}
+
+/* Design item 7: the Nat of the value field of record (valueNat n is the Nat
+   n). 1 with the Nat in number; 0 for NULL and for another form. */
+static Nat commitment_nat(const Value *record, Nat *number) {
+  const Value *value = record == NULL ? &null_value : commitment_field(record, "value");
+  *number = value->kind == VALUE_NAT ? value->number : 0;
+  return value->kind == VALUE_NAT;
+}
+
+/* Design item 6: any in-force agreed price of the commercial can reconcile
+   the amount, even when a newer independent agreement has another value. */
+static Nat commitment_reconciled(const Value *commercial, const Located *walk, const Located *records, Nat amount) {
+  if (walk == NULL) return 0;
+  Nat price = 0;
+  if (commitment_price_of(walk->value, commercial, "commitmentAgreed") == 1 &&
+      commitment_nat(walk->value, &price) == 1 && price == amount && commitment_in_force(walk->value, records) == 1)
+    return 1;
+  return commitment_reconciled(commercial, walk->tail, records, amount);
+}
+
+/* Design item 8: part * 100 / whole rounded down, with whole > 0 and
+   part <= whole (a 64-bit product, no overflow). */
+static Nat commitment_percent(Nat part, Nat whole) { return (Nat)(((uint64_t)part * 100) / whole); }
+
+/* M3 part A (design items 1 to 9): the Commitment group. The index is the
+   M1 projection of the log (project_entries), as read_record. queryTermsInForce
+   at momentAsOf h projects the entries up to and including the first entry
+   whose hash is h, and a hash that names no entry gives nil; the other three
+   queries project the full log. A filter walk and the chain walk take no
+   step. queryAmountReconciled compares amountCents of the Commercial record
+   with the agreed price (item 6); queryDiscountPct gives (first - agreed) *
+   100 / first, or none (item 8). */
+static int read_commitment(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat terms,
+                           Nat history, Nat reconciled, const Value **value, Nat *left, Failure *failure) {
+  const Value *moment = write_field(text_of_cstring("moment"), query);
+  Nat asof = terms == 1 && same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf")) == 1;
+  Text none = {NULL, 0};
+  Text stop = asof == 1 ? write_field(text_of_cstring("entry"), moment)->text : none;
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  const Value *commercial = write_field(text_of_cstring("commercial"), query);
+  if (terms == 1) {
+    const Located *known = asof == 1 && found == 0 ? NULL : records;
+    *value = items_value(commitment_terms(commercial, known, known, NULL));
+    return 1;
+  }
+  if (history == 1) {
+    Text hash = write_field(kRefHash(), write_field(text_of_cstring("commitment"), query))->text;
+    *value = items_value(commitment_chain(commitment_find(hash, records), records, commitment_count(records), NULL));
+    return 1;
+  }
+  if (reconciled == 1) {
+    const Value *state = read_commercial(commercial, records);
+    const Value *amount = state == NULL ? &null_value : write_field(text_of_cstring("amountCents"), state);
+    Nat same = amount->kind == VALUE_NAT && commitment_reconciled(commercial, records, records, amount->number) == 1;
+    *value = make_value((Value){.kind = VALUE_FLAG, .flag = same == 1 ? FLAG_YES : FLAG_NO});
+    return 1;
+  }
+  const Value *agreed = commitment_agreed(commercial, records, records);
+  const Located *earlier =
+      agreed == NULL ? NULL : commitment_before(write_field(text_of_cstring("ref"), agreed)->text, records);
+  Nat agreed_price = 0;
+  Nat first_price = 0;
+  Nat has_agreed = commitment_nat(agreed, &agreed_price);
+  Nat has_first = commitment_nat(commitment_first(commercial, earlier), &first_price);
+  Nat some = has_agreed == 1 && has_first == 1 && first_price != 0 && agreed_price <= first_price;
+  *value = some == 1 ? nat_value(commitment_percent(first_price - agreed_price, first_price)) : &null_value;
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
    queryTail and queryAuditByActor visit each entry of the log (item 8), then
    give the answer of items 9 to 11. queryCommercial and queryProjectionSound
-   give the answer of read_record. Each other tag gives eRead at position
+   give the answer of read_record. The four Commitment tags give the answer
+   of read_commitment (M3 part A). Each other tag gives eRead at position
    (the read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
@@ -2771,10 +2948,16 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat audit = same_text(tag, text_of_cstring("queryAuditByActor"));
   Nat commercial = same_text(tag, text_of_cstring("queryCommercial"));
   Nat sound = same_text(tag, text_of_cstring("queryProjectionSound"));
+  Nat terms = same_text(tag, text_of_cstring("queryTermsInForce"));
+  Nat history = same_text(tag, text_of_cstring("queryTermHistory"));
+  Nat reconciled = same_text(tag, text_of_cstring("queryAmountReconciled"));
+  Nat discount = same_text(tag, text_of_cstring("queryDiscountPct"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (commercial == 1 || sound == 1)
     return read_record(hash_fuel, ready, position, items, query, commercial, value, left, failure);
+  if (terms == 1 || history == 1 || reconciled == 1 || discount == 1)
+    return read_commitment(hash_fuel, ready, position, items, query, terms, history, reconciled, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;

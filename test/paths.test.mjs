@@ -374,7 +374,7 @@ test('a type argument after a value argument is not read (D-B5)', () => {
 
 const readError = 'the read path does not answer this query';
 const readPre = 'def deal : Ref kindCommercial := refTo (hashOf "deal-1") def history : Log := nil ' +
-  'def ask : Query Flag := queryAmountReconciled deal ';
+  'def ask : Query Flag := queryArtifactIntact (refTo (hashOf "art-1")) "d" ';
 
 test('read is a builtin ReadPath term', () => {
   assert.deepEqual(instances('def r : ReadPath := read'), []);
@@ -498,6 +498,77 @@ test('queryCommercial of an unknown ref gives none', () => {
   assert.equal(commercialOf('(refTo (hashOf "e9"))', 'momentNow'), null);
   assert.equal(commercialOf(dealOf(ne), 'momentNow'), null);
   assert.equal(commercialOf(dealOf(ce), '(momentAsOf (hashOf "e9"))'), null);
+});
+
+// M3 part A: the Commitment queries. The log: a deal with amountCents cents, a commitmentPrice 1000
+// commitmentProposed, a commitmentPrice agreed commitmentAgreed that supersedes it, and a commitmentTerm.
+const termPre = cents => 'def acme : Ref kindParty := refTo (hashOf "party-acme") ' +
+  'def evidence : Ref kindArtifact := refTo (hashOf "email-entry") ' +
+  'def provenance : Provenance := makeProvenance (some evidence) none (some 95) ' +
+  `def plan : Commercial := makeCommercial commercialDeal "Annual plan" acme "negotiation" (some ${cents}) "USD" ` +
+  'none statusOpen attrsEnd none def ce : Entry := makeEntry none (actorHuman acme) (createsCommercial plan) ';
+const commitmentOf = (deal, kind, value, status, supersedes) =>
+  `makeCommitment ${deal} ${kind} "Term" ${value} none ${status} ${supersedes} provenance`;
+const termLog = (cents, agreed = 900) => {
+  const pre = termPre(cents);
+  const deal = dealOf(named(pre).ce);
+  const proposed = `${pre}def proposed : Commitment := ` +
+    `${commitmentOf(deal, 'commitmentPrice', '(valueNat 1000)', 'commitmentProposed', 'none')} ` +
+    'def pe : Entry := makeEntry none (actorHuman acme) (createsCommitment proposed) ';
+  const older = `(some (refTo (hashOf "${sha256(named(proposed).pe)}")))`;
+  return `${proposed}def agreed : Commitment := ` +
+    `${commitmentOf(deal, 'commitmentPrice', `(valueNat ${agreed})`, 'commitmentAgreed', older)} ` +
+    'def ae : Entry := makeEntry none (actorHuman acme) (createsCommitment agreed) ' +
+    `def term : Commitment := ${commitmentOf(deal, 'commitmentTerm', '(valueText "net_30")', 'commitmentProposed', 'none')} ` +
+    'def te : Entry := makeEntry none (actorHuman acme) (createsCommitment term) ' +
+    'def book : Log := cons ce (cons pe (cons ae (cons te nil))) ';
+};
+const termAnswer = (log, type, query) => {
+  const wrapped = type.includes(' ') ? `(${type})` : type;
+  return named(`${log}def r : ${type} := read ${wrapped} book (${query})`).r;
+};
+const termRef = entry => ({ kind: 'kindCommitment', hash: sha256(entry) });
+const refs = 'List (Ref kindCommitment)';
+
+test('queryTermsInForce lists the terms that no entry supersedes', () => {
+  const log = termLog(900);
+  const { ce, ae, te } = named(log);
+  assert.deepEqual(termAnswer(log, refs, `queryTermsInForce ${dealOf(ce)} momentNow`), [termRef(ae), termRef(te)]);
+});
+
+test('queryTermsInForce as of an entry stops at that entry', () => {
+  const log = termLog(900);
+  const { ce, pe } = named(log);
+  assert.deepEqual(termAnswer(log, refs, `queryTermsInForce ${dealOf(ce)} ${asOf(pe)}`), [termRef(pe)]);
+});
+
+test('queryTermHistory gives the chain oldest first', () => {
+  const log = termLog(900);
+  const { pe, ae } = named(log);
+  assert.deepEqual(termAnswer(log, refs, `queryTermHistory (refTo (hashOf "${sha256(ae)}"))`), [termRef(pe), termRef(ae)]);
+});
+
+test('queryAmountReconciled gives flagYes on the agreed price', () => {
+  const log = termLog(900);
+  assert.equal(termAnswer(log, 'Flag', `queryAmountReconciled ${dealOf(named(log).ce)}`), true);
+});
+
+test('queryAmountReconciled gives flagNo on the superseded price', () => {
+  const log = termLog(1000);
+  assert.equal(termAnswer(log, 'Flag', `queryAmountReconciled ${dealOf(named(log).ce)}`), false);
+});
+
+test('queryDiscountPct gives the percent rounded down', () => {
+  const even = termLog(900);
+  assert.equal(termAnswer(even, 'Option Nat', `queryDiscountPct ${dealOf(named(even).ce)}`), 10);
+  const odd = termLog(905, 905);
+  assert.equal(termAnswer(odd, 'Option Nat', `queryDiscountPct ${dealOf(named(odd).ce)}`), 9);
+});
+
+test('queryDiscountPct gives none with no agreed price', () => {
+  const log = termLog(900);
+  const twoEntries = `${log.slice(0, log.indexOf('def agreed'))}def book : Log := cons ce (cons pe nil) `;
+  assert.equal(termAnswer(twoEntries, 'Option Nat', `queryDiscountPct ${dealOf(named(log).ce)}`), null);
 });
 
 test('queryProjectionSound gives flagYes on the replayed state', () => {

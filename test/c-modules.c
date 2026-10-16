@@ -4157,7 +4157,7 @@ static void test_m2_read_path(void) {
   assert(binders->tail != NULL && same_text(binders->tail->head.name, text("log")));
   assert(binders->tail->tail != NULL && same_text(binders->tail->tail->head.name, text("query")));
   assert(binders->tail->tail->tail == NULL);
-  read_refused("queryAmountReconciled");
+  read_refused("queryArtifactIntact");
 }
 
 /* M2 part B: a tagged value with one field (no field when key is NULL), in
@@ -4428,10 +4428,203 @@ static void test_m2_record_queries(void) {
   assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
 }
 
+/* M3 part A: a hand-built Commitment entry (createsCommitment) whose state
+   has the fields commercial, kind, value, status and supersedes. */
+typedef struct {
+  Value kind_name;
+  Value number;
+  Value status_name;
+  Attrs supersedes;
+  Attrs status;
+  Attrs value;
+  Attrs kind;
+  Attrs commercial;
+  Value state;
+  Tagged body_storage;
+  Attrs body;
+  Value entry;
+} CommitmentEntry;
+
+static const Value *commitment_entry(CommitmentEntry *s, const Value *deal, const char *kind, Nat number,
+                                     const char *status, const Value *supersedes) {
+  s->kind_name = (Value){.kind = VALUE_TEXT, .text = text(kind)};
+  s->number = (Value){.kind = VALUE_NAT, .number = number};
+  s->status_name = (Value){.kind = VALUE_TEXT, .text = text(status)};
+  s->supersedes = (Attrs){text("supersedes"), supersedes, NULL};
+  s->status = (Attrs){text("status"), &s->status_name, &s->supersedes};
+  s->value = (Attrs){text("value"), &s->number, &s->status};
+  s->kind = (Attrs){text("kind"), &s->kind_name, &s->value};
+  s->commercial = (Attrs){text("commercial"), deal, &s->kind};
+  s->state = (Value){.kind = VALUE_ATTRS, .attrs = &s->commercial};
+  s->body = (Attrs){text("body"), tagged(&s->body_storage, "createsCommitment", "commitment", &s->state), NULL};
+  s->entry = (Value){.kind = VALUE_ATTRS, .attrs = &s->body};
+  return &s->entry;
+}
+
+/* A hand-built Commercial entry (createsCommercial) whose state has
+   amountCents. */
+typedef struct {
+  Value cents;
+  Attrs amount;
+  Value state;
+  Tagged body_storage;
+  Attrs body;
+  Value entry;
+} CommercialEntry;
+
+static const Value *commercial_entry(CommercialEntry *s, Nat cents) {
+  s->cents = (Value){.kind = VALUE_NAT, .number = cents};
+  s->amount = (Attrs){text("amountCents"), &s->cents, NULL};
+  s->state = (Value){.kind = VALUE_ATTRS, .attrs = &s->amount};
+  s->body = (Attrs){text("body"), tagged(&s->body_storage, "createsCommercial", "commercial", &s->state), NULL};
+  s->entry = (Value){.kind = VALUE_ATTRS, .attrs = &s->body};
+  return &s->entry;
+}
+
+/* The log of the M3 test plan: a Commercial with amountCents cents, then a
+   commitmentPrice 1000 commitmentProposed, a commitmentPrice 900
+   commitmentAgreed that supersedes it, and a commitmentTerm. hashes holds the
+   four entry hashes in log order, and deal is the Ref kindCommercial of the
+   first entry. */
+typedef struct {
+  Value commercial_kind;
+  Value commitment_kind;
+  Value nothing;
+  CommercialEntry first;
+  CommitmentEntry proposed;
+  CommitmentEntry agreed;
+  CommitmentEntry term;
+  Text hashes[4];
+  Value hash_texts[4];
+  Paired deal_storage;
+  Paired older_storage;
+  const Value *deal;
+  Values items[4];
+  Value log;
+} CommitmentLog;
+
+static const Value *commitment_log(CommitmentLog *s, Nat cents, Nat *left, Failure *failure) {
+  s->commercial_kind = (Value){.kind = VALUE_TEXT, .text = text("kindCommercial")};
+  s->commitment_kind = (Value){.kind = VALUE_TEXT, .text = text("kindCommitment")};
+  s->nothing = (Value){.kind = VALUE_NULL};
+  const Value *e0 = commercial_entry(&s->first, cents);
+  assert(entry_hash(1000, 1, 0, e0, &s->hashes[0], left, failure));
+  s->hash_texts[0] = (Value){.kind = VALUE_TEXT, .text = s->hashes[0]};
+  s->deal = paired(&s->deal_storage, NULL, "kind", &s->commercial_kind, "hash", &s->hash_texts[0]);
+  const Value *e1 = commitment_entry(&s->proposed, s->deal, "commitmentPrice", 1000, "commitmentProposed", &s->nothing);
+  assert(entry_hash(1000, 1, 0, e1, &s->hashes[1], left, failure));
+  s->hash_texts[1] = (Value){.kind = VALUE_TEXT, .text = s->hashes[1]};
+  const Value *older = paired(&s->older_storage, NULL, "kind", &s->commitment_kind, "hash", &s->hash_texts[1]);
+  const Value *e2 = commitment_entry(&s->agreed, s->deal, "commitmentPrice", 900, "commitmentAgreed", older);
+  const Value *e3 = commitment_entry(&s->term, s->deal, "commitmentTerm", 30, "commitmentProposed", &s->nothing);
+  assert(entry_hash(1000, 1, 0, e2, &s->hashes[2], left, failure));
+  assert(entry_hash(1000, 1, 0, e3, &s->hashes[3], left, failure));
+  s->hash_texts[2] = (Value){.kind = VALUE_TEXT, .text = s->hashes[2]};
+  s->hash_texts[3] = (Value){.kind = VALUE_TEXT, .text = s->hashes[3]};
+  s->items[3] = (Values){e3, NULL};
+  s->items[2] = (Values){e2, &s->items[3]};
+  s->items[1] = (Values){e1, &s->items[2]};
+  s->items[0] = (Values){e0, &s->items[1]};
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->items[0]};
+  return &s->log;
+}
+
+/* 1 when item is the Ref kindCommitment whose hash is hash. */
+static Nat commitment_ref_is(const Value *item, Text hash) {
+  return item->kind == VALUE_ATTRS && same_text(item->attrs->value->text, text("kindCommitment")) == 1 &&
+         same_text(item->attrs->rest->value->text, hash) == 1;
+}
+
+/* M3 part A (design items 1 to 9): the four Commitment queries on the log of
+   the test plan. Log A has amountCents 900 (the agreed price), log B 1000
+   (the superseded price), and the short log is the first two entries of A. */
+static void test_m3_commitment_queries(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  CommitmentLog a_storage, b_storage;
+  const Value *a = commitment_log(&a_storage, 900, &left, &failure);
+  const Value *b = commitment_log(&b_storage, 1000, &left, &failure);
+  Values short_tail = {a_storage.items[1].head, NULL};
+  Values short_items = {a_storage.items[0].head, &short_tail};
+  Value short_log = {.kind = VALUE_ITEMS, .items = &short_items};
+  Tagged now_storage, as_of_storage, one_storage;
+  Paired two_storage, agreed_ref_storage;
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *as_of_proposed = tagged(&as_of_storage, "momentAsOf", "entry", &a_storage.hash_texts[1]);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* queryTermsInForce at momentNow: the agreed price and the term in log
+     order, not the superseded price; 1 + 4 steps. */
+  assert(read_step(1000, 9, 7, answer, a,
+                   paired(&two_storage, "queryTermsInForce", "commercial", a_storage.deal, "moment", now), &value, &left,
+                   &failure));
+  assert(left == 4 && value->kind == VALUE_ITEMS && read_count(value->items) == 2);
+  assert(commitment_ref_is(value->items->head, a_storage.hashes[2]));
+  assert(commitment_ref_is(value->items->tail->head, a_storage.hashes[3]));
+  /* As of the proposed-price entry: that price only; 1 + 2 steps. */
+  assert(read_step(1000, 9, 7, answer, a,
+                   paired(&two_storage, "queryTermsInForce", "commercial", a_storage.deal, "moment", as_of_proposed),
+                   &value, &left, &failure));
+  assert(left == 6 && value->kind == VALUE_ITEMS && read_count(value->items) == 1);
+  assert(commitment_ref_is(value->items->head, a_storage.hashes[1]));
+  /* queryTermHistory of the agreed price: the chain oldest first. */
+  const Value *agreed_ref =
+      paired(&agreed_ref_storage, NULL, "kind", &a_storage.commitment_kind, "hash", &a_storage.hash_texts[2]);
+  assert(read_step(1000, 9, 7, answer, a, tagged(&one_storage, "queryTermHistory", "commitment", agreed_ref), &value,
+                   &left, &failure));
+  assert(left == 4 && value->kind == VALUE_ITEMS && read_count(value->items) == 2);
+  assert(commitment_ref_is(value->items->head, a_storage.hashes[1]));
+  assert(commitment_ref_is(value->items->tail->head, a_storage.hashes[2]));
+  /* queryAmountReconciled: flagYes with amountCents 900 (the agreed price),
+     flagNo with 1000 (the superseded price). */
+  assert(read_step(1000, 9, 7, answer, a, tagged(&one_storage, "queryAmountReconciled", "commercial", a_storage.deal),
+                   &value, &left, &failure));
+  assert(left == 4 && value->kind == VALUE_FLAG && value->flag == FLAG_YES);
+  assert(read_step(1000, 9, 7, answer, b, tagged(&one_storage, "queryAmountReconciled", "commercial", b_storage.deal),
+                   &value, &left, &failure));
+  assert(left == 4 && value->kind == VALUE_FLAG && value->flag == FLAG_NO);
+  /* queryDiscountPct: (1000 - 900) * 100 / 1000 = 10; none with no agreed
+     price. */
+  assert(read_step(1000, 9, 7, answer, a, tagged(&one_storage, "queryDiscountPct", "commercial", a_storage.deal),
+                   &value, &left, &failure));
+  assert(left == 4 && value->kind == VALUE_NAT && value->number == 10);
+  assert(read_step(1000, 9, 7, answer, &short_log,
+                   tagged(&one_storage, "queryDiscountPct", "commercial", a_storage.deal), &value, &left, &failure));
+  assert(left == 6 && value->kind == VALUE_NULL);
+  /* Independent agreed prices stay in force together. Reconciliation finds
+     any matching price, including one older than a different agreed price. */
+  CommitmentEntry latest_storage;
+  const Value *latest = commitment_entry(&latest_storage, a_storage.deal, "commitmentPrice", 950,
+                                          "commitmentAgreed", &a_storage.nothing);
+  Values extended_items[5];
+  for (Nat i = 0; i < 4; i++) extended_items[i] = (Values){a_storage.items[i].head, &extended_items[i + 1]};
+  extended_items[4] = (Values){latest, NULL};
+  Value extended_log = {.kind = VALUE_ITEMS, .items = extended_items};
+  const Value *reconciled = tagged(&one_storage, "queryAmountReconciled", "commercial", a_storage.deal);
+  assert(read_step(1000, 9, 7, answer, &extended_log, reconciled, &value, &left, &failure));
+  assert(left == 3 && value->kind == VALUE_FLAG && value->flag == FLAG_YES);
+  /* A nonnumeric agreed value also leaves the older matching price usable. */
+  Value nonnumeric = {.kind = VALUE_TEXT, .text = text("negotiated")};
+  latest_storage.value.value = &nonnumeric;
+  assert(read_step(1000, 9, 7, answer, &extended_log, reconciled, &value, &left, &failure));
+  assert(left == 3 && value->kind == VALUE_FLAG && value->flag == FLAG_YES);
+  /* Once the newer agreement supersedes the matching price, it cannot
+     reconcile the amount through that older record. */
+  latest_storage.value.value = &latest_storage.number;
+  latest_storage.supersedes.value = agreed_ref;
+  assert(read_step(1000, 9, 7, answer, &extended_log, reconciled, &value, &left, &failure));
+  assert(left == 3 && value->kind == VALUE_FLAG && value->flag == FLAG_NO);
+  /* Budget 0 gives eBudget with left 0. */
+  left = 9;
+  assert(!read_step(1000, 0, 7, answer, a, tagged(&one_storage, "queryDiscountPct", "commercial", a_storage.deal),
+                    &value, &left, &failure));
+  assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
+}
+
 static void test_m2_read_callback_check(void) {
   const char *prefix =
       "def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-      "def ask : Query Flag := queryAmountReconciled deal "
+      "def ask : Query Flag := queryArtifactIntact (refTo (hashOf \"art-1\")) \"d\" "
       "def F : Type 0 := (n : Nat) -> Flag "
       "def ignore : (f : F) -> Nat := fun (f : F) => 3 ";
   char source[2048];
@@ -4461,7 +4654,7 @@ static void test_m2_read_check_parity(void) {
   const Bindings *environment = NULL;
   Failure failure = {0};
   assert(check_definitions(text("def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-                                "def ask : Query Flag := queryAmountReconciled deal"),
+                                "def ask : Query Flag := queryArtifactIntact (refTo (hashOf \"art-1\")) \"d\""),
                            &environment, &failure));
   const LType *flag;
   Tokens rest;
@@ -4553,6 +4746,7 @@ int main(void) {
   test_m2_record_queries();
   test_m2_read_callback_check();
   test_m2_read_check_parity();
+  test_m3_commitment_queries();
   test_m1_records();
   test_m1_projection_hash_failure();
   test_m1_projection_print_failure();

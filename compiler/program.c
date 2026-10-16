@@ -15,15 +15,6 @@ typedef struct {
   const LType *result;
 } Signature;
 
-/* A checked instance keeps the source byte and name of its definition for
-   print errors. NULL is the end. */
-struct Located {
-  Nat position;
-  Text name;
-  const Value *value;
-  const Located *tail;
-};
-
 static Tokens drop_token(Tokens tokens) {
   if (tokens.size == 0) return tokens;
   return (Tokens){tokens.items + 1, tokens.size - 1};

@@ -941,9 +941,17 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
    newest record first); each entry takes one work step, and hash_fuel bounds
    its serialized bytes. With a stop hash,
    the fold ends after the first entry whose hash is stop, and found gets 1.
-   project_find gives the record whose ref is ref, or NULL. Located (a list
-   of named values) is defined in program.c. */
+   project_find gives the record whose ref is ref, or NULL. Located is a list
+   of named values: a checked instance keeps the source byte and name of its
+   definition for print errors, and a record its ref, type and value. NULL is
+   the end. The read path walks the records (M3 part A). */
 typedef struct Located Located;
+struct Located {
+  Nat position;
+  Text name;
+  const Value *value;
+  const Located *tail;
+};
 int project_entries(Fuel hash_fuel, Nat position, Text name, const Values *items, Text stop, const Located **records, Nat *found,
                     Nat *budget, Failure *failure);
 const Value *project_find(Text ref, const Located *records);
