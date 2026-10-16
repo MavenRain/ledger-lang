@@ -4839,6 +4839,217 @@ static void test_m2_read_check_parity(void) {
   }
 }
 
+/* M4 part A: a hand-built entry (body tag tag with the field key) whose
+   state has the three fields k0, k1 and k2 in this order, then lastEvent =
+   last when last is not NULL (the fold replaces lastEvent; it does not add
+   it). */
+typedef struct {
+  Attrs fields[4];
+  Value state;
+  Tagged body_storage;
+  Attrs body;
+  Value entry;
+} PipelineEntry;
+
+static const Value *pipeline_entry(PipelineEntry *s, const char *tag, const char *key, const char *k0, const Value *v0,
+                                   const char *k1, const Value *v1, const char *k2, const Value *v2, const Value *last) {
+  s->fields[3] = (Attrs){text("lastEvent"), last, NULL};
+  s->fields[2] = (Attrs){text(k2), v2, last == NULL ? NULL : &s->fields[3]};
+  s->fields[1] = (Attrs){text(k1), v1, &s->fields[2]};
+  s->fields[0] = (Attrs){text(k0), v0, &s->fields[1]};
+  s->state = (Value){.kind = VALUE_ATTRS, .attrs = &s->fields[0]};
+  s->body = (Attrs){text("body"), tagged(&s->body_storage, tag, key, &s->state), NULL};
+  s->entry = (Value){.kind = VALUE_ATTRS, .attrs = &s->body};
+  return &s->entry;
+}
+
+/* The log of the M4 part A test plan: a Party p (entry 0); the Commercial
+   records d1 (qualify, some 1000, some "2026-11-01"), d2 (qualify, none,
+   none) and d3 (propose, some 500, some "2026-11-01") (entries 1 to 3); with
+   count 6 also an eventStageChanged of d1 with before "qualify" and after
+   "propose" (entry 4) and an eventAmountChanged of d2 (entry 5). deals holds
+   the Ref kindCommercial of d1, d2 and d3. */
+typedef struct {
+  Value qualify, propose, close_on, name, nothing, cents_1000, cents_500, kind, changed, amount_changed;
+  PipelineEntry entries[6];
+  Tagged subjects[2];
+  Attrs moves[2];
+  Value payloads[2];
+  Text hashes[6];
+  Value hash_texts[6];
+  Paired deal_storage[3];
+  const Value *deals[3];
+  Values items[6];
+  Value log;
+} PipelineLog;
+
+static void pipeline_hash(PipelineLog *s, const Value *entry, Nat at, Nat *left, Failure *failure) {
+  assert(entry_hash(1000, 1, 0, entry, &s->hashes[at], left, failure));
+  s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+}
+
+static const Value *pipeline_log(PipelineLog *s, Nat count, Nat *left, Failure *failure) {
+  s->qualify = (Value){.kind = VALUE_TEXT, .text = text("qualify")};
+  s->propose = (Value){.kind = VALUE_TEXT, .text = text("propose")};
+  s->close_on = (Value){.kind = VALUE_TEXT, .text = text("2026-11-01")};
+  s->name = (Value){.kind = VALUE_TEXT, .text = text("p")};
+  s->nothing = (Value){.kind = VALUE_NULL};
+  s->cents_1000 = (Value){.kind = VALUE_NAT, .number = 1000};
+  s->cents_500 = (Value){.kind = VALUE_NAT, .number = 500};
+  s->kind = (Value){.kind = VALUE_TEXT, .text = text("kindCommercial")};
+  s->changed = (Value){.kind = VALUE_TEXT, .text = text("eventStageChanged")};
+  s->amount_changed = (Value){.kind = VALUE_TEXT, .text = text("eventAmountChanged")};
+  const Value *e0 = pipeline_entry(&s->entries[0], "createsParty", "party", "name", &s->name, "email", &s->nothing,
+                                   "phone", &s->nothing, NULL);
+  const Value *e1 = pipeline_entry(&s->entries[1], "createsCommercial", "commercial", "stage", &s->qualify,
+                                   "amountCents", &s->cents_1000, "expectedCloseOn", &s->close_on, &s->nothing);
+  const Value *e2 = pipeline_entry(&s->entries[2], "createsCommercial", "commercial", "stage", &s->qualify,
+                                   "amountCents", &s->nothing, "expectedCloseOn", &s->nothing, &s->nothing);
+  const Value *e3 = pipeline_entry(&s->entries[3], "createsCommercial", "commercial", "stage", &s->propose,
+                                   "amountCents", &s->cents_500, "expectedCloseOn", &s->close_on, &s->nothing);
+  pipeline_hash(s, e0, 0, left, failure);
+  pipeline_hash(s, e1, 1, left, failure);
+  pipeline_hash(s, e2, 2, left, failure);
+  pipeline_hash(s, e3, 3, left, failure);
+  s->deals[0] = paired(&s->deal_storage[0], NULL, "kind", &s->kind, "hash", &s->hash_texts[1]);
+  s->deals[1] = paired(&s->deal_storage[1], NULL, "kind", &s->kind, "hash", &s->hash_texts[2]);
+  s->deals[2] = paired(&s->deal_storage[2], NULL, "kind", &s->kind, "hash", &s->hash_texts[3]);
+  s->moves[1] = (Attrs){text("after"), &s->propose, NULL};
+  s->moves[0] = (Attrs){text("before"), &s->qualify, &s->moves[1]};
+  s->payloads[0] = (Value){.kind = VALUE_ATTRS, .attrs = &s->moves[0]};
+  s->payloads[1] = (Value){.kind = VALUE_ATTRS, .attrs = NULL};
+  const Value *e4 = pipeline_entry(&s->entries[4], "createsEvent", "event", "type", &s->changed, "subject",
+                                   tagged(&s->subjects[0], "subjectCommercial", "commercial", s->deals[0]), "payload",
+                                   &s->payloads[0], NULL);
+  const Value *e5 = pipeline_entry(&s->entries[5], "createsEvent", "event", "type", &s->amount_changed, "subject",
+                                   tagged(&s->subjects[1], "subjectCommercial", "commercial", s->deals[1]), "payload",
+                                   &s->payloads[1], NULL);
+  pipeline_hash(s, e4, 4, left, failure);
+  pipeline_hash(s, e5, 5, left, failure);
+  s->items[5] = (Values){e5, NULL};
+  s->items[4] = (Values){e4, &s->items[5]};
+  s->items[3] = (Values){e3, count == 6 ? &s->items[4] : NULL};
+  s->items[2] = (Values){e2, &s->items[3]};
+  s->items[1] = (Values){e1, &s->items[2]};
+  s->items[0] = (Values){e0, &s->items[1]};
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->items[0]};
+  return &s->log;
+}
+
+static const Value pipeline_null = {.kind = VALUE_NULL};
+
+static const Value *pipeline_attr(const Attrs *attrs, Text key) {
+  return attrs == NULL ? &pipeline_null
+         : same_text(attrs->key, key) == 1 ? attrs->value
+                                           : pipeline_attr(attrs->rest, key);
+}
+
+static const Value *pipeline_field(const Value *value, const char *key) {
+  return pipeline_attr(value->kind == VALUE_ATTRS ? value->attrs : NULL, text(key));
+}
+
+/* The item at of the List value, or the null value. */
+static const Value *pipeline_at(const Value *value, Nat at) {
+  const Values *items = value->kind == VALUE_ITEMS ? value->items : NULL;
+  return items == NULL ? &pipeline_null
+         : at == 0     ? items->head
+                       : pipeline_at(&(Value){.kind = VALUE_ITEMS, .items = items->tail}, at - 1);
+}
+
+/* 1 when item is the Bucket (key, count, amountCents). */
+static Nat bucket_is(const Value *item, const char *key, Nat count, Nat cents) {
+  return same_text(pipeline_field(item, "key")->text, text(key)) == 1 &&
+         pipeline_field(item, "count")->kind == VALUE_NAT && pipeline_field(item, "count")->number == count &&
+         pipeline_field(item, "amountCents")->kind == VALUE_NAT && pipeline_field(item, "amountCents")->number == cents;
+}
+
+/* 1 when item is the StageStat (stage, entered, advanced, entriesInStage). */
+static Nat stage_stat_is(const Value *item, const char *stage, Nat entered, Nat advanced, Nat entries) {
+  return same_text(pipeline_field(item, "stage")->text, text(stage)) == 1 &&
+         pipeline_field(item, "entered")->number == entered && pipeline_field(item, "advanced")->number == advanced &&
+         pipeline_field(item, "entriesInStage")->number == entries &&
+         pipeline_field(item, "entriesInStage")->kind == VALUE_NAT;
+}
+
+/* 1 when item is the Ref kindCommercial whose hash is hash. */
+static Nat deal_ref_is(const Value *item, Text hash) {
+  return same_text(pipeline_field(item, "kind")->text, text("kindCommercial")) == 1 &&
+         same_text(pipeline_field(item, "hash")->text, hash) == 1;
+}
+
+/* M4 part A (design items 1 to 9): queryPipeline, queryStageStats and
+   queryStaleDeals on the logs of the test plan. Log A is the first four
+   entries (L = 4) and log B all six entries (L = 6). Each read takes 1 step
+   and 1 step for each projected entry. */
+static void test_m4_pipeline_queries(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PipelineLog a_storage, b_storage;
+  const Value *a = pipeline_log(&a_storage, 4, &left, &failure);
+  const Value *b = pipeline_log(&b_storage, 6, &left, &failure);
+  Value by_stage = {.kind = VALUE_TEXT, .text = text("pipelineByStage")};
+  Value by_close = {.kind = VALUE_TEXT, .text = text("pipelineByCloseDate")};
+  Value by_owner = {.kind = VALUE_TEXT, .text = text("pipelineByOwner")};
+  Value quiet[4] = {{.kind = VALUE_NAT, .number = 0}, {.kind = VALUE_NAT, .number = 1},
+                    {.kind = VALUE_NAT, .number = 2}, {.kind = VALUE_NAT, .number = 4}};
+  Tagged now_storage, as_of_storage, stats_storage, stale_storage[4];
+  Paired query_storage[4];
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *as_of_d1 = tagged(&as_of_storage, "momentAsOf", "entry", &a_storage.hash_texts[1]);
+  const Value *stats = tagged(&stats_storage, "queryStageStats", NULL, NULL);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* By stage at momentNow: qualify (2, 1000) and propose (1, 500); 1 + 4
+     steps. */
+  assert(read_step(1000, 9, 7, answer, a, paired(&query_storage[0], "queryPipeline", "key", &by_stage, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 4 && read_count(value->items) == 2 && bucket_is(pipeline_at(value, 0), "qualify", 2, 1000) == 1 &&
+         bucket_is(pipeline_at(value, 1), "propose", 1, 500) == 1);
+  /* By close date: "2026-11-01" (2, 1500) and the empty key of none (1, 0). */
+  assert(read_step(1000, 9, 7, answer, a, paired(&query_storage[1], "queryPipeline", "key", &by_close, "moment", now),
+                   &value, &left, &failure));
+  assert(read_count(value->items) == 2 && bucket_is(pipeline_at(value, 0), "2026-11-01", 2, 1500) == 1 &&
+         bucket_is(pipeline_at(value, 1), "", 1, 0) == 1);
+  /* By stage as of entry 1: qualify (1, 1000); 1 + 2 steps. */
+  assert(read_step(1000, 9, 7, answer, a,
+                   paired(&query_storage[2], "queryPipeline", "key", &by_stage, "moment", as_of_d1), &value, &left,
+                   &failure));
+  assert(left == 6 && read_count(value->items) == 1 && bucket_is(pipeline_at(value, 0), "qualify", 1, 1000) == 1);
+  /* By owner keeps the refusal: eRead at the read application, left 8. */
+  Failure refused = {0, {NULL, 0}, {NULL, 0}};
+  assert(!read_step(1000, 9, 7, answer, a, paired(&query_storage[3], "queryPipeline", "key", &by_owner, "moment", now),
+                    &value, &left, &refused));
+  assert(left == 8 && refused.position == 7 && same_text(refused.message, eRead));
+  /* queryStaleDeals 0 lists d1, d2 and d3; 4 (= L) gives nil. */
+  assert(read_step(1000, 9, 7, answer, a, tagged(&stale_storage[0], "queryStaleDeals", "quietEntries", &quiet[0]),
+                   &value, &left, &failure));
+  assert(read_count(value->items) == 3 && deal_ref_is(pipeline_at(value, 0), a_storage.hashes[1]) == 1 &&
+         deal_ref_is(pipeline_at(value, 1), a_storage.hashes[2]) == 1 &&
+         deal_ref_is(pipeline_at(value, 2), a_storage.hashes[3]) == 1);
+  assert(read_step(1000, 9, 7, answer, a, tagged(&stale_storage[3], "queryStaleDeals", "quietEntries", &quiet[3]),
+                   &value, &left, &failure));
+  assert(value->kind == VALUE_ITEMS && value->items == NULL);
+  /* Log B: qualify (entered 0, advanced 1, 7: d1 from 1 to 4, d2 from 2 to
+     6) and propose (entered 1, advanced 0, 5: d3 from 3 to 6, d1 from 4 to
+     6); 1 + 6 steps. */
+  assert(read_step(1000, 9, 7, answer, b, stats, &value, &left, &failure));
+  assert(left == 2 && read_count(value->items) == 2 && stage_stat_is(pipeline_at(value, 0), "qualify", 0, 1, 7) == 1 &&
+         stage_stat_is(pipeline_at(value, 1), "propose", 1, 0, 5) == 1);
+  /* The last positions are d1 4 (its lastEvent), d2 5 and d3 3: quiet 2
+     gives d3, quiet 1 gives d1 and d3. */
+  assert(read_step(1000, 9, 7, answer, b, tagged(&stale_storage[2], "queryStaleDeals", "quietEntries", &quiet[2]),
+                   &value, &left, &failure));
+  assert(read_count(value->items) == 1 && deal_ref_is(pipeline_at(value, 0), b_storage.hashes[3]) == 1);
+  assert(read_step(1000, 9, 7, answer, b, tagged(&stale_storage[1], "queryStaleDeals", "quietEntries", &quiet[1]),
+                   &value, &left, &failure));
+  assert(read_count(value->items) == 2 && deal_ref_is(pipeline_at(value, 0), b_storage.hashes[1]) == 1 &&
+         deal_ref_is(pipeline_at(value, 1), b_storage.hashes[3]) == 1);
+  /* Budget 0 gives eBudget with left 0. */
+  Failure starved = {0, {NULL, 0}, {NULL, 0}};
+  assert(!read_step(1000, 0, 7, answer, b, stats, &value, &left, &starved));
+  assert(left == 0 && same_text(starved.message, eBudget));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -4909,6 +5120,7 @@ int main(void) {
   test_m2_read_check_parity();
   test_m3_commitment_queries();
   test_m3_membership_queries();
+  test_m4_pipeline_queries();
   test_m1_records();
   test_m1_projection_hash_failure();
   test_m1_projection_print_failure();

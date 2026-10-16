@@ -3029,6 +3029,256 @@ static int read_membership(Fuel hash_fuel, Nat budget, Nat position, const Value
   return 1;
 }
 
+/* M4 part A (design item 4): a + b, or NAT_MAX when the sum is above
+   NAT_MAX. No wrap and no refusal. */
+static Nat nat_add_saturating(Nat a, Nat b) { return b <= NAT_MAX - a ? a + b : NAT_MAX; }
+
+/* Delta A-1: the number of records of walk. The record at the head of walk
+   has the position count - 1, thus the oldest record has the position 0. */
+static Nat record_count(const Located *walk) { return walk == NULL ? 0 : 1 + record_count(walk->tail); }
+
+/* Delta A-1: 1 when a record of walk has the ref ref, and position gets its
+   position. count is the number of records of walk. */
+static Nat record_position(Text ref, const Located *walk, Nat count, Nat *position) {
+  if (walk == NULL) return 0;
+  if (same_text(write_field(text_of_cstring("ref"), walk->value)->text, ref) != 1)
+    return record_position(ref, walk->tail, count - 1, position);
+  *position = count - 1;
+  return 1;
+}
+
+/* 1 when record is a record of the family family. */
+static Nat record_is(const Value *record, const char *family) {
+  return same_text(write_field(kType, record)->text, text_of_cstring(family));
+}
+
+/* Design item 5: the key text of the Commercial record: its stage, or with
+   close = 1 its expectedCloseOn. The value of some x is the value of x; none
+   gives the empty Text. */
+static Text pipeline_key(const Value *record, Nat close) {
+  const Value *key = commitment_field(record, close == 1 ? "expectedCloseOn" : "stage");
+  return key->kind == VALUE_TEXT ? key->text : text_of_cstring("");
+}
+
+/* 1 when record is a Commercial record with the key text key. */
+static Nat pipeline_match(Text key, Nat close, const Value *record) {
+  return record_is(record, "Commercial") == 1 && same_text(pipeline_key(record, close), key) == 1;
+}
+
+static Nat pipeline_seen(Text key, Nat close, const Located *walk) {
+  return walk == NULL ? 0 : pipeline_match(key, close, walk->value) == 1 ? 1 : pipeline_seen(key, close, walk->tail);
+}
+
+static Nat pipeline_count(Text key, Nat close, const Located *walk) {
+  return walk == NULL ? 0
+                      : nat_add_saturating(pipeline_match(key, close, walk->value), pipeline_count(key, close, walk->tail));
+}
+
+/* Design items 4 and 5: the saturating sum of amountCents = some n over the
+   records of the key. A none adds 0. */
+static Nat pipeline_cents(Text key, Nat close, const Located *walk) {
+  if (walk == NULL) return 0;
+  const Value *amount = commitment_field(walk->value, "amountCents");
+  Nat cents = pipeline_match(key, close, walk->value) != 1 ? 0 : amount->kind == VALUE_NAT ? amount->number : 0;
+  return nat_add_saturating(cents, pipeline_cents(key, close, walk->tail));
+}
+
+/* Design items 3 and 5: one Bucket for each distinct key text, in the order
+   of the first record of each key in log order. walk is newest first: a
+   Commercial record whose key no older record has is the first record of
+   its key, and its Bucket goes in front of the Buckets of the newer
+   records. records is the full walk. */
+static int pipeline_buckets(Nat close, const Located *walk, const Located *records, const Values **items,
+                            Failure *failure) {
+  if (walk == NULL) return 1;
+  Text key = pipeline_key(walk->value, close);
+  if (record_is(walk->value, "Commercial") == 1 && pipeline_seen(key, close, walk->tail) != 1) {
+    const Value *bucket;
+    const Values *fields =
+        values_item(text_value(key), values_item(nat_value(pipeline_count(key, close, records)),
+                                                 values_item(nat_value(pipeline_cents(key, close, records)), NULL)));
+    if (!write_value("Bucket", "makeBucket", fields, &bucket, failure)) return 0;
+    *items = values_item(bucket, *items);
+  }
+  return pipeline_buckets(close, walk->tail, records, items, failure);
+}
+
+/* Design item 6 (delta A-2): 1 when record is a stage change: an Event
+   record whose type is eventStageChanged, whose subject is subjectCommercial
+   and whose payload has a Text after. */
+static Nat stage_change(const Value *record) {
+  return record_is(record, "Event") == 1 &&
+         same_text(commitment_tag(commitment_field(record, "type")), text_of_cstring("eventStageChanged")) == 1 &&
+         same_text(write_field(kSchemaTag(), commitment_field(record, "subject"))->text,
+                   text_of_cstring("subjectCommercial")) == 1 &&
+         write_field(text_of_cstring("after"), commitment_field(record, "payload"))->kind == VALUE_TEXT;
+}
+
+/* 1 when the payload of record has the Text field key (before or after)
+   with the text stage. */
+static Nat stage_names(const Value *record, const char *key, Text stage) {
+  const Value *text = write_field(text_of_cstring(key), commitment_field(record, "payload"));
+  return text->kind == VALUE_TEXT && same_text(text->text, stage) == 1;
+}
+
+/* The ref of the deal of a stage change: the hash of its commercial Ref. */
+static Text stage_deal(const Value *record) {
+  return write_field(kRefHash(), write_field(text_of_cstring("commercial"), commitment_field(record, "subject")))->text;
+}
+
+/* 1 when a record of walk names stage: the stage of a Commercial record, or
+   the before or the after of a stage change. */
+static Nat stage_seen(Text stage, const Located *walk) {
+  if (walk == NULL) return 0;
+  Nat names = record_is(walk->value, "Commercial") == 1
+                  ? pipeline_match(stage, 0, walk->value)
+                  : stage_change(walk->value) == 1 && (stage_names(walk->value, "before", stage) == 1 ||
+                                                       stage_names(walk->value, "after", stage) == 1);
+  return names == 1 ? 1 : stage_seen(stage, walk->tail);
+}
+
+static const Values *stage_new(const Value *text, const Located *older, const Values *stages) {
+  return text->kind == VALUE_TEXT && stage_seen(text->text, older) != 1 ? values_item(text, stages) : stages;
+}
+
+/* Design item 6: the stage texts of walk in first-seen log order, in front
+   of stages. A Commercial record names its stage; a stage change names its
+   before, then its after. walk is newest first: a text that no older record
+   names goes in front of the texts of the newer records. */
+static const Values *stage_list(const Located *walk, const Values *stages) {
+  if (walk == NULL) return stages;
+  const Value *record = walk->value;
+  const Value *payload = commitment_field(record, "payload");
+  const Value *before = write_field(text_of_cstring("before"), payload);
+  const Value *after = write_field(text_of_cstring("after"), payload);
+  Nat again = before->kind == VALUE_TEXT && same_text(before->text, after->text) == 1;
+  const Values *changed = stage_new(before, walk->tail, again == 1 ? stages : stage_new(after, walk->tail, stages));
+  const Values *next = record_is(record, "Commercial") == 1
+                           ? stage_new(commitment_field(record, "stage"), walk->tail, stages)
+                           : stage_change(record) == 1 ? changed : stages;
+  return stage_list(walk->tail, next);
+}
+
+/* Design item 6: the number of stage changes of walk whose payload field
+   key (before or after) is stage. */
+static Nat stage_moves(Text stage, const char *key, const Located *walk) {
+  return walk == NULL ? 0
+                      : nat_add_saturating(stage_change(walk->value) == 1 && stage_names(walk->value, key, stage) == 1,
+                                           stage_moves(stage, key, walk->tail));
+}
+
+/* Design item 6: the exit of a stay of deal in stage from enter: the
+   position of the first stage change of the deal after enter with before =
+   stage, else best (L at the start). walk is newest first with count
+   records, thus each match replaces best and the oldest match wins. */
+static Nat stage_exit(Text deal, Text stage, Nat enter, const Located *walk, Nat count, Nat best) {
+  if (walk == NULL || count - 1 <= enter) return best;
+  Nat exits = stage_change(walk->value) == 1 && same_text(stage_deal(walk->value), deal) == 1 &&
+              stage_names(walk->value, "before", stage) == 1;
+  return stage_exit(deal, stage, enter, walk->tail, count - 1, exits == 1 ? count - 1 : best);
+}
+
+/* Design item 6: the sum of exit - enter over the stays in stage that start
+   in walk (count records). A stay starts at a Commercial record whose stage
+   is stage (its creation entry: the fold does not change stage) or at a
+   stage change with after = stage. records is the full walk with total
+   records. */
+static Nat stage_entries(Text stage, const Located *walk, Nat count, const Located *records, Nat total) {
+  if (walk == NULL) return 0;
+  const Value *record = walk->value;
+  Nat created = pipeline_match(stage, 0, record);
+  Nat moved = stage_change(record) == 1 && stage_names(record, "after", stage) == 1;
+  Text deal = created == 1 ? write_field(text_of_cstring("ref"), record)->text : stage_deal(record);
+  Nat enter = count - 1;
+  Nat stay = created == 1 || moved == 1 ? stage_exit(deal, stage, enter, records, total, total) - enter : 0;
+  return nat_add_saturating(stay, stage_entries(stage, walk->tail, count - 1, records, total));
+}
+
+/* Design items 3 and 6: one StageStat for each text of stages, in the
+   order of stages. */
+static int stage_stats(const Values *stages, const Located *records, Nat total, const Values **items, Failure *failure) {
+  if (stages == NULL) {
+    *items = NULL;
+    return 1;
+  }
+  Text stage = stages->head->text;
+  const Values *fields = values_item(
+      text_value(stage),
+      values_item(nat_value(stage_moves(stage, "after", records)),
+                  values_item(nat_value(stage_moves(stage, "before", records)),
+                              values_item(nat_value(stage_entries(stage, records, total, records, total)), NULL))));
+  const Values *rest;
+  const Value *stat;
+  if (!stage_stats(stages->tail, records, total, &rest, failure)) return 0;
+  if (!write_value("StageStat", "makeStageStat", fields, &stat, failure)) return 0;
+  *items = values_item(stat, rest);
+  return 1;
+}
+
+/* Design item 7: the last position of the Commercial record at position:
+   the larger of position and the position of its lastEvent record, when
+   some and found in records (total records). */
+static Nat stale_last(const Value *record, Nat position, const Located *records, Nat total) {
+  const Value *event = commitment_field(record, "lastEvent");
+  Nat seen = 0;
+  Nat known = event->kind == VALUE_ATTRS &&
+              record_position(write_field(kRefHash(), event)->text, records, total, &seen) == 1;
+  return known == 1 && seen > position ? seen : position;
+}
+
+/* Design item 7: the Commercial records of walk (count records) with no
+   entry among the last quiet entries (p + quiet < L), as Ref kindCommercial
+   items in log order: walk is newest first, and each kept record goes in
+   front of the items of the newer records. */
+static const Values *stale_deals(Nat quiet, const Located *walk, Nat count, const Located *records, Nat total,
+                                 const Values *items) {
+  if (walk == NULL) return items;
+  const Value *record = walk->value;
+  Nat stale = record_is(record, "Commercial") == 1 &&
+              nat_add_saturating(stale_last(record, count - 1, records, total), quiet) < total;
+  return stale_deals(quiet, walk->tail, count - 1, records, total,
+                     stale == 1 ? values_item(object_two(kRefKind(), text_value(text_of_cstring("kindCommercial")),
+                                                         kRefHash(), write_field(text_of_cstring("ref"), record)),
+                                              items)
+                                : items);
+}
+
+/* M4 part A (design items 1 to 9): queryPipeline (pipeline = 1),
+   queryStageStats (stats = 1) and queryStaleDeals. The records are the
+   projection of the log (project_entries): each entry takes one work step,
+   and the walks take no step. queryPipeline at momentAsOf h projects the
+   entries up to and including the first entry whose hash is h; a hash that
+   names no entry gives nil. pipelineByOwner and pipelineByTerritory give
+   eRead at position with left budget. queryStageStats and queryStaleDeals
+   read the full log. The position of a record is its index in log order,
+   and L is the number of records (delta A-1). */
+static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat pipeline,
+                         Nat stats, const Value **value, Nat *left, Failure *failure) {
+  Text key = commitment_tag(write_field(text_of_cstring("key"), query));
+  Nat close = same_text(key, text_of_cstring("pipelineByCloseDate"));
+  Nat refused = pipeline == 1 && (same_text(key, text_of_cstring("pipelineByOwner")) == 1 ||
+                                  same_text(key, text_of_cstring("pipelineByTerritory")) == 1);
+  *left = budget;
+  if (refused == 1) return fail_at(failure, position, eRead);
+  const Value *moment = write_field(text_of_cstring("moment"), query);
+  Nat asof = pipeline == 1 && same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf")) == 1;
+  Text none = {NULL, 0};
+  Text stop = asof == 1 ? write_field(text_of_cstring("entry"), moment)->text : none;
+  const Located *records = NULL;
+  Nat found;
+  if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  const Located *known = asof == 1 && found == 0 ? NULL : records;
+  Nat total = record_count(known);
+  const Value *quiet = write_field(text_of_cstring("quietEntries"), query);
+  const Values *answer = NULL;
+  if (pipeline == 1 && !pipeline_buckets(close, known, known, &answer, failure)) return 0;
+  if (stats == 1 && !stage_stats(stage_list(known, NULL), known, total, &answer, failure)) return 0;
+  *value = items_value(pipeline == 1 || stats == 1
+                           ? answer
+                           : stale_deals(quiet->kind == VALUE_NAT ? quiet->number : 0, known, total, known, total, NULL));
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -3036,8 +3286,9 @@ static int read_membership(Fuel hash_fuel, Nat budget, Nat position, const Value
    give the answer of items 9 to 11. queryCommercial and queryProjectionSound
    give the answer of read_record. The four Commitment tags give the answer
    of read_commitment (M3 part A), and the three Membership tags the answer
-   of read_membership (M3 part B). Each other tag gives eRead at position
-   (the read application) with left budget - 1. */
+   of read_membership (M3 part B), and the three Rollups tags of M4 part A
+   the answer of read_pipeline. Each other tag gives eRead at position (the
+   read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
   if (budget == 0) {
@@ -3058,6 +3309,9 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat members = same_text(tag, text_of_cstring("queryMembersOf"));
   Nat employer = same_text(tag, text_of_cstring("queryEmployer"));
   Nat changes = same_text(tag, text_of_cstring("queryJobChanges"));
+  Nat pipeline = same_text(tag, text_of_cstring("queryPipeline"));
+  Nat stats = same_text(tag, text_of_cstring("queryStageStats"));
+  Nat stale = same_text(tag, text_of_cstring("queryStaleDeals"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (commercial == 1 || sound == 1)
@@ -3066,6 +3320,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
     return read_commitment(hash_fuel, ready, position, items, query, terms, history, reconciled, value, left, failure);
   if (members == 1 || employer == 1 || changes == 1)
     return read_membership(hash_fuel, ready, position, items, query, members, employer, value, left, failure);
+  if (pipeline == 1 || stats == 1 || stale == 1)
+    return read_pipeline(hash_fuel, ready, position, items, query, pipeline, stats, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;

@@ -638,6 +638,73 @@ test('queryProjectionSound gives flagNo on another state', () => {
   assert.equal(soundOf('(refTo (hashOf "e9"))', 'other'), false);
 });
 
+// M4 part A: the pipeline queries. The log: a Party, then three deals (qualify with some 1000 and some "2026-11-01",
+// qualify with none and none, propose with some 500 and some "2026-11-01"). stageLog adds an eventStageChanged of
+// the first deal (qualify to propose) and an eventNoteAdded of the second deal.
+const pipePre = 'def acme : Ref kindParty := refTo (hashOf "party-acme") ' +
+  'def company : Party := makeParty partyOrg "Acme" none nil attrsEnd none none ' +
+  'def pe : Entry := makeEntry none (actorHuman acme) (createsParty company) ' +
+  'def d1 : Commercial := makeCommercial commercialDeal "First" acme "qualify" (some 1000) "USD" (some "2026-11-01") ' +
+  'statusOpen attrsEnd none def e1 : Entry := makeEntry none (actorHuman acme) (createsCommercial d1) ' +
+  'def d2 : Commercial := makeCommercial commercialDeal "Second" acme "qualify" none "USD" none ' +
+  'statusOpen attrsEnd none def e2 : Entry := makeEntry none (actorHuman acme) (createsCommercial d2) ' +
+  'def d3 : Commercial := makeCommercial commercialDeal "Third" acme "propose" (some 500) "USD" (some "2026-11-01") ' +
+  'statusOpen attrsEnd none def e3 : Entry := makeEntry none (actorHuman acme) (createsCommercial d3) ';
+const pipeLog = `${pipePre}def book : Log := cons pe (cons e1 (cons e2 (cons e3 nil))) `;
+const stageLog = () => {
+  const { e1, e2 } = named(pipePre);
+  return `${pipePre}def move : Event := makeEvent eventStageChanged (subjectCommercial ${dealOf(e1)}) none none ` +
+    '(attrsField "before" (valueText "qualify") (attrsField "after" (valueText "propose") attrsEnd)) none ' +
+    'def me : Entry := makeEntry none (actorHuman acme) (createsEvent move) ' +
+    `def note : Event := makeEvent eventNoteAdded (subjectCommercial ${dealOf(e2)}) none none attrsEnd none ` +
+    'def ne : Entry := makeEntry none (actorHuman acme) (createsEvent note) ' +
+    'def book : Log := cons pe (cons e1 (cons e2 (cons e3 (cons me (cons ne nil))))) ';
+};
+const bucketOf = (key, count, amountCents) => ({ key, count, amountCents });
+const pipelineOf = (key, moment) => termAnswer(pipeLog, 'List Bucket', `queryPipeline ${key} ${moment}`);
+const staleOf = (log, quiet) => termAnswer(log, 'List (Ref kindCommercial)', `queryStaleDeals ${quiet}`);
+const dealRef = entry => ({ kind: 'kindCommercial', hash: sha256(entry) });
+
+test('queryPipeline by stage groups the deals and sums amountCents', () => {
+  assert.deepEqual(pipelineOf('pipelineByStage', 'momentNow'), [bucketOf('qualify', 2, 1000), bucketOf('propose', 1, 500)]);
+});
+
+test('queryPipeline by close date groups by expectedCloseOn with the empty key for none', () => {
+  assert.deepEqual(pipelineOf('pipelineByCloseDate', 'momentNow'), [bucketOf('2026-11-01', 2, 1500), bucketOf('', 1, 0)]);
+});
+
+test('queryPipeline as of an entry stops at that entry', () => {
+  assert.deepEqual(pipelineOf('pipelineByStage', asOf(named(pipeLog).e1)), [bucketOf('qualify', 1, 1000)]);
+});
+
+test('queryPipeline by owner keeps the refusal', () => {
+  reject(`${pipeLog}def r : List Bucket := read (List Bucket) book (queryPipeline pipelineByOwner momentNow)`, readError, 'read');
+});
+
+test('queryStageStats counts entered, advanced and the entries in each stage', () => {
+  const stat = (stage, entered, advanced, entriesInStage) => ({ stage, entered, advanced, entriesInStage });
+  assert.deepEqual(termAnswer(stageLog(), 'List StageStat', 'queryStageStats'), [stat('qualify', 0, 1, 7), stat('propose', 1, 0, 5)]);
+});
+
+test('queryStaleDeals lists the deals with no entry in the last q entries', () => {
+  const log = stageLog();
+  const { e1, e3 } = named(log);
+  assert.deepEqual(staleOf(log, 1), [dealRef(e1), dealRef(e3)]);
+});
+
+test('queryStaleDeals 0 lists every deal and the log length gives nil', () => {
+  const { e1, e2, e3 } = named(pipeLog);
+  assert.deepEqual(staleOf(pipeLog, 0), [dealRef(e1), dealRef(e2), dealRef(e3)]);
+  assert.deepEqual(staleOf(pipeLog, 4), []);
+});
+
+test('queryStaleDeals counts the last event of a deal', () => {
+  const log = stageLog();
+  const { e1, e3 } = named(log);
+  assert.deepEqual(staleOf(pipeLog, 2), [dealRef(e1)]);
+  assert.deepEqual(staleOf(log, 2), [dealRef(e3)]);
+});
+
 test('an M1 program keeps its records key', () => {
   const { ce } = named(recordLog());
   const { records } = run(recordLog());

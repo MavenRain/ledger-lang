@@ -8,6 +8,8 @@
 /* A natural number. Number tokens stay below 2^30, so no compiler
    computation wraps. Subtraction stops at zero (nat_sub). */
 typedef uint32_t Nat;
+/* The largest Nat (the saturating sum of the M4 rollups). */
+#define NAT_MAX UINT32_MAX
 
 /* The byte limit for compiler output and an entry's hash encoding. */
 #define OUTPUT_LIMIT ((Nat)4 * 1024 * 1024)
