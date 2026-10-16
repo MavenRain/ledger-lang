@@ -705,6 +705,111 @@ test('queryStaleDeals counts the last event of a deal', () => {
   assert.deepEqual(staleOf(log, 2), [dealRef(e3)]);
 });
 
+// M4 part B: the account queries. The log: the Party records acme and beta (orgs) and pat (a person) (entries 0 to 2);
+// the deal d1 of acme (3) and the deal d2 of beta (4); a commitmentDate "2027-01-31" commitmentAgreed of d1 (5), a
+// commitmentTerm of d1 (6), a commitmentDate "2027-03-31" commitmentProposed of d2 (7), a commitmentDate "2027-06-30"
+// commitmentAgreed of d2 that supersedes entry 7 (8); a current Membership of pat at acme (9), an ended Membership of
+// another person at acme (10), an Assignment roleOwner of acme (11), an Artifact of d1 (12), an Event of d1 (13) and an
+// Event of beta (14). Each stage names the entry hashes of the stage before it.
+const accountPre = 'def who : Ref kindParty := refTo (hashOf "party-who") ' +
+  'def evidence : Ref kindArtifact := refTo (hashOf "email-entry") ' +
+  'def provenance : Provenance := makeProvenance (some evidence) none (some 95) ' +
+  'def acmeParty : Party := makeParty partyOrg "Acme" none nil attrsEnd none none ' +
+  'def pa : Entry := makeEntry none (actorHuman who) (createsParty acmeParty) ' +
+  'def betaParty : Party := makeParty partyOrg "Beta" none nil attrsEnd none none ' +
+  'def pb : Entry := makeEntry none (actorHuman who) (createsParty betaParty) ' +
+  'def patParty : Party := makeParty partyPerson "Pat" none nil attrsEnd none none ' +
+  'def pp : Entry := makeEntry none (actorHuman who) (createsParty patParty) ';
+const accountDeals = () => {
+  const { pa, pb, pp } = named(accountPre);
+  return `${accountPre}def acme : Ref kindParty := ${dealOf(pa)} def beta : Ref kindParty := ${dealOf(pb)} ` +
+    `def pat : Ref kindParty := ${dealOf(pp)} ` +
+    'def d1 : Commercial := makeCommercial commercialDeal "First" acme "qualify" (some 1000) "USD" none statusOpen ' +
+    'attrsEnd none def ce1 : Entry := makeEntry none (actorHuman who) (createsCommercial d1) ' +
+    'def d2 : Commercial := makeCommercial commercialDeal "Second" beta "qualify" (some 500) "USD" none statusOpen ' +
+    'attrsEnd none def ce2 : Entry := makeEntry none (actorHuman who) (createsCommercial d2) ';
+};
+const accountDates = () => {
+  const pre = accountDeals();
+  const { ce1, ce2 } = named(pre);
+  return `${pre}def dealA : Ref kindCommercial := ${dealOf(ce1)} def dealB : Ref kindCommercial := ${dealOf(ce2)} ` +
+    `def dateA : Commitment := ${commitmentOf('dealA', 'commitmentDate', '(valueText "2027-01-31")', 'commitmentAgreed', 'none')} ` +
+    'def ca : Entry := makeEntry none (actorHuman who) (createsCommitment dateA) ' +
+    `def termA : Commitment := ${commitmentOf('dealA', 'commitmentTerm', '(valueText "net_30")', 'commitmentAgreed', 'none')} ` +
+    'def ta : Entry := makeEntry none (actorHuman who) (createsCommitment termA) ' +
+    `def dateB : Commitment := ${commitmentOf('dealB', 'commitmentDate', '(valueText "2027-03-31")', 'commitmentProposed', 'none')} ` +
+    'def cb : Entry := makeEntry none (actorHuman who) (createsCommitment dateB) ';
+};
+const accountLog = () => {
+  const pre = accountDates();
+  const older = `(some ${dealOf(named(pre).cb)})`;
+  return `${pre}def dateC : Commitment := ` +
+    `${commitmentOf('dealB', 'commitmentDate', '(valueText "2027-06-30")', 'commitmentAgreed', older)} ` +
+    'def cc : Entry := makeEntry none (actorHuman who) (createsCommitment dateC) ' +
+    'def current : Membership := makeMembership pat acme none flagYes none provenance attrsEnd ' +
+    'def me : Entry := makeEntry none (actorHuman who) (createsMembership current) ' +
+    'def ended : Membership := makeMembership (refTo (hashOf "party-sam")) acme none flagNo ' +
+    '(some (refTo (hashOf "left-acme"))) provenance attrsEnd ' +
+    'def ee : Entry := makeEntry none (actorHuman who) (createsMembership ended) ' +
+    'def owner : Assignment := makeAssignment (accountParty acme) who roleOwner none none provenance ' +
+    'def oe : Entry := makeEntry none (actorHuman who) (createsAssignment owner) ' +
+    'def mail : Artifact := makeArtifact artifactEmail "abc123" "s3://mail/1" "message/rfc822" ' +
+    '(cons (accountCommercial dealA) nil) attrsEnd ' +
+    'def ae : Entry := makeEntry none (actorHuman who) (createsArtifact mail) ' +
+    'def dealNote : Event := makeEvent eventNoteAdded (subjectCommercial dealA) none none attrsEnd none ' +
+    'def ve : Entry := makeEntry none (actorHuman who) (createsEvent dealNote) ' +
+    'def partyNote : Event := makeEvent eventNoteAdded (subjectParty beta) none none attrsEnd none ' +
+    'def ne : Entry := makeEntry none (actorHuman who) (createsEvent partyNote) ' +
+    'def book : Log := cons pa (cons pb (cons pp (cons ce1 (cons ce2 (cons ca (cons ta (cons cb (cons cc (cons me ' +
+    '(cons ee (cons oe (cons ae (cons ve (cons ne nil)))))))))))))) ';
+};
+const accountRef = (kind, entry) => ({ kind, hash: sha256(entry) });
+const renewalOf = (deal, date, term) => ({ commercial: dealRef(deal), date, term });
+const renewalsOf = log => termAnswer(log, 'List Renewal', 'queryRenewals');
+const accountOf = (log, moment) => named(`${log}def r : Account360 := read Account360 book (queryAccount360 acme ${moment})`);
+
+test('queryRenewals lists the in-force date commitment of each deal with its term', () => {
+  const log = accountLog();
+  const { ce1, ce2, ta } = named(log);
+  assert.deepEqual(renewalsOf(log), [renewalOf(ce1, '2027-01-31', termRef(ta)), renewalOf(ce2, '2027-06-30', null)]);
+});
+
+test('queryRenewals skips a superseded date', () => {
+  const dates = `${accountDates()}def book : Log := cons pa (cons pb (cons pp (cons ce1 (cons ce2 (cons ca ` +
+    '(cons ta (cons cb nil))))))) ';
+  const { ce1, ce2, ta } = named(dates);
+  assert.deepEqual(renewalsOf(dates), [renewalOf(ce1, '2027-01-31', termRef(ta)), renewalOf(ce2, '2027-03-31', null)]);
+  assert.deepEqual(renewalsOf(accountLog())[1], renewalOf(ce2, '2027-06-30', null));
+});
+
+test('queryAccount360 gives the party record and its current memberships', () => {
+  const { r, acmeParty, me } = accountOf(accountLog(), 'momentNow');
+  assert.deepEqual(r.party, acmeParty);
+  assert.deepEqual(r.memberships, [accountRef('kindMembership', me)]);
+});
+
+test('queryAccount360 lists the commercials, assignments, artifacts and timeline of the party', () => {
+  const { r, ce1, oe, ae, ve } = accountOf(accountLog(), 'momentNow');
+  assert.deepEqual(r.commercials, [dealRef(ce1)]);
+  assert.deepEqual(r.assignments, [accountRef('kindAssignment', oe)]);
+  assert.deepEqual(r.artifacts, [accountRef('kindArtifact', ae)]);
+  assert.deepEqual(r.timeline, [accountRef('kindEvent', ve)]);
+});
+
+test('queryAccount360 as of an entry stops at that entry', () => {
+  const log = accountLog();
+  const { r, acmeParty, ce1 } = accountOf(log, asOf(named(log).ce1));
+  assert.deepEqual(r, { party: acmeParty, memberships: [], commercials: [dealRef(ce1)], assignments: [], artifacts: [],
+    timeline: [] });
+});
+
+test('queryAccount360 of an unknown party keeps the refusal', () => {
+  const log = accountLog();
+  const read = party => `${log}def r : Account360 := read Account360 book (queryAccount360 ${party} momentNow)`;
+  reject(read('(refTo (hashOf "party-none"))'), readError, 'read');
+  reject(read(dealOf(named(log).ce1)), readError, 'read');
+});
+
 test('an M1 program keeps its records key', () => {
   const { ce } = named(recordLog());
   const { records } = run(recordLog());

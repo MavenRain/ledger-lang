@@ -3279,6 +3279,187 @@ static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values 
   return 1;
 }
 
+/* M4 part B (design item 11): the oldest record of walk that is an in-force
+   Commitment record (commitment_in_force over records, the full fold) of the
+   commercial whose ref is deal, with the kind tag kind; NULL when there is
+   none. walk is newest first. */
+static const Value *renewal_first(Text deal, const char *kind, const Located *walk, const Located *records) {
+  if (walk == NULL) return NULL;
+  const Value *older = renewal_first(deal, kind, walk->tail, records);
+  const Value *record = walk->value;
+  Nat keep = record_is(record, "Commitment") == 1 &&
+             same_text(write_field(kRefHash(), commitment_field(record, "commercial"))->text, deal) == 1 &&
+             same_text(commitment_tag(commitment_field(record, "kind")), text_of_cstring(kind)) == 1 &&
+             commitment_in_force(record, records) == 1;
+  return older != NULL ? older : keep == 1 ? record : NULL;
+}
+
+/* A Ref item of the kind kind with the ref of record (the form of
+   commitment_item). */
+static const Value *account_item(const Value *record, const char *kind) {
+  return object_two(kRefKind(), text_value(text_of_cstring(kind)), kRefHash(),
+                    write_field(text_of_cstring("ref"), record));
+}
+
+/* M4 part B (design item 11): the Renewal of each Commercial record of walk
+   that has an in-force commitmentDate record, in log order: walk is newest
+   first, and each Renewal goes in front of the items of the newer records.
+   The date is the Text of the value of the oldest such record ("" for a
+   value that is not a Text, delta B-1). The term is the Ref kindCommitment
+   item of the oldest in-force commitmentTerm record of the deal, else none
+   (null). */
+static int renewal_items(const Located *walk, const Located *records, const Values *items, const Values **answer,
+                         Failure *failure) {
+  if (walk == NULL) {
+    *answer = items;
+    return 1;
+  }
+  const Value *record = walk->value;
+  Text deal = write_field(text_of_cstring("ref"), record)->text;
+  const Value *date =
+      record_is(record, "Commercial") == 1 ? renewal_first(deal, "commitmentDate", records, records) : NULL;
+  if (date == NULL) return renewal_items(walk->tail, records, items, answer, failure);
+  const Value *date_value = commitment_field(date, "value");
+  const Value *term = renewal_first(deal, "commitmentTerm", records, records);
+  const Values *fields =
+      values_item(account_item(record, "kindCommercial"),
+                  values_item(date_value->kind == VALUE_TEXT ? date_value : text_value(text_of_cstring("")),
+                              values_item(term != NULL ? commitment_item(term) : &null_value, NULL)));
+  const Value *renewal = NULL;
+  if (!write_value("Renewal", "makeRenewal", fields, &renewal, failure)) return 0;
+  return renewal_items(walk->tail, records, values_item(renewal, items), answer, failure);
+}
+
+/* M4 part B (design item 12): the lists of an Account360 after its party. */
+typedef enum {
+  ACCOUNT_MEMBERSHIPS,
+  ACCOUNT_COMMERCIALS,
+  ACCOUNT_ASSIGNMENTS,
+  ACCOUNT_ARTIFACTS,
+  ACCOUNT_TIMELINE
+} AccountList;
+
+/* 1 when the Ref hash of the field key of value is hash. */
+static Nat account_ref(const Value *value, const char *key, Text hash) {
+  return same_text(write_field(kRefHash(), write_field(text_of_cstring(key), value))->text, hash);
+}
+
+/* 1 when a Ref item of items has the hash hash. */
+static Nat account_listed(Text hash, const Values *items) {
+  return items != NULL &&
+         (same_text(write_field(kRefHash(), items->head)->text, hash) == 1 || account_listed(hash, items->tail) == 1);
+}
+
+/* 1 when the Account or Subject value subject names the party whose hash is
+   party (accountParty, subjectParty) or a deal of the Ref items commercials
+   (accountCommercial, subjectCommercial). */
+static Nat account_names(const Value *subject, Text party, const Values *commercials) {
+  Text tag = commitment_tag(subject);
+  Nat of_party =
+      same_text(tag, text_of_cstring("accountParty")) == 1 || same_text(tag, text_of_cstring("subjectParty")) == 1;
+  Nat of_deal = same_text(tag, text_of_cstring("accountCommercial")) == 1 ||
+                same_text(tag, text_of_cstring("subjectCommercial")) == 1;
+  return of_party == 1 ? account_ref(subject, "party", party)
+                       : of_deal == 1 && account_listed(write_field(kRefHash(), write_field(text_of_cstring("commercial"),
+                                                                                             subject))
+                                                            ->text,
+                                                        commercials) == 1;
+}
+
+/* 1 when an item of the Account list subjects names the party or a deal. */
+static Nat account_any(const Values *subjects, Text party, const Values *commercials) {
+  return subjects != NULL &&
+         (account_names(subjects->head, party, commercials) == 1 || account_any(subjects->tail, party, commercials) == 1);
+}
+
+/* M4 part B (design item 12): 1 when the list list of the Account360 of the
+   Ref value party (its hash hash) keeps record. commercials holds the Ref
+   kindCommercial items of the party. */
+static Nat account_keeps(AccountList list, const Value *record, const Value *party, Text hash,
+                         const Values *commercials) {
+  const Value *subjects = commitment_field(record, "subjects");
+  switch (list) {
+    case ACCOUNT_MEMBERSHIPS:
+      return membership_current(record) == 1 &&
+             (membership_of(record, "person", party) == 1 || membership_of(record, "org", party) == 1);
+    case ACCOUNT_COMMERCIALS:
+      return record_is(record, "Commercial") == 1 && account_ref(write_field(kValue, record), "party", hash) == 1;
+    case ACCOUNT_ASSIGNMENTS:
+      return record_is(record, "Assignment") == 1 && commitment_field(record, "endedBy")->kind == VALUE_NULL &&
+             account_names(commitment_field(record, "subject"), hash, commercials) == 1;
+    case ACCOUNT_ARTIFACTS:
+      return record_is(record, "Artifact") == 1 && subjects->kind == VALUE_ITEMS &&
+             account_any(subjects->items, hash, commercials) == 1;
+    case ACCOUNT_TIMELINE:
+      return record_is(record, "Event") == 1 && account_names(commitment_field(record, "subject"), hash, commercials) == 1;
+  }
+  return 0;
+}
+
+/* The Ref items of the kind kind of the records of walk that list keeps, in
+   log order: walk is newest first, and each kept record goes in front of the
+   items of the newer records. */
+static const Values *account_list(AccountList list, const char *kind, const Located *walk, const Value *party, Text hash,
+                                  const Values *commercials, const Values *items) {
+  if (walk == NULL) return items;
+  Nat keep = account_keeps(list, walk->value, party, hash, commercials);
+  return account_list(list, kind, walk->tail, party, hash, commercials,
+                      keep == 1 ? values_item(account_item(walk->value, kind), items) : items);
+}
+
+/* M4 part B (design item 12): the Account360 of the Party record of walk
+   whose ref is the hash of the Ref value party. No such record gives eRead
+   at position with left budget (Account360 is not an Option). Each list is
+   in log order, and an empty list is nil. */
+static int account_view(const Value *party, const Located *walk, Nat budget, Nat position, const Value **value,
+                        Nat *left, Failure *failure) {
+  Text hash = write_field(kRefHash(), party)->text;
+  const Value *record = project_find(hash, walk);
+  if (record == NULL || record_is(record, "Party") != 1) {
+    *left = budget;
+    return fail_at(failure, position, eRead);
+  }
+  const Values *commercials = account_list(ACCOUNT_COMMERCIALS, "kindCommercial", walk, party, hash, NULL, NULL);
+  const Values *memberships = account_list(ACCOUNT_MEMBERSHIPS, "kindMembership", walk, party, hash, commercials, NULL);
+  const Values *assignments = account_list(ACCOUNT_ASSIGNMENTS, "kindAssignment", walk, party, hash, commercials, NULL);
+  const Values *artifacts = account_list(ACCOUNT_ARTIFACTS, "kindArtifact", walk, party, hash, commercials, NULL);
+  const Values *timeline = account_list(ACCOUNT_TIMELINE, "kindEvent", walk, party, hash, commercials, NULL);
+  const Values *fields =
+      values_item(write_field(kValue, record),
+                  values_item(items_value(memberships),
+                              values_item(items_value(commercials),
+                                          values_item(items_value(assignments),
+                                                      values_item(items_value(artifacts),
+                                                                  values_item(items_value(timeline), NULL))))));
+  return write_value("Account360", "makeAccount360", fields, value, failure);
+}
+
+/* M4 part B (design items 10 to 13): queryRenewals (renewals = 1) and
+   queryAccount360. The records are the projection of the log
+   (project_entries), as read_pipeline: each entry takes one work step, and
+   the walks take no step. queryRenewals reads the full log.
+   queryAccount360 at momentAsOf h projects the entries up to and including
+   the first entry whose hash is h; a hash that names no entry gives no
+   records. */
+static int read_account(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat renewals,
+                        const Value **value, Nat *left, Failure *failure) {
+  const Value *moment = write_field(text_of_cstring("moment"), query);
+  Nat asof = renewals != 1 && same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf")) == 1;
+  Text none = {NULL, 0};
+  Text stop = asof == 1 ? write_field(text_of_cstring("entry"), moment)->text : none;
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  const Located *known = asof == 1 && found == 0 ? NULL : records;
+  if (renewals != 1)
+    return account_view(write_field(text_of_cstring("party"), query), known, budget, position, value, left, failure);
+  const Values *answer = NULL;
+  if (!renewal_items(known, known, NULL, &answer, failure)) return 0;
+  *value = items_value(answer);
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -3286,8 +3467,9 @@ static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values 
    give the answer of items 9 to 11. queryCommercial and queryProjectionSound
    give the answer of read_record. The four Commitment tags give the answer
    of read_commitment (M3 part A), and the three Membership tags the answer
-   of read_membership (M3 part B), and the three Rollups tags of M4 part A
-   the answer of read_pipeline. Each other tag gives eRead at position (the
+   of read_membership (M3 part B), the three Rollups tags of M4 part A the
+   answer of read_pipeline, and queryRenewals and queryAccount360 (M4 part B)
+   the answer of read_account. Each other tag gives eRead at position (the
    read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
@@ -3312,6 +3494,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat pipeline = same_text(tag, text_of_cstring("queryPipeline"));
   Nat stats = same_text(tag, text_of_cstring("queryStageStats"));
   Nat stale = same_text(tag, text_of_cstring("queryStaleDeals"));
+  Nat renewals = same_text(tag, text_of_cstring("queryRenewals"));
+  Nat account = same_text(tag, text_of_cstring("queryAccount360"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (commercial == 1 || sound == 1)
@@ -3322,6 +3506,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
     return read_membership(hash_fuel, ready, position, items, query, members, employer, value, left, failure);
   if (pipeline == 1 || stats == 1 || stale == 1)
     return read_pipeline(hash_fuel, ready, position, items, query, pipeline, stats, value, left, failure);
+  if (renewals == 1 || account == 1)
+    return read_account(hash_fuel, ready, position, items, query, renewals, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;

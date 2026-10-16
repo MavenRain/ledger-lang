@@ -5050,6 +5050,231 @@ static void test_m4_pipeline_queries(void) {
   assert(left == 0 && same_text(starved.message, eBudget));
 }
 
+/* An entry {body: tagged(tag, key, state)} whose state has count fields
+   (count at most 5), for the log of the M4 part B test plan. */
+typedef struct {
+  Attrs fields[5];
+  Value state;
+  Tagged body_storage;
+  Attrs body;
+  Value entry;
+} AccountEntry;
+
+static Attrs *account_fields(AccountEntry *s, Nat at, Nat count, const char *const *keys, const Value *const *values) {
+  if (at >= count || at >= 5) return NULL;
+  s->fields[at] = (Attrs){text(keys[at]), values[at], account_fields(s, at + 1, count, keys, values)};
+  return &s->fields[at];
+}
+
+static const Value *account_entry(AccountEntry *s, const char *tag, const char *key, Nat count, const char *const *keys,
+                                  const Value *const *values) {
+  s->state = (Value){.kind = VALUE_ATTRS, .attrs = account_fields(s, 0, count, keys, values)};
+  s->body = (Attrs){text("body"), tagged(&s->body_storage, tag, key, &s->state), NULL};
+  s->entry = (Value){.kind = VALUE_ATTRS, .attrs = &s->body};
+  return &s->entry;
+}
+
+static Value account_text(const char *chars) { return (Value){.kind = VALUE_TEXT, .text = text(chars)}; }
+
+/* The log of the M4 part B test plan (L = 15): the Party records acme, beta
+   and pat (entries 0 to 2); the Commercial d1 of acme (3) and d2 of beta (4);
+   a commitmentDate "2027-01-31" commitmentAgreed of d1 (5), a commitmentTerm
+   of d1 (6), a commitmentDate "2027-03-31" commitmentProposed of d2 (7) and a
+   commitmentDate "2027-06-30" commitmentAgreed of d2 that supersedes entry 7
+   (8); a current Membership of pat at acme (9) and an ended Membership of
+   another person at acme (10); an Assignment of acme (11); an Artifact of d1
+   (12); an Event of d1 (13) and an Event of beta (14). refs holds the Ref
+   items of acme, beta, pat, the other person, the event that ends entry 10,
+   d1, d2 and entry 7. */
+typedef struct {
+  Value names[3], kinds[4], dates[4], nothing, date, term, agreed, proposed, other, ended;
+  AccountEntry entries[15];
+  Text hashes[15];
+  Value hash_texts[15];
+  Paired ref_storage[8];
+  const Value *refs[8];
+  Tagged subjects[4];
+  Values subject_items;
+  Value subject_list;
+  Values items[15];
+  Value log;
+} AccountLog;
+
+static void account_hashes(AccountLog *s, const Value *const *entry, Nat at, Nat end, Nat *left, Failure *failure) {
+  if (at >= end || at >= 15) return;
+  assert(entry_hash(1000, 1, 0, entry[at], &s->hashes[at], left, failure));
+  s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+  account_hashes(s, entry, at + 1, end, left, failure);
+}
+
+static Values *account_items(AccountLog *s, const Value *const *entry, Nat at) {
+  if (at >= 15) return NULL;
+  s->items[at] = (Values){entry[at], account_items(s, entry, at + 1)};
+  return &s->items[at];
+}
+
+static const Value *account_log(AccountLog *s, Nat *left, Failure *failure) {
+  const char *const party_keys[] = {"name"};
+  const char *const commercial_keys[] = {"party", "lastEvent"};
+  const char *const commitment_keys[] = {"commercial", "kind", "value", "status", "supersedes"};
+  const char *const membership_keys[] = {"person", "org", "endedBy"};
+  const char *const assignment_keys[] = {"subject", "endedBy"};
+  const char *const artifact_keys[] = {"subjects"};
+  const char *const event_keys[] = {"subject"};
+  const Value *entry[15];
+  s->names[0] = account_text("acme");
+  s->names[1] = account_text("beta");
+  s->names[2] = account_text("pat");
+  s->kinds[0] = account_text("kindParty");
+  s->kinds[1] = account_text("kindCommercial");
+  s->kinds[2] = account_text("kindCommitment");
+  s->kinds[3] = account_text("kindEvent");
+  s->dates[0] = account_text("2027-01-31");
+  s->dates[1] = account_text("net_30");
+  s->dates[2] = account_text("2027-03-31");
+  s->dates[3] = account_text("2027-06-30");
+  s->nothing = (Value){.kind = VALUE_NULL};
+  s->date = account_text("commitmentDate");
+  s->term = account_text("commitmentTerm");
+  s->agreed = account_text("commitmentAgreed");
+  s->proposed = account_text("commitmentProposed");
+  s->other = account_text("party-sam");
+  s->ended = account_text("left-acme");
+  entry[0] = account_entry(&s->entries[0], "createsParty", "party", 1, party_keys, (const Value *[]){&s->names[0]});
+  entry[1] = account_entry(&s->entries[1], "createsParty", "party", 1, party_keys, (const Value *[]){&s->names[1]});
+  entry[2] = account_entry(&s->entries[2], "createsParty", "party", 1, party_keys, (const Value *[]){&s->names[2]});
+  account_hashes(s, entry, 0, 3, left, failure);
+  s->refs[0] = paired(&s->ref_storage[0], NULL, "kind", &s->kinds[0], "hash", &s->hash_texts[0]);
+  s->refs[1] = paired(&s->ref_storage[1], NULL, "kind", &s->kinds[0], "hash", &s->hash_texts[1]);
+  s->refs[2] = paired(&s->ref_storage[2], NULL, "kind", &s->kinds[0], "hash", &s->hash_texts[2]);
+  s->refs[3] = paired(&s->ref_storage[3], NULL, "kind", &s->kinds[0], "hash", &s->other);
+  s->refs[4] = paired(&s->ref_storage[4], NULL, "kind", &s->kinds[3], "hash", &s->ended);
+  entry[3] = account_entry(&s->entries[3], "createsCommercial", "commercial", 2, commercial_keys,
+                           (const Value *[]){s->refs[0], &s->nothing});
+  entry[4] = account_entry(&s->entries[4], "createsCommercial", "commercial", 2, commercial_keys,
+                           (const Value *[]){s->refs[1], &s->nothing});
+  account_hashes(s, entry, 3, 5, left, failure);
+  s->refs[5] = paired(&s->ref_storage[5], NULL, "kind", &s->kinds[1], "hash", &s->hash_texts[3]);
+  s->refs[6] = paired(&s->ref_storage[6], NULL, "kind", &s->kinds[1], "hash", &s->hash_texts[4]);
+  entry[5] = account_entry(&s->entries[5], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[5], &s->date, &s->dates[0], &s->agreed, &s->nothing});
+  entry[6] = account_entry(&s->entries[6], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[5], &s->term, &s->dates[1], &s->agreed, &s->nothing});
+  entry[7] = account_entry(&s->entries[7], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[6], &s->date, &s->dates[2], &s->proposed, &s->nothing});
+  account_hashes(s, entry, 5, 8, left, failure);
+  s->refs[7] = paired(&s->ref_storage[7], NULL, "kind", &s->kinds[2], "hash", &s->hash_texts[7]);
+  entry[8] = account_entry(&s->entries[8], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[6], &s->date, &s->dates[3], &s->agreed, s->refs[7]});
+  entry[9] = account_entry(&s->entries[9], "createsMembership", "membership", 3, membership_keys,
+                           (const Value *[]){s->refs[2], s->refs[0], &s->nothing});
+  entry[10] = account_entry(&s->entries[10], "createsMembership", "membership", 3, membership_keys,
+                            (const Value *[]){s->refs[3], s->refs[0], s->refs[4]});
+  entry[11] = account_entry(&s->entries[11], "createsAssignment", "assignment", 2, assignment_keys,
+                            (const Value *[]){tagged(&s->subjects[0], "accountParty", "party", s->refs[0]), &s->nothing});
+  s->subject_items = (Values){tagged(&s->subjects[1], "accountCommercial", "commercial", s->refs[5]), NULL};
+  s->subject_list = (Value){.kind = VALUE_ITEMS, .items = &s->subject_items};
+  entry[12] = account_entry(&s->entries[12], "createsArtifact", "artifact", 1, artifact_keys,
+                            (const Value *[]){&s->subject_list});
+  entry[13] = account_entry(&s->entries[13], "createsEvent", "event", 1, event_keys,
+                            (const Value *[]){tagged(&s->subjects[2], "subjectCommercial", "commercial", s->refs[5])});
+  entry[14] = account_entry(&s->entries[14], "createsEvent", "event", 1, event_keys,
+                            (const Value *[]){tagged(&s->subjects[3], "subjectParty", "party", s->refs[1])});
+  account_hashes(s, entry, 8, 15, left, failure);
+  s->log = (Value){.kind = VALUE_ITEMS, .items = account_items(s, entry, 0)};
+  return &s->log;
+}
+
+/* 1 when item is the Ref whose kind is kind and whose hash is hash. */
+static Nat account_ref_is(const Value *item, const char *kind, Text hash) {
+  return same_text(pipeline_field(item, "kind")->text, text(kind)) == 1 &&
+         same_text(pipeline_field(item, "hash")->text, hash) == 1;
+}
+
+/* 1 when the field key of value is the List of one Ref (kind, hash). */
+static Nat account_one(const Value *value, const char *key, const char *kind, Text hash) {
+  const Value *list = pipeline_field(value, key);
+  return list->kind == VALUE_ITEMS && read_count(list->items) == 1 &&
+         account_ref_is(pipeline_at(list, 0), kind, hash) == 1;
+}
+
+/* 1 when the field key of value is nil. */
+static Nat account_empty(const Value *value, const char *key) {
+  const Value *list = pipeline_field(value, key);
+  return list->kind == VALUE_ITEMS && list->items == NULL;
+}
+
+/* 1 when item is the Renewal (the Ref kindCommercial deal, date, term); term
+   NULL is none. */
+static Nat renewal_is(const Value *item, Text deal, const char *date, const Text *term) {
+  const Value *option = pipeline_field(item, "term");
+  return account_ref_is(pipeline_field(item, "commercial"), "kindCommercial", deal) == 1 &&
+         same_text(pipeline_field(item, "date")->text, text(date)) == 1 &&
+         (term == NULL ? option->kind == VALUE_NULL : account_ref_is(option, "kindCommitment", *term) == 1);
+}
+
+/* M4 part B (design items 10 to 13): queryRenewals and queryAccount360 on
+   the log of the test plan (L = 15). Each read takes 1 step and 1 step for
+   each projected entry; the record walks take no step. */
+static void test_m4_account_queries(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  AccountLog storage;
+  const Value *log = account_log(&storage, &left, &failure);
+  Value unknown = {.kind = VALUE_TEXT, .text = text("party-none")};
+  Tagged renewals_storage, now_storage, as_of_storage;
+  Paired query_storage[4], missing_storage[2];
+  const Value *renewals = tagged(&renewals_storage, "queryRenewals", NULL, NULL);
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *as_of_d1 = tagged(&as_of_storage, "momentAsOf", "entry", &storage.hash_texts[3]);
+  const Value *nobody = paired(&missing_storage[0], NULL, "kind", &storage.kinds[0], "hash", &unknown);
+  const Value *deal_party = paired(&missing_storage[1], NULL, "kind", &storage.kinds[0], "hash", &storage.hash_texts[3]);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* queryRenewals: d1 (date "2027-01-31", term entry 6) and d2 (the date
+     "2027-06-30" of entry 8, as entry 8 supersedes entry 7; no term); 1 + 15
+     steps. */
+  assert(read_step(1000, 20, 7, answer, log, renewals, &value, &left, &failure));
+  assert(left == 4 && read_count(value->items) == 2 &&
+         renewal_is(pipeline_at(value, 0), storage.hashes[3], "2027-01-31", &storage.hashes[6]) == 1 &&
+         renewal_is(pipeline_at(value, 1), storage.hashes[4], "2027-06-30", NULL) == 1);
+  /* queryAccount360 acme momentNow: the acme record, the membership 9 (10 is
+     ended), d1, the assignment 11, the artifact 12 and the event 13. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   paired(&query_storage[0], "queryAccount360", "party", storage.refs[0], "moment", now), &value, &left,
+                   &failure));
+  assert(left == 4 && same_text(pipeline_field(pipeline_field(value, "party"), "name")->text, text("acme")) == 1 &&
+         account_one(value, "memberships", "kindMembership", storage.hashes[9]) == 1 &&
+         account_one(value, "commercials", "kindCommercial", storage.hashes[3]) == 1 &&
+         account_one(value, "assignments", "kindAssignment", storage.hashes[11]) == 1 &&
+         account_one(value, "artifacts", "kindArtifact", storage.hashes[12]) == 1 &&
+         account_one(value, "timeline", "kindEvent", storage.hashes[13]) == 1);
+  /* As of entry 3: d1 and the other lists nil; 1 + 4 steps. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   paired(&query_storage[1], "queryAccount360", "party", storage.refs[0], "moment", as_of_d1), &value,
+                   &left, &failure));
+  assert(left == 15 && account_empty(value, "memberships") == 1 &&
+         account_one(value, "commercials", "kindCommercial", storage.hashes[3]) == 1 &&
+         account_empty(value, "assignments") == 1 && account_empty(value, "artifacts") == 1 &&
+         account_empty(value, "timeline") == 1);
+  /* A Ref that names no record, or a record of another type, gives eRead at
+     the read application with left = budget - 1. */
+  Failure refused = {0, {NULL, 0}, {NULL, 0}};
+  assert(!read_step(1000, 20, 7, answer, log,
+                    paired(&query_storage[2], "queryAccount360", "party", nobody, "moment", now), &value, &left,
+                    &refused));
+  assert(left == 19 && refused.position == 7 && same_text(refused.message, eRead));
+  Failure other = {0, {NULL, 0}, {NULL, 0}};
+  assert(!read_step(1000, 20, 7, answer, log,
+                    paired(&query_storage[3], "queryAccount360", "party", deal_party, "moment", now), &value, &left,
+                    &other));
+  assert(left == 19 && other.position == 7 && same_text(other.message, eRead));
+  /* Budget 0 gives eBudget with left 0. */
+  Failure starved = {0, {NULL, 0}, {NULL, 0}};
+  assert(!read_step(1000, 0, 7, answer, log, renewals, &value, &left, &starved));
+  assert(left == 0 && same_text(starved.message, eBudget));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -5121,6 +5346,7 @@ int main(void) {
   test_m3_commitment_queries();
   test_m3_membership_queries();
   test_m4_pipeline_queries();
+  test_m4_account_queries();
   test_m1_records();
   test_m1_projection_hash_failure();
   test_m1_projection_print_failure();
