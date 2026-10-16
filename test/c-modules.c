@@ -4621,6 +4621,167 @@ static void test_m3_commitment_queries(void) {
   assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
 }
 
+/* M3 part B: a hand-built Membership entry (createsMembership) whose state
+   has the fields person, org, isPrimary and endedBy. */
+typedef struct {
+  Value primary;
+  Attrs ended_by;
+  Attrs is_primary;
+  Attrs org;
+  Attrs person;
+  Value state;
+  Tagged body_storage;
+  Attrs body;
+  Value entry;
+} MembershipEntry;
+
+static const Value *membership_entry(MembershipEntry *s, const Value *person, const Value *org, Nat primary,
+                                     const Value *ended_by) {
+  s->primary = (Value){.kind = VALUE_FLAG, .flag = primary == 1 ? FLAG_YES : FLAG_NO};
+  s->ended_by = (Attrs){text("endedBy"), ended_by, NULL};
+  s->is_primary = (Attrs){text("isPrimary"), &s->primary, &s->ended_by};
+  s->org = (Attrs){text("org"), org, &s->is_primary};
+  s->person = (Attrs){text("person"), person, &s->org};
+  s->state = (Value){.kind = VALUE_ATTRS, .attrs = &s->person};
+  s->body = (Attrs){text("body"), tagged(&s->body_storage, "createsMembership", "membership", &s->state), NULL};
+  s->entry = (Value){.kind = VALUE_ATTRS, .attrs = &s->body};
+  return &s->entry;
+}
+
+/* The log of the M3 part B test plan: p1 at org b (not primary), p1 at org a
+   (primary), p2 at org a (ended by the event left), p2 at org b (not primary).
+   hashes holds the four entry hashes in log order; p1, p2, a and b are the
+   Ref kindParty values of the persons and the orgs. */
+typedef struct {
+  Value party_kind;
+  Value event_kind;
+  Value nothing;
+  Value p1_hash;
+  Value p2_hash;
+  Value a_hash;
+  Value b_hash;
+  Value left_hash;
+  Paired p1_storage;
+  Paired p2_storage;
+  Paired a_storage;
+  Paired b_storage;
+  Paired left_storage;
+  const Value *p1;
+  const Value *p2;
+  const Value *a;
+  const Value *b;
+  const Value *left;
+  MembershipEntry first;
+  MembershipEntry primary;
+  MembershipEntry ended;
+  MembershipEntry last;
+  Text hashes[4];
+  Value hash_texts[4];
+  Values items[4];
+  Value log;
+} MembershipLog;
+
+static const Value *membership_log(MembershipLog *s, Nat *left, Failure *failure) {
+  s->party_kind = (Value){.kind = VALUE_TEXT, .text = text("kindParty")};
+  s->event_kind = (Value){.kind = VALUE_TEXT, .text = text("kindEvent")};
+  s->nothing = (Value){.kind = VALUE_NULL};
+  s->p1_hash = (Value){.kind = VALUE_TEXT, .text = text("party-p1")};
+  s->p2_hash = (Value){.kind = VALUE_TEXT, .text = text("party-p2")};
+  s->a_hash = (Value){.kind = VALUE_TEXT, .text = text("party-org-a")};
+  s->b_hash = (Value){.kind = VALUE_TEXT, .text = text("party-org-b")};
+  s->left_hash = (Value){.kind = VALUE_TEXT, .text = text("left-a")};
+  s->p1 = paired(&s->p1_storage, NULL, "kind", &s->party_kind, "hash", &s->p1_hash);
+  s->p2 = paired(&s->p2_storage, NULL, "kind", &s->party_kind, "hash", &s->p2_hash);
+  s->a = paired(&s->a_storage, NULL, "kind", &s->party_kind, "hash", &s->a_hash);
+  s->b = paired(&s->b_storage, NULL, "kind", &s->party_kind, "hash", &s->b_hash);
+  s->left = paired(&s->left_storage, NULL, "kind", &s->event_kind, "hash", &s->left_hash);
+  const Value *e0 = membership_entry(&s->first, s->p1, s->b, 0, &s->nothing);
+  const Value *e1 = membership_entry(&s->primary, s->p1, s->a, 1, &s->nothing);
+  const Value *e2 = membership_entry(&s->ended, s->p2, s->a, 0, s->left);
+  const Value *e3 = membership_entry(&s->last, s->p2, s->b, 0, &s->nothing);
+  assert(entry_hash(1000, 1, 0, e0, &s->hashes[0], left, failure));
+  assert(entry_hash(1000, 1, 0, e1, &s->hashes[1], left, failure));
+  assert(entry_hash(1000, 1, 0, e2, &s->hashes[2], left, failure));
+  assert(entry_hash(1000, 1, 0, e3, &s->hashes[3], left, failure));
+  s->hash_texts[0] = (Value){.kind = VALUE_TEXT, .text = s->hashes[0]};
+  s->hash_texts[1] = (Value){.kind = VALUE_TEXT, .text = s->hashes[1]};
+  s->hash_texts[2] = (Value){.kind = VALUE_TEXT, .text = s->hashes[2]};
+  s->hash_texts[3] = (Value){.kind = VALUE_TEXT, .text = s->hashes[3]};
+  s->items[3] = (Values){e3, NULL};
+  s->items[2] = (Values){e2, &s->items[3]};
+  s->items[1] = (Values){e1, &s->items[2]};
+  s->items[0] = (Values){e0, &s->items[1]};
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->items[0]};
+  return &s->log;
+}
+
+/* 1 when item is the Ref of the kind kind whose hash is hash. */
+static Nat membership_ref_is(const Value *item, const char *kind, Text hash) {
+  return item->kind == VALUE_ATTRS && same_text(item->attrs->value->text, text(kind)) == 1 &&
+         same_text(item->attrs->rest->value->text, hash) == 1;
+}
+
+/* M3 part B (design items 12 to 17): the three Membership queries on the log
+   of the test plan. */
+static void test_m3_membership_queries(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  MembershipLog s;
+  const Value *log = membership_log(&s, &left, &failure);
+  Tagged now_storage, as_of_storage, one_storage;
+  Paired two_storage, unknown_storage;
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *as_of_first = tagged(&as_of_storage, "momentAsOf", "entry", &s.hash_texts[0]);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* queryMembersOf org a at momentNow: the primary membership of p1 only
+     (the membership of p2 at a is ended); 1 + 4 steps. */
+  assert(read_step(1000, 9, 7, answer, log, paired(&two_storage, "queryMembersOf", "org", s.a, "moment", now), &value,
+                   &left, &failure));
+  assert(left == 4 && value->kind == VALUE_ITEMS && read_count(value->items) == 1);
+  assert(membership_ref_is(value->items->head, "kindMembership", s.hashes[1]));
+  /* As of the first entry: org b has that membership, org a has none; 1 + 1
+     steps each. */
+  assert(read_step(1000, 9, 7, answer, log, paired(&two_storage, "queryMembersOf", "org", s.b, "moment", as_of_first),
+                   &value, &left, &failure));
+  assert(left == 7 && value->kind == VALUE_ITEMS && read_count(value->items) == 1);
+  assert(membership_ref_is(value->items->head, "kindMembership", s.hashes[0]));
+  assert(read_step(1000, 9, 7, answer, log, paired(&two_storage, "queryMembersOf", "org", s.a, "moment", as_of_first),
+                   &value, &left, &failure));
+  assert(left == 7 && value->kind == VALUE_ITEMS && read_count(value->items) == 0);
+  /* queryEmployer: p1 gives org a (the primary; the first current membership
+     is at b); p2 gives org b (no primary; the membership at a is ended); an
+     unknown party gives none. */
+  assert(read_step(1000, 9, 7, answer, log, paired(&two_storage, "queryEmployer", "person", s.p1, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 4 && membership_ref_is(value, "kindParty", text("party-org-a")));
+  assert(read_step(1000, 9, 7, answer, log, paired(&two_storage, "queryEmployer", "person", s.p2, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 4 && membership_ref_is(value, "kindParty", text("party-org-b")));
+  Value unknown_hash = {.kind = VALUE_TEXT, .text = text("party-p3")};
+  const Value *unknown = paired(&unknown_storage, NULL, "kind", &s.party_kind, "hash", &unknown_hash);
+  assert(read_step(1000, 9, 7, answer, log, paired(&two_storage, "queryEmployer", "person", unknown, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 4 && value->kind == VALUE_NULL);
+  /* queryJobChanges as of the first entry: the persons of the entries after
+     it in log order (the walk visits the full log: 1 + 4 steps); at momentNow
+     nil. */
+  assert(read_step(1000, 9, 7, answer, log, tagged(&one_storage, "queryJobChanges", "since", as_of_first), &value,
+                   &left, &failure));
+  assert(left == 4 && value->kind == VALUE_ITEMS && read_count(value->items) == 3);
+  assert(membership_ref_is(value->items->head, "kindParty", text("party-p1")));
+  assert(membership_ref_is(value->items->tail->head, "kindParty", text("party-p2")));
+  assert(membership_ref_is(value->items->tail->tail->head, "kindParty", text("party-p2")));
+  assert(read_step(1000, 9, 7, answer, log, tagged(&one_storage, "queryJobChanges", "since", now), &value, &left,
+                   &failure));
+  assert(left == 4 && value->kind == VALUE_ITEMS && read_count(value->items) == 0);
+  /* Budget 0 gives eBudget with left 0. */
+  left = 9;
+  assert(!read_step(1000, 0, 7, answer, log, paired(&two_storage, "queryMembersOf", "org", s.a, "moment", now), &value,
+                    &left, &failure));
+  assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
+}
+
 static void test_m2_read_callback_check(void) {
   const char *prefix =
       "def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
@@ -4747,6 +4908,7 @@ int main(void) {
   test_m2_read_callback_check();
   test_m2_read_check_parity();
   test_m3_commitment_queries();
+  test_m3_membership_queries();
   test_m1_records();
   test_m1_projection_hash_failure();
   test_m1_projection_print_failure();

@@ -929,7 +929,9 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
    answer, log and query. read_body is its body, read log query; its answer
    type is the expected type (delta A-3). read_step is read log query on the
    answer type: one work step. In part A no Query tag has an answer: each
-   read gives eRead at position. */
+   read gives eRead at position. M2 parts B and C, M3 part A (the Commitment
+   group) and M3 part B (the Membership group) give the answers of twelve
+   Query tags; each other tag keeps eRead. */
 const LType *read_path_type(void);
 const Params *read_binders(void);
 const Term *read_body(Nat position, Tokens body, Tokens rest);

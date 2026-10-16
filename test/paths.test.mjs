@@ -571,6 +571,58 @@ test('queryDiscountPct gives none with no agreed price', () => {
   assert.equal(termAnswer(twoEntries, 'Option Nat', `queryDiscountPct ${dealOf(named(log).ce)}`), null);
 });
 
+// M3 part B: the Membership queries. The log: p1 at orgB (not primary), p1 at orgA (primary), p2 at orgA
+// (ended by an event), p2 at orgB (not primary), in this order.
+const memberPre = 'def p1 : Ref kindParty := refTo (hashOf "party-p1") ' +
+  'def p2 : Ref kindParty := refTo (hashOf "party-p2") ' +
+  'def orgA : Ref kindParty := refTo (hashOf "party-org-a") ' +
+  'def orgB : Ref kindParty := refTo (hashOf "party-org-b") ' +
+  'def evidence : Ref kindArtifact := refTo (hashOf "email-entry") ' +
+  'def provenance : Provenance := makeProvenance (some evidence) none (some 95) ';
+const memberOf = (membership, entry, person, org, primary, endedBy) =>
+  `def ${membership} : Membership := makeMembership ${person} ${org} none ${primary} ${endedBy} provenance attrsEnd ` +
+  `def ${entry} : Entry := makeEntry none (actorHuman ${person}) (createsMembership ${membership}) `;
+const memberLog = memberPre + memberOf('m1', 'e1', 'p1', 'orgB', 'flagNo', 'none') +
+  memberOf('m2', 'e2', 'p1', 'orgA', 'flagYes', 'none') +
+  memberOf('m3', 'e3', 'p2', 'orgA', 'flagNo', '(some (refTo (hashOf "left-a")))') +
+  memberOf('m4', 'e4', 'p2', 'orgB', 'flagNo', 'none') +
+  'def book : Log := cons e1 (cons e2 (cons e3 (cons e4 nil))) ';
+const memberRef = entry => ({ kind: 'kindMembership', hash: sha256(entry) });
+const partyRef = hash => ({ kind: 'kindParty', hash });
+const memberRefs = 'List (Ref kindMembership)';
+const employer = 'Option (Ref kindParty)';
+const parties = 'List (Ref kindParty)';
+
+test('queryMembersOf lists the current memberships of an org', () => {
+  const { e2 } = named(memberLog);
+  assert.deepEqual(termAnswer(memberLog, memberRefs, 'queryMembersOf orgA momentNow'), [memberRef(e2)]);
+});
+
+test('queryMembersOf as of an entry stops at that entry', () => {
+  const { e1 } = named(memberLog);
+  assert.deepEqual(termAnswer(memberLog, memberRefs, `queryMembersOf orgB ${asOf(e1)}`), [memberRef(e1)]);
+  assert.deepEqual(termAnswer(memberLog, memberRefs, `queryMembersOf orgA ${asOf(e1)}`), []);
+});
+
+test('queryEmployer gives the primary org', () => {
+  assert.deepEqual(termAnswer(memberLog, employer, 'queryEmployer p1 momentNow'), partyRef('party-org-a'));
+});
+
+test('queryEmployer gives the first current org with no primary', () => {
+  assert.deepEqual(termAnswer(memberLog, employer, 'queryEmployer p2 momentNow'), partyRef('party-org-b'));
+});
+
+test('queryEmployer of a party with no current membership gives none', () => {
+  assert.equal(termAnswer(memberLog, employer, 'queryEmployer (refTo (hashOf "party-p3")) momentNow'), null);
+});
+
+test('queryJobChanges lists the persons after an entry and nil at momentNow', () => {
+  const { e1 } = named(memberLog);
+  assert.deepEqual(termAnswer(memberLog, parties, `queryJobChanges ${asOf(e1)}`),
+    [partyRef('party-p1'), partyRef('party-p2'), partyRef('party-p2')]);
+  assert.deepEqual(termAnswer(memberLog, parties, 'queryJobChanges momentNow'), []);
+});
+
 test('queryProjectionSound gives flagYes on the replayed state', () => {
   const { ce, ne } = named(recordLog());
   const replayed = 'def replayed : Commercial := makeCommercial commercialDeal "Annual plan" acme "negotiation" ' +

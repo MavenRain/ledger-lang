@@ -2927,13 +2927,116 @@ static int read_commitment(Fuel hash_fuel, Nat budget, Nat position, const Value
   return 1;
 }
 
+/* M3 part B (design item 13): 1 when record is a Membership record. */
+static Nat membership_is(const Value *record) {
+  return same_text(write_field(kType, record)->text, text_of_cstring("Membership"));
+}
+
+/* Design item 13: 1 when the Membership record is current: its endedBy field
+   is none. The field is not projected: its value is the value of the entry. */
+static Nat membership_current(const Value *record) { return commitment_field(record, "endedBy")->kind == VALUE_NULL; }
+
+/* Design item 15: 1 when the isPrimary field of record is flagYes. */
+static Nat membership_primary(const Value *record) {
+  const Value *flag = commitment_field(record, "isPrimary");
+  return flag->kind == VALUE_FLAG && flag->flag == FLAG_YES;
+}
+
+/* 1 when record is a Membership record whose field key has the value of the
+   Ref party. */
+static Nat membership_of(const Value *record, const char *key, const Value *party) {
+  return membership_is(record) == 1 && read_same(commitment_field(record, key), party) == 1;
+}
+
+/* A Ref kindMembership item with the ref of record (the form of
+   commitment_item). */
+static const Value *membership_item(const Value *record) {
+  return object_two(kRefKind(), text_value(text_of_cstring("kindMembership")), kRefHash(),
+                    write_field(text_of_cstring("ref"), record));
+}
+
+/* Design item 14: the current Membership records of the org in walk as Ref
+   kindMembership items, in log order: walk is newest first, and each kept
+   record goes in front of the items of the newer records. */
+static const Values *membership_members(const Value *org, const Located *walk, const Values *items) {
+  if (walk == NULL) return items;
+  Nat keep = membership_of(walk->value, "org", org) == 1 && membership_current(walk->value) == 1;
+  return membership_members(org, walk->tail, keep == 1 ? values_item(membership_item(walk->value), items) : items);
+}
+
+/* Design item 15: the oldest current Membership record of the person in walk
+   whose isPrimary is flagYes (primary 1), or with any isPrimary (primary 0);
+   NULL when there is none. */
+static const Value *membership_first(const Value *person, const Located *walk, Nat primary) {
+  if (walk == NULL) return NULL;
+  const Value *older = membership_first(person, walk->tail, primary);
+  Nat keep = membership_of(walk->value, "person", person) == 1 && membership_current(walk->value) == 1 &&
+             (primary != 1 || membership_primary(walk->value) == 1);
+  return older != NULL ? older : keep == 1 ? walk->value : NULL;
+}
+
+/* Design item 15: the org of the oldest current primary Membership record of
+   the person, else of the oldest current record, else none (null_value). The
+   answer is the org Ref value itself. */
+static const Value *membership_employer(const Value *person, const Located *records) {
+  const Value *primary = membership_first(person, records, 1);
+  const Value *record = primary != NULL ? primary : membership_first(person, records, 0);
+  return record == NULL ? &null_value : commitment_field(record, "org");
+}
+
+/* Design item 16: the person of each Membership record newer than the record
+   whose ref is since, in log order (walk is newest first). NULL when no record
+   of walk has the ref since (a hash that names no entry) and when no
+   Membership record is newer. */
+static const Values *membership_changes(Text since, const Located *walk, const Values *items) {
+  if (walk == NULL) return NULL;
+  if (same_text(write_field(text_of_cstring("ref"), walk->value)->text, since) == 1) return items;
+  Nat keep = membership_is(walk->value);
+  return membership_changes(since, walk->tail,
+                            keep == 1 ? values_item(commitment_field(walk->value, "person"), items) : items);
+}
+
+/* M3 part B (design items 12 to 17): the Membership group. The index is the
+   M1 projection of the log (project_entries), as read_commitment.
+   queryMembersOf and queryEmployer at momentAsOf h project the entries up to
+   and including the first entry whose hash is h, and a hash that names no
+   entry gives nil (none); at momentNow they project the full log.
+   queryJobChanges projects the full log: momentNow gives nil, and
+   momentAsOf h gives the persons of the Membership records after the first
+   entry whose hash is h. A filter walk takes no step. */
+static int read_membership(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat members,
+                           Nat employer, const Value **value, Nat *left, Failure *failure) {
+  Nat current = members == 1 || employer == 1;
+  const Value *moment = write_field(text_of_cstring(current == 1 ? "moment" : "since"), query);
+  Nat asof = same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf"));
+  Text none = {NULL, 0};
+  Text hash = asof == 1 ? write_field(text_of_cstring("entry"), moment)->text : none;
+  Text stop = current == 1 ? hash : none;
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  const Located *known = asof == 1 && found == 0 ? NULL : records;
+  if (members == 1) {
+    *value = items_value(membership_members(write_field(text_of_cstring("org"), query), known, NULL));
+    return 1;
+  }
+  if (employer == 1) {
+    *value = membership_employer(write_field(text_of_cstring("person"), query), known);
+    return 1;
+  }
+  *value = items_value(asof == 1 ? membership_changes(hash, records, NULL) : NULL);
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
    queryTail and queryAuditByActor visit each entry of the log (item 8), then
    give the answer of items 9 to 11. queryCommercial and queryProjectionSound
    give the answer of read_record. The four Commitment tags give the answer
-   of read_commitment (M3 part A). Each other tag gives eRead at position
+   of read_commitment (M3 part A), and the three Membership tags the answer
+   of read_membership (M3 part B). Each other tag gives eRead at position
    (the read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
@@ -2952,12 +3055,17 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat history = same_text(tag, text_of_cstring("queryTermHistory"));
   Nat reconciled = same_text(tag, text_of_cstring("queryAmountReconciled"));
   Nat discount = same_text(tag, text_of_cstring("queryDiscountPct"));
+  Nat members = same_text(tag, text_of_cstring("queryMembersOf"));
+  Nat employer = same_text(tag, text_of_cstring("queryEmployer"));
+  Nat changes = same_text(tag, text_of_cstring("queryJobChanges"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (commercial == 1 || sound == 1)
     return read_record(hash_fuel, ready, position, items, query, commercial, value, left, failure);
   if (terms == 1 || history == 1 || reconciled == 1 || discount == 1)
     return read_commitment(hash_fuel, ready, position, items, query, terms, history, reconciled, value, left, failure);
+  if (members == 1 || employer == 1 || changes == 1)
+    return read_membership(hash_fuel, ready, position, items, query, members, employer, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;

@@ -103,7 +103,7 @@ not complete the M0 milestone in `SPEC.md`.
   `StageStat`, `Renewal` and `Account360`. Construction, checking and JSON
   encoding follow the schema rules. `Log` is an alias of `List Entry`, so
   the output shows `List (Entry)`. The compiler runs the write path (see
-  `## M1`) and the read path of five queries (see `## M2`).
+  `## M1`) and the read path of twelve queries (see `## M2` and `## M3`).
 - `Query T` is the indexed `Query` family of `core/ops.def` as a `Type 1`
   type. The compiler checks each of the 29 constructors against its answer
   type. A Query value is not an instance. A Query type is not an argument of
@@ -216,11 +216,12 @@ M2 is the read path (parts A, B and C).
 
 - The builtin `read : ReadPath`. `read T log q` gives the answer of the
   Query `q` on the log `log`. `q` has the type `Query T`. A definition
-  that binds the name `read` hides the builtin. The read path answers five
-  Query constructors: `queryReplay`, `queryTail`, `queryAuditByActor`,
-  `queryCommercial` and `queryProjectionSound`. Each other constructor
-  gives the refusal "the read path does not answer this query" at the
-  read application.
+  that binds the name `read` hides the builtin. The read path answers
+  twelve Query constructors: `queryReplay`, `queryTail`,
+  `queryAuditByActor`, `queryCommercial` and `queryProjectionSound` (M2)
+  and, after M3, the four Commitment and the three Membership
+  constructors (see `## M3`). Each other constructor gives the refusal
+  "the read path does not answer this query" at the read application.
 - The log queries (part B). `queryReplay momentNow` gives the full log.
   `queryReplay (momentAsOf h)` gives the entries up to and including the
   entry whose hash is `h`. `queryTail (momentAsOf h)` gives the entries
@@ -245,9 +246,54 @@ M2 is the read path (parts A, B and C).
   identity of a record is the hash of its entry (see `## M1`).
 - Out of M2: the other 24 Query constructors (the Membership, Commitment,
   Artifact, Assignment, Policy and Rollups groups, and `queryTimeline`,
-  `queryThread` and `queryAuditByPolicy`), a policy check, a host runtime,
-  the find by merge key of `commandResolveParty`, `commandExtract` with
-  more than one entry for each write, and the 21 Commands with no body.
+  `queryThread` and `queryAuditByPolicy`; after M3, 17 (see `## M3`)), a
+  policy check, a host runtime, the find by merge key of
+  `commandResolveParty`, `commandExtract` with more than one entry for
+  each write, and the 21 Commands with no body.
+
+## M3
+
+M3 is the Commitment group (part A) and the Membership group (part B) of
+the read path.
+
+- The Commitment queries (part A). A Commitment record of a commercial
+  is in force at a moment when its `status` is not
+  `commitmentSuperseded` and no Commitment record up to the moment has
+  `supersedes = some` a Ref whose hash is the ref of the record.
+  `queryTermsInForce c m` gives the in-force Commitment records of the
+  commercial `c` as of `m`, as `Ref kindCommitment` items in log order;
+  no record gives `nil`. `queryTermHistory r` gives the `supersedes`
+  chain of the Commitment record `r` as `Ref kindCommitment` items,
+  oldest first, the given record last; the walk stops at
+  `supersedes = none`, at a hash that names no record, or after as many
+  steps as there are records; an unknown ref gives `nil`.
+  `queryAmountReconciled c` gives `flagYes` when the Commercial record
+  `c` has `amountCents = some n` and an in-force `commitmentPrice` record
+  of `c` with `status = commitmentAgreed` has the value `n`; in each
+  other case it gives `flagNo`. `queryDiscountPct c` gives
+  `some ((first - agreed) * 100 / first)` with the Nat division, where
+  `agreed` is the value of that in-force agreed price record and `first`
+  is the value of the oldest `commitmentPrice` record of `c` earlier in
+  the log than the agreed record; it gives `none` with no agreed price,
+  no earlier price record, `first = 0`, or `agreed > first`.
+- The Membership queries (part B). A Membership record is current at a
+  moment when it is in the records up to the moment and its `endedBy`
+  field is `none`. `queryMembersOf o m` gives the current Membership
+  records of the org `o` as of `m`, as `Ref kindMembership` items in log
+  order; no record gives `nil`. `queryEmployer p m` gives the `org` of
+  the first current record of the person `p` whose `isPrimary` is
+  `flagYes`; else the `org` of the first current record of `p`; else
+  `none`. `queryJobChanges (momentAsOf h)` gives the `person` of each
+  Membership record after the entry whose hash is `h`, as
+  `Ref kindParty` items in log order. `queryJobChanges momentNow` gives
+  `nil`. A hash that names no entry gives `nil`.
+- The work budget. The read application takes one work step. Each entry
+  that a query projects takes one work step. A filter walk and the
+  chain walk take no step. A budget of 0 gives the budget failure at the
+  read application.
+- Out of M3: the other 17 Query constructors (the Artifact, Assignment,
+  Policy and Rollups groups, and `queryTimeline`, `queryThread` and
+  `queryAuditByPolicy`).
 
 ## Remaining M0 work
 
@@ -261,7 +307,8 @@ M2 is the read path (parts A, B and C).
    Sigma. D6 adds `cong` and `transport`. D7 adds `Query` parameters and
    `ReadPath`.
 2. `ReadPath` is done (step D7). It is a function type in `Type 1`. The
-   compiler runs the read path of M2 for five queries (see `## M2`).
+   compiler runs the read path of M2 and M3 for twelve queries (see
+   `## M2` and `## M3`).
 3. Diagnostics with declaration context are done (D11 part C). In file
    mode, a checking or printing refusal in a declaration gives
    "byte N: message (in NAME)". UTF-8 and lexer failures happen before
@@ -324,9 +371,9 @@ M2 is the read path (parts A, B and C).
   parameter is reported at the application.
 
 M1 adds the write path, the entry hashes and the record projection (see
-`## M1`). M2 adds the read path of five queries from the log and from its
-record index (see `## M2`). The core files and full specification retain
-their original meaning.
+`## M1`). M2 and M3 add the read path of twelve queries from the log and
+from its record index (see `## M2` and `## M3`). The core files and full
+specification retain their original meaning.
 
 - Type parameters come before the value parameters. Only a named function
   type at the end of a longer function type, such as `ReadPath`, brings its
