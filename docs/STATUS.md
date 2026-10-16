@@ -102,8 +102,8 @@ not complete the M0 milestone in `SPEC.md`.
   `Command`, `Write`, `Outcome`, `Step`, `PipelineKey`, `Bucket`,
   `StageStat`, `Renewal` and `Account360`. Construction, checking and JSON
   encoding follow the schema rules. `Log` is an alias of `List Entry`, so
-  the output shows `List (Entry)`. The compiler does not run the write path
-  or the read path.
+  the output shows `List (Entry)`. The compiler runs the write path (see
+  `## M1`) and the read path of five queries (see `## M2`).
 - `Query T` is the indexed `Query` family of `core/ops.def` as a `Type 1`
   type. The compiler checks each of the 29 constructors against its answer
   type. A Query value is not an instance. A Query type is not an argument of
@@ -210,6 +210,45 @@ M1 is the write path (C6).
   failure of the projection gives the position and the name of the `Log` or
   `Step` definition.
 
+## M2
+
+M2 is the read path (parts A, B and C).
+
+- The builtin `read : ReadPath`. `read T log q` gives the answer of the
+  Query `q` on the log `log`. `q` has the type `Query T`. A definition
+  that binds the name `read` hides the builtin. The read path answers five
+  Query constructors: `queryReplay`, `queryTail`, `queryAuditByActor`,
+  `queryCommercial` and `queryProjectionSound`. Each other constructor
+  gives the refusal "the read path does not answer this query" at the
+  read application.
+- The log queries (part B). `queryReplay momentNow` gives the full log.
+  `queryReplay (momentAsOf h)` gives the entries up to and including the
+  entry whose hash is `h`. `queryTail (momentAsOf h)` gives the entries
+  after that entry. `queryTail momentNow` gives the empty log. A hash that
+  names no entry gives the empty log. `queryAuditByActor a` gives one
+  `Ref kindEvent` for each `createsEvent` entry of the actor `a`, in log
+  order.
+- The record queries (part C). The read path makes the M1 records of the
+  log argument, as an index by entry hash. `queryCommercial r momentNow`
+  gives `some` with the final state of the Commercial record whose
+  identity is the hash of `r`. `queryCommercial r (momentAsOf h)` gives
+  the state after the entry whose hash is `h`. The answer is `none` when
+  no Commercial record has that identity, or when `h` names no entry.
+  `queryProjectionSound r s` gives `flagYes` when `s` is the final state
+  of the Commercial record of `r`. In each other case it gives `flagNo`.
+- The work budget. The read application takes one work step. Each entry
+  that a log query visits takes one work step. Each entry that a record
+  query projects takes one work step. The projection stops after the
+  entry of `momentAsOf`. A budget of 0 gives the budget failure at the
+  read application.
+- The output. The entries of a `Log` answer make no second record: the
+  identity of a record is the hash of its entry (see `## M1`).
+- Out of M2: the other 24 Query constructors (the Membership, Commitment,
+  Artifact, Assignment, Policy and Rollups groups, and `queryTimeline`,
+  `queryThread` and `queryAuditByPolicy`), a policy check, a host runtime,
+  the find by merge key of `commandResolveParty`, `commandExtract` with
+  more than one entry for each write, and the 21 Commands with no body.
+
 ## Remaining M0 work
 
 1. Add dependent function types and support computed function
@@ -222,7 +261,7 @@ M1 is the write path (C6).
    Sigma. D6 adds `cong` and `transport`. D7 adds `Query` parameters and
    `ReadPath`.
 2. `ReadPath` is done (step D7). It is a function type in `Type 1`. The
-   compiler does not run the read path of M2.
+   compiler runs the read path of M2 for five queries (see `## M2`).
 3. Diagnostics with declaration context are done (D11 part C). In file
    mode, a checking or printing refusal in a declaration gives
    "byte N: message (in NAME)". UTF-8 and lexer failures happen before
@@ -285,8 +324,9 @@ M1 is the write path (C6).
   parameter is reported at the application.
 
 M1 adds the write path, the entry hashes and the record projection (see
-`## M1`). M2 remains the indexed read path. The core files and full specification retain their
-original meaning.
+`## M1`). M2 adds the read path of five queries from the log and from its
+record index (see `## M2`). The core files and full specification retain
+their original meaning.
 
 - Type parameters come before the value parameters. Only a named function
   type at the end of a longer function type, such as `ReadPath`, brings its

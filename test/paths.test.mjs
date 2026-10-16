@@ -464,6 +464,66 @@ test('a Log answer makes no second record of an entry', () => {
   assert.deepEqual(run(`${entryPre}def r : Log := read Log book (queryReplay momentNow)`).records, records);
 });
 
+const recordPre = 'def acme : Ref kindParty := refTo (hashOf "party-acme") ' +
+  'def plan : Commercial := makeCommercial commercialDeal "Annual plan" acme "negotiation" (some 250000) "USD" ' +
+  '(some "2026-12-01") statusOpen attrsEnd none ' +
+  'def other : Commercial := makeCommercial commercialDeal "Second plan" acme "negotiation" none "USD" none ' +
+  'statusOpen attrsEnd none ' +
+  'def ce : Entry := makeEntry none (actorHuman acme) (createsCommercial plan) ' +
+  'def oe : Entry := makeEntry none (actorHuman acme) (createsCommercial other) ';
+const dealOf = entry => `(refTo (hashOf "${sha256(entry)}"))`;
+const recordLog = () => `${recordPre}def note : Event := makeEvent eventNoteAdded ` +
+  `(subjectCommercial ${dealOf(named(recordPre).ce)}) none none attrsEnd none ` +
+  'def ne : Entry := makeEntry none (actorHuman acme) (createsEvent note) ' +
+  'def book : Log := cons ce (cons oe (cons ne nil)) ';
+const recordOf = source => named(`${recordLog()}${source}`).r;
+const commercialOf = (deal, moment) =>
+  recordOf(`def r : Option Commercial := read (Option Commercial) book (queryCommercial ${deal} ${moment})`);
+const soundOf = (deal, stored) => recordOf(`def r : Flag := read Flag book (queryProjectionSound ${deal} ${stored})`);
+
+test('queryCommercial at momentNow gives the record with lastEvent', () => {
+  const { plan, other, ce, oe, ne } = named(recordLog());
+  assert.deepEqual(commercialOf(dealOf(ce), 'momentNow'), { ...plan, lastEvent: { kind: 'kindEvent', hash: sha256(ne) } });
+  assert.deepEqual(commercialOf(dealOf(oe), 'momentNow'), other);
+});
+
+test('queryCommercial as of the creating entry gives lastEvent none', () => {
+  const { plan, ce, oe } = named(recordLog());
+  assert.deepEqual(commercialOf(dealOf(ce), asOf(ce)), plan);
+  assert.deepEqual(commercialOf(dealOf(ce), asOf(oe)), plan);
+});
+
+test('queryCommercial of an unknown ref gives none', () => {
+  const { ce, ne } = named(recordLog());
+  assert.equal(commercialOf('(refTo (hashOf "e9"))', 'momentNow'), null);
+  assert.equal(commercialOf(dealOf(ne), 'momentNow'), null);
+  assert.equal(commercialOf(dealOf(ce), '(momentAsOf (hashOf "e9"))'), null);
+});
+
+test('queryProjectionSound gives flagYes on the replayed state', () => {
+  const { ce, ne } = named(recordLog());
+  const replayed = 'def replayed : Commercial := makeCommercial commercialDeal "Annual plan" acme "negotiation" ' +
+    `(some 250000) "USD" (some "2026-12-01") statusOpen attrsEnd (some (refTo (hashOf "${sha256(ne)}"))) `;
+  assert.equal(named(`${recordLog()}${replayed}def r : Flag := ` +
+    `read Flag book (queryProjectionSound ${dealOf(ce)} replayed)`).r, true);
+});
+
+test('queryProjectionSound gives flagNo on another state', () => {
+  const { ce, oe } = named(recordLog());
+  assert.equal(soundOf(dealOf(ce), 'plan'), false);
+  assert.equal(soundOf(dealOf(oe), 'plan'), false);
+  assert.equal(soundOf('(refTo (hashOf "e9"))', 'other'), false);
+});
+
+test('an M1 program keeps its records key', () => {
+  const { ce } = named(recordLog());
+  const { records } = run(recordLog());
+  assert.deepEqual(records.map(record => record.type), ['Commercial', 'Commercial', 'Event']);
+  assert.deepEqual(records.find(record => record.ref === sha256(ce)).value, commercialOf(dealOf(ce), 'momentNow'));
+  assert.deepEqual(run(`${recordLog()}def r : Flag := read Flag book (queryProjectionSound ${dealOf(ce)} plan)`).records,
+    records);
+});
+
 test('the paths example compiles to its literal steps', async () => {
   const source = await readFile(new URL('../examples/paths.ledger', import.meta.url), 'utf8');
   const found = instances(source);

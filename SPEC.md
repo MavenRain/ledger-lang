@@ -232,9 +232,11 @@ Encoding rules:
   whose identity is the hash of its `subject`. The final state of a record
   is its state at the end of the logs. The records are in the key `records`
   of the target (section 5).
-- M2: the read path. `read : ReadPath` answers each `Query` from the log.
-  M0 checks `ReadPath` as a function type. The compiler does not run the
-  read path.
+- M2: the read path. `read : ReadPath` answers five queries from the log:
+  `queryReplay`, `queryTail` and `queryAuditByActor` from the entries, and
+  `queryCommercial` and `queryProjectionSound` from the records of the
+  log. Each other `Query` constructor gives the refusal "the read path
+  does not answer this query". The compiler runs the read path.
 
 ## 7. Milestones
 

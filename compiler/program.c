@@ -17,7 +17,6 @@ typedef struct {
 
 /* A checked instance keeps the source byte and name of its definition for
    print errors. NULL is the end. */
-typedef struct Located Located;
 struct Located {
   Nat position;
   Text name;
@@ -1054,10 +1053,16 @@ static const Value *projection_record(Text ref, Text family, const Value *state)
                                       attrs_field(kType, text_value(family), attrs_field(kValue, state, NULL))));
 }
 
-static Nat projection_known(Text ref, const Located *records) {
-  return records != NULL && (same_text(projection_field(text_of_cstring("ref"), records->value)->text, ref) == 1 ||
-                             projection_known(ref, records->tail) == 1);
+/* M2 design item 13: the find by entry hash. The record of records whose ref
+   is ref, or NULL when no record has it. */
+const Value *project_find(Text ref, const Located *records) {
+  return records == NULL ? NULL
+         : same_text(projection_field(text_of_cstring("ref"), records->value)->text, ref) == 1
+             ? records->value
+             : project_find(ref, records->tail);
 }
+
+static Nat projection_known(Text ref, const Located *records) { return project_find(ref, records) != NULL; }
 
 static const Attrs *projection_replace(Text key, const Value *value, const Attrs *attrs) {
   return attrs == NULL ? NULL
@@ -1088,36 +1093,55 @@ static const Located *projection_update(Text subject, const Value *event, const 
 /* Items 10, 11 and 13. The hash of the entry takes one work step. An entry
    with a known hash is a known record, and it changes nothing. Else a
    createsEvent entry first updates the record of its subject, and then the
-   entry makes the record of its Body. records holds the newest record first. */
-static int projection_entry(Nat position, Text name, const Value *entry, const Located **records, Nat *budget,
-                            Failure *failure) {
-  Text hash;
-  if (!entry_hash(OUTPUT_LIMIT, *budget, position, entry, &hash, budget, failure)) return 0;
-  if (projection_known(hash, *records) == 1) return 1;
+   entry makes the record of its Body. records holds the newest record first.
+   hash gets the hash of the entry. */
+static int projection_entry(Fuel hash_fuel, Nat position, Text name, const Value *entry, const Located **records, Text *hash,
+                            Nat *budget, Failure *failure) {
+  if (!entry_hash(hash_fuel, *budget, position, entry, hash, budget, failure)) return 0;
+  if (projection_known(*hash, *records) == 1) return 1;
   const Value *body = projection_field(text_of_cstring("body"), entry);
   Text tag = projection_field(kSchemaTag(), body)->text;
   const Value *state = projection_payload(body);
   const Value *subject = projection_payload(projection_field(text_of_cstring("subject"), state));
   const Value *event = object_two(text_of_cstring("kind"), text_value(text_of_cstring("kindEvent")),
-                                  text_of_cstring("hash"), text_value(hash));
+                                  text_of_cstring("hash"), text_value(*hash));
   const Located *seen = same_text(tag, text_of_cstring("createsEvent")) == 1
                            ? projection_update(projection_field(text_of_cstring("hash"), subject)->text, event, *records)
                            : *records;
-  *records = located_cons(position, name, projection_record(hash, text_drop(tag, 7), state), seen);
+  *records = located_cons(position, name, projection_record(*hash, text_drop(tag, 7), state), seen);
   return 1;
+}
+
+/* M2 design item 13: the fold of projection_entry over the entries items, in
+   log order, on records (the newest record first). Each entry takes one work
+   step (its hash). With a stop hash, the fold ends after the first entry
+   whose hash is stop, and found gets 1. Else found gets 0. */
+int project_entries(Fuel hash_fuel, Nat position, Text name, const Values *items, Text stop, const Located **records, Nat *found,
+                    Nat *budget, Failure *failure) {
+  Text hash = {NULL, 0};
+  *found = 0;
+  if (items == NULL) return 1;
+  if (!projection_entry(hash_fuel, position, name, items->head, records, &hash, budget, failure)) return 0;
+  if (same_text(hash, stop) == 1) {
+    *found = 1;
+    return 1;
+  }
+  return project_entries(hash_fuel, position, name, items->tail, stop, records, found, budget, failure);
 }
 
 /* The records of the Log and Step instances, in log order. A failure reports
    the definition of the log. */
 static int project_records(Nat budget, const Located *instances, const Located **records, Failure *failure) {
   const Located *newest = NULL;
+  Text none = {NULL, 0};
+  Nat found;
   for (const Located *cell = instances; cell != NULL; cell = cell->tail)
-    for (const Values *item = projection_log(cell->value); item != NULL; item = item->tail)
-      if (!projection_entry(cell->position, cell->name, item->head, &newest, &budget, failure)) {
-        failure->position = cell->position;
-        failure->name = cell->name;
-        return 0;
-      }
+    if (!project_entries(OUTPUT_LIMIT, cell->position, cell->name, projection_log(cell->value), none, &newest, &found, &budget,
+                         failure)) {
+      failure->position = cell->position;
+      failure->name = cell->name;
+      return 0;
+    }
   *records = reverse_located(newest);
   return 1;
 }

@@ -2711,11 +2711,52 @@ static const Values *read_audit(const Values *items, const Values *hashes, const
              : rest;
 }
 
-/* M2 parts A and B (design items 5 to 11): read log query on the answer
+/* M2 part C (design items 14 and 15): the state of the record of the Ref
+   commercial (the record whose ref is the hash of the Ref and whose type is
+   Commercial), or NULL when no record is. */
+static const Value *read_commercial(const Value *commercial, const Located *records) {
+  const Value *record = project_find(write_field(kRefHash(), commercial)->text, records);
+  return record != NULL && same_text(write_field(kType, record)->text, text_of_cstring("Commercial")) == 1
+             ? write_field(kValue, record)
+             : NULL;
+}
+
+/* M2 part C (design items 13 to 16): queryCommercial (commercial = 1) and
+   queryProjectionSound. The index is the M1 projection of the log
+   (project_entries): each entry takes one work step, and the read does no
+   other visit. queryCommercial at momentAsOf h projects the entries up to
+   and including the first entry whose hash is h; a hash that names no entry
+   gives none. The value of some x is the value of x; none is null. Flag is
+   a carrier with no constructor plan, thus the answer of
+   queryProjectionSound is the Flag value of flagYes or flagNo, as the
+   evaluator gives it (delta C-5). */
+static int read_record(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat commercial,
+                       const Value **value, Nat *left, Failure *failure) {
+  const Value *moment = write_field(text_of_cstring("moment"), query);
+  Nat asof = commercial == 1 && same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf")) == 1;
+  Text none = {NULL, 0};
+  Text stop = asof == 1 ? write_field(text_of_cstring("entry"), moment)->text : none;
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  const Value *state =
+      asof == 1 && found == 0 ? NULL : read_commercial(write_field(text_of_cstring("commercial"), query), records);
+  if (commercial == 1) {
+    *value = state != NULL ? state : &null_value;
+    return 1;
+  }
+  Nat sound = state != NULL && read_same(state, write_field(text_of_cstring("stored"), query)) == 1;
+  *value = make_value((Value){.kind = VALUE_FLAG, .flag = sound == 1 ? FLAG_YES : FLAG_NO});
+  return 1;
+}
+
+/* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
    queryTail and queryAuditByActor visit each entry of the log (item 8), then
-   give the answer of items 9 to 11. Each other tag gives eRead at position
+   give the answer of items 9 to 11. queryCommercial and queryProjectionSound
+   give the answer of read_record. Each other tag gives eRead at position
    (the read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
@@ -2728,9 +2769,13 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat replay = same_text(tag, text_of_cstring("queryReplay"));
   Nat tail = same_text(tag, text_of_cstring("queryTail"));
   Nat audit = same_text(tag, text_of_cstring("queryAuditByActor"));
-  *left = ready;
-  if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
+  Nat commercial = same_text(tag, text_of_cstring("queryCommercial"));
+  Nat sound = same_text(tag, text_of_cstring("queryProjectionSound"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
+  *left = ready;
+  if (commercial == 1 || sound == 1)
+    return read_record(hash_fuel, ready, position, items, query, commercial, value, left, failure);
+  if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;
   if (audit == 1) {

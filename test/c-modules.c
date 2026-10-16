@@ -4149,8 +4149,7 @@ static void read_refused(const char *tag) {
 }
 
 /* M2 part A: read_path_type has the three ReadPath binders answer, log and
-   query; read_step refuses the M2 part C tags and one S4 tag (M2 part B
-   delta B-2). */
+   query; read_step refuses one S4 tag (M2 part C delta C-1). */
 static void test_m2_read_path(void) {
   assert(same_text(arrow_params(read_path_type())->head.name, text("answer")));
   const Params *binders = read_binders();
@@ -4158,8 +4157,6 @@ static void test_m2_read_path(void) {
   assert(binders->tail != NULL && same_text(binders->tail->head.name, text("log")));
   assert(binders->tail->tail != NULL && same_text(binders->tail->tail->head.name, text("query")));
   assert(binders->tail->tail->tail == NULL);
-  read_refused("queryCommercial");
-  read_refused("queryProjectionSound");
   read_refused("queryAmountReconciled");
 }
 
@@ -4259,6 +4256,175 @@ static void test_m2_entry_queries(void) {
   assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
   left = 9;
   assert(!read_step(1000, 0, 7, answer, log, tagged(&query, "queryTail", "after", now), &value, &left, &failure));
+  assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
+}
+
+/* M2 part C: a value with two fields (and a tag when tag is not NULL), in
+   the storage of the caller. */
+typedef struct {
+  Value name;
+  Attrs second;
+  Attrs first;
+  Attrs tag;
+  Value value;
+} Paired;
+
+static const Value *paired(Paired *storage, const char *tag, const char *first_key, const Value *first,
+                           const char *second_key, const Value *second) {
+  storage->name = (Value){.kind = VALUE_TEXT, .text = text(tag == NULL ? "" : tag)};
+  storage->second = (Attrs){text(second_key), second, NULL};
+  storage->first = (Attrs){text(first_key), first, &storage->second};
+  storage->tag = (Attrs){text("tag"), &storage->name, &storage->first};
+  storage->value = (Value){.kind = VALUE_ATTRS, .attrs = tag == NULL ? &storage->first : &storage->tag};
+  return &storage->value;
+}
+
+/* M2 part C: the write input of actor (expect none, command tag key field),
+   in the storage of the caller. */
+typedef struct {
+  Tagged command;
+  Value none;
+  Attrs command_field;
+  Attrs expect;
+  Attrs actor;
+  Value value;
+} Written;
+
+static const Value *written(Written *storage, const Value *actor, const char *tag, const char *key,
+                            const Value *field) {
+  storage->none = (Value){.kind = VALUE_NULL};
+  storage->command_field = (Attrs){text("command"), tagged(&storage->command, tag, key, field), NULL};
+  storage->expect = (Attrs){text("expect"), &storage->none, &storage->command_field};
+  storage->actor = (Attrs){text("actor"), actor, &storage->expect};
+  storage->value = (Value){.kind = VALUE_ATTRS, .attrs = &storage->actor};
+  return &storage->value;
+}
+
+/* M2 part C (design items 13 to 16): the index by entry hash and the record
+   queries, on a log of 3 entries from write_step (p1 opens c1, p1 opens c2,
+   p1 records an event on c1). A read projects each entry, thus it takes
+   1 + 3 work steps. */
+static void test_m2_record_queries(void) {
+  Value p1 = {.kind = VALUE_TEXT, .text = text("p1")};
+  Value first_name = {.kind = VALUE_TEXT, .text = text("c1")};
+  Value second_name = {.kind = VALUE_TEXT, .text = text("c2")};
+  Value commercial_kind = {.kind = VALUE_TEXT, .text = text("kindCommercial")};
+  Value event_kind = {.kind = VALUE_TEXT, .text = text("kindEvent")};
+  Value nothing = {.kind = VALUE_NULL};
+  Paired first_deal_storage, second_deal_storage;
+  const Value *first_deal = paired(&first_deal_storage, NULL, "name", &first_name, "lastEvent", &nothing);
+  const Value *second_deal = paired(&second_deal_storage, NULL, "name", &second_name, "lastEvent", &nothing);
+  Written first_write, second_write, third_write;
+  Value empty_log = {.kind = VALUE_ITEMS, .items = NULL};
+  const Value *step;
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(write_step(1000, 5, 3, &empty_log, written(&first_write, &p1, "commandOpenCommercial", "commercial", first_deal),
+                    &step, &left, &failure));
+  assert(write_step(1000, 5, 3, step->attrs->value,
+                    written(&second_write, &p1, "commandOpenCommercial", "commercial", second_deal), &step, &left,
+                    &failure));
+  Text first_hash = {NULL, 0};
+  Text second_hash = {NULL, 0};
+  Text event_hash = {NULL, 0};
+  assert(entry_hash(1000, 1, 0, step->attrs->value->items->head, &first_hash, &left, &failure));
+  assert(entry_hash(1000, 1, 0, step->attrs->value->items->tail->head, &second_hash, &left, &failure));
+  Value first_text = {.kind = VALUE_TEXT, .text = first_hash};
+  Value second_text = {.kind = VALUE_TEXT, .text = second_hash};
+  Value unknown_text = {.kind = VALUE_TEXT, .text = text("e9")};
+  Paired first_ref_storage, second_ref_storage, unknown_ref_storage, event_ref_storage, stored_storage, query;
+  const Value *first_ref = paired(&first_ref_storage, NULL, "kind", &commercial_kind, "hash", &first_text);
+  const Value *second_ref = paired(&second_ref_storage, NULL, "kind", &commercial_kind, "hash", &second_text);
+  const Value *unknown_ref = paired(&unknown_ref_storage, NULL, "kind", &commercial_kind, "hash", &unknown_text);
+  Tagged subject_storage;
+  Attrs subject_field = {text("subject"), tagged(&subject_storage, "subjectCommercial", "commercial", first_ref),
+                         NULL};
+  Value event = {.kind = VALUE_ATTRS, .attrs = &subject_field};
+  assert(write_step(1000, 5, 3, step->attrs->value, written(&third_write, &p1, "commandRecord", "event", &event),
+                    &step, &left, &failure));
+  const Value *log = step->attrs->value;
+  assert(log->kind == VALUE_ITEMS && read_count(log->items) == 3);
+  assert(entry_hash(1000, 1, 0, log->items->tail->tail->head, &event_hash, &left, &failure));
+  Value event_text = {.kind = VALUE_TEXT, .text = event_hash};
+  const Value *event_ref = paired(&event_ref_storage, NULL, "kind", &event_kind, "hash", &event_text);
+  /* The find by hash gives the record of each hash, and NULL for an unknown
+     hash. A record is ref, type, value. */
+  const Located *records = NULL;
+  Nat found = 9;
+  Nat budget = 3;
+  Text none = {NULL, 0};
+  assert(project_entries(1000, 7, text("log"), log->items, none, &records, &found, &budget, &failure));
+  assert(budget == 0 && found == 0);
+  const Value *record = project_find(first_hash, records);
+  assert(record != NULL && same_text(record->attrs->value->text, first_hash));
+  assert(same_text(record->attrs->rest->rest->value->attrs->value->text, text("c1")));
+  record = project_find(second_hash, records);
+  assert(record != NULL && same_text(record->attrs->rest->rest->value->attrs->value->text, text("c2")));
+  assert(project_find(event_hash, records) != NULL);
+  assert(project_find(text("e9"), records) == NULL);
+  /* queryCommercial: at momentNow c1 has lastEvent the Ref of the event; c2
+     and c1 as of its creating entry have lastEvent none; an unknown ref and
+     an unknown entry give none. */
+  Tagged now_storage, first_moment_storage, unknown_moment_storage;
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *as_of_first = tagged(&first_moment_storage, "momentAsOf", "entry", &first_text);
+  const Value *as_of_unknown = tagged(&unknown_moment_storage, "momentAsOf", "entry", &unknown_text);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  assert(read_step(1000, 5, 7, answer, log, paired(&query, "queryCommercial", "commercial", first_ref, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 1 && value->kind == VALUE_ATTRS && same_text(value->attrs->value->text, text("c1")));
+  const Value *last = value->attrs->rest->value;
+  assert(last->kind == VALUE_ATTRS && same_text(last->attrs->value->text, text("kindEvent")));
+  assert(same_text(last->attrs->rest->value->text, event_hash));
+  assert(read_step(1000, 5, 7, answer, log, paired(&query, "queryCommercial", "commercial", second_ref, "moment", now),
+                   &value, &left, &failure));
+  assert(same_text(value->attrs->value->text, text("c2")) && value->attrs->rest->value->kind == VALUE_NULL);
+  assert(read_step(1000, 5, 7, answer, log,
+                   paired(&query, "queryCommercial", "commercial", first_ref, "moment", as_of_first), &value, &left,
+                   &failure));
+  assert(left == 3 && same_text(value->attrs->value->text, text("c1")));
+  assert(value->attrs->rest->value->kind == VALUE_NULL);
+  assert(read_step(1000, 5, 7, answer, log,
+                   paired(&query, "queryCommercial", "commercial", unknown_ref, "moment", now), &value, &left,
+                   &failure));
+  assert(value->kind == VALUE_NULL);
+  assert(read_step(1000, 5, 7, answer, log,
+                   paired(&query, "queryCommercial", "commercial", first_ref, "moment", as_of_unknown), &value, &left,
+                   &failure));
+  assert(left == 1 && value->kind == VALUE_NULL);
+  /* queryProjectionSound: flagYes on the replayed state, flagNo on another
+     state and on an unknown ref. */
+  const Value *stored = paired(&stored_storage, NULL, "name", &first_name, "lastEvent", event_ref);
+  assert(read_step(1000, 5, 7, answer, log,
+                   paired(&query, "queryProjectionSound", "commercial", first_ref, "stored", stored), &value, &left,
+                   &failure));
+  assert(left == 1 && value->kind == VALUE_FLAG && value->flag == FLAG_YES);
+  assert(read_step(1000, 5, 7, answer, log,
+                   paired(&query, "queryProjectionSound", "commercial", first_ref, "stored", first_deal), &value,
+                   &left, &failure));
+  assert(value->kind == VALUE_FLAG && value->flag == FLAG_NO);
+  assert(read_step(1000, 5, 7, answer, log,
+                   paired(&query, "queryProjectionSound", "commercial", unknown_ref, "stored", stored), &value, &left,
+                   &failure));
+  assert(value->kind == VALUE_FLAG && value->flag == FLAG_NO);
+  /* The budget: 1 + 3 steps. */
+  assert(read_step(1000, 4, 7, answer, log, paired(&query, "queryCommercial", "commercial", first_ref, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 0);
+  /* Record queries obey the same per-entry hash fuel as the log queries. */
+  assert(!read_step(1, 4, 7, answer, log,
+                    paired(&query, "queryCommercial", "commercial", first_ref, "moment", now), &value, &left,
+                    &failure));
+  assert(left == 2 && same_text(failure.message, eOutput));
+  assert(!read_step(1, 4, 7, answer, log,
+                    paired(&query, "queryProjectionSound", "commercial", first_ref, "stored", stored), &value,
+                    &left, &failure));
+  assert(left == 2 && same_text(failure.message, eOutput));
+  left = 9;
+  assert(!read_step(1000, 0, 7, answer, log,
+                    paired(&query, "queryProjectionSound", "commercial", first_ref, "stored", stored), &value, &left,
+                    &failure));
   assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
 }
 
@@ -4384,6 +4550,7 @@ int main(void) {
   test_m1_write();
   test_m2_read_path();
   test_m2_entry_queries();
+  test_m2_record_queries();
   test_m2_read_callback_check();
   test_m2_read_check_parity();
   test_m1_records();

@@ -936,6 +936,18 @@ const Term *read_body(Nat position, Tokens body, Tokens rest);
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure);
 
+/* M2 part C (design item 13): the index by entry hash. project_entries folds
+   the M1 projection over the entries items in log order on records (the
+   newest record first); each entry takes one work step, and hash_fuel bounds
+   its serialized bytes. With a stop hash,
+   the fold ends after the first entry whose hash is stop, and found gets 1.
+   project_find gives the record whose ref is ref, or NULL. Located (a list
+   of named values) is defined in program.c. */
+typedef struct Located Located;
+int project_entries(Fuel hash_fuel, Nat position, Text name, const Values *items, Text stop, const Located **records, Nat *found,
+                    Nat *budget, Failure *failure);
+const Value *project_find(Text ref, const Located *records);
+
 /* eval_term evaluates a checked body term at run time (D3-s3). It follows
    parse_term with atom 0 on the tokens of the term: the same expected type,
    the same fuel steps and the same work charges in the same order. A
