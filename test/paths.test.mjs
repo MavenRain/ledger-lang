@@ -810,6 +810,55 @@ test('queryAccount360 of an unknown party keeps the refusal', () => {
   reject(read(dealOf(named(log).ce1)), readError, 'read');
 });
 
+// M4 part C: the review queue (delta C-1). The log: a Membership with confidence some 40 (entry 0), a Membership with
+// confidence none (1), a Commercial (2; no provenance), a Commitment of it with some 50 (3) and an Assignment with some 80
+// (4).
+const reviewPre = 'def who : Ref kindParty := refTo (hashOf "party-who") ' +
+  'def acme : Ref kindParty := refTo (hashOf "party-acme") ' +
+  'def evidence : Ref kindArtifact := refTo (hashOf "email-entry") ' +
+  'def low : Provenance := makeProvenance (some evidence) none (some 40) ' +
+  'def unscored : Provenance := makeProvenance (some evidence) none none ' +
+  'def provenance : Provenance := makeProvenance (some evidence) none (some 50) ' +
+  'def high : Provenance := makeProvenance (some evidence) none (some 80) ' +
+  'def lowJob : Membership := makeMembership who acme none flagYes none low attrsEnd ' +
+  'def lj : Entry := makeEntry none (actorHuman who) (createsMembership lowJob) ' +
+  'def openJob : Membership := makeMembership (refTo (hashOf "party-sam")) acme none flagNo none unscored attrsEnd ' +
+  'def oj : Entry := makeEntry none (actorHuman who) (createsMembership openJob) ' +
+  'def d1 : Commercial := makeCommercial commercialDeal "First" acme "qualify" (some 1000) "USD" none statusOpen ' +
+  'attrsEnd none def ce : Entry := makeEntry none (actorHuman who) (createsCommercial d1) ';
+const reviewLog = () => {
+  const { ce } = named(reviewPre);
+  return `${reviewPre}def dealOne : Ref kindCommercial := ${dealOf(ce)} ` +
+    `def netTerm : Commitment := ${commitmentOf('dealOne', 'commitmentTerm', '(valueText "net_30")', 'commitmentAgreed', 'none')} ` +
+    'def te : Entry := makeEntry none (actorHuman who) (createsCommitment netTerm) ' +
+    'def owner : Assignment := makeAssignment (accountParty acme) who roleOwner none none high ' +
+    'def oe : Entry := makeEntry none (actorHuman who) (createsAssignment owner) ' +
+    'def book : Log := cons lj (cons oj (cons ce (cons te (cons oe nil)))) ';
+};
+const reviewOf = (log, below) => named(`${log}def r : List Hash := read (List Hash) book (queryReviewQueue ${below})`).r;
+
+test('queryReviewQueue lists the records below the threshold in log order', () => {
+  const log = reviewLog();
+  const { lj, te, oe } = named(log);
+  assert.deepEqual(reviewOf(log, 51), [sha256(lj), sha256(te)]);
+  assert.deepEqual(reviewOf(log, 100), [sha256(lj), sha256(te), sha256(oe)]);
+});
+
+test('queryReviewQueue does not list a record at the threshold', () => {
+  const log = reviewLog();
+  assert.deepEqual(reviewOf(log, 50), [sha256(named(log).lj)]);
+  assert.deepEqual(reviewOf(log, 40), []);
+  assert.deepEqual(reviewOf(log, 0), []);
+});
+
+test('queryReviewQueue skips a record with no confidence', () => {
+  const log = reviewLog();
+  const { oj, ce } = named(log);
+  const listed = reviewOf(log, 100);
+  assert.ok(!listed.includes(sha256(oj)) && !listed.includes(sha256(ce)));
+  assert.deepEqual(reviewOf(`${reviewPre}def book : Log := cons oj (cons ce nil) `, 100), []);
+});
+
 test('an M1 program keeps its records key', () => {
   const { ce } = named(recordLog());
   const { records } = run(recordLog());

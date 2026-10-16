@@ -441,7 +441,9 @@ of the log, and `queryCommercial` and `queryProjectionSound` from the
 records that the log makes (docs/STATUS.md `## M2`). It answers
 `queryTermsInForce`, `queryTermHistory`, `queryAmountReconciled`,
 `queryDiscountPct`, `queryMembersOf`, `queryEmployer` and `queryJobChanges`
-from the records (docs/STATUS.md `## M3`). Each other Query
+from the records (docs/STATUS.md `## M3`). It answers `queryPipeline`,
+`queryStageStats`, `queryStaleDeals`, `queryRenewals`, `queryAccount360` and
+`queryReviewQueue` from the records (docs/STATUS.md `## M4`). Each other Query
 constructor gives the refusal "the read path does not answer this query".
 A definition that binds the name `read` hides the builtin.
 
@@ -451,7 +453,7 @@ def sound : Flag := read Flag book (queryProjectionSound deal replayed)
 ```
 
 The compiler runs the write path of M1: the builtin `write` and the
-records of the logs (SPEC.md section 5). It runs the read path of M2 and
-M3: the builtin `read` and the twelve queries above. `compiler/schema.c` and
+records of the logs (SPEC.md section 5). It runs the read path of M2 to
+M4: the builtin `read` and the eighteen queries above. `compiler/schema.c` and
 `compiler/operations.c` take the constructor and field data from
 `core/schema.def` and `core/ops.def` when the compiler is built.

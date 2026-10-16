@@ -293,7 +293,71 @@ the read path.
   read application.
 - Out of M3: the other 17 Query constructors (the Artifact, Assignment,
   Policy and Rollups groups, and `queryTimeline`, `queryThread` and
-  `queryAuditByPolicy`).
+  `queryAuditByPolicy`; after M4, 11 (see `## M4`)).
+
+## M4
+
+M4 is the Rollups group of the read path: the pipeline queries (part A),
+the renewal and account queries (part B) and the review queue (part C).
+The position of a record is its index in log order, and L is the number
+of records.
+
+- The pipeline (part A). `queryPipeline k m` gives one `Bucket` for each
+  distinct key text of the Commercial records as of `m`, in the log order
+  of the first record of each key. The key text is the `stage` field for
+  `pipelineByStage` and the `expectedCloseOn` field for
+  `pipelineByCloseDate`. The `count` of a Bucket is the number of its
+  records. Its `amountCents` is the saturating sum of the
+  `amountCents = some n` values of its records; a `none` adds 0.
+  `momentAsOf h` reads the entries up to and including the first entry
+  whose hash is `h`; a hash that names no entry gives `nil`. The keys
+  `pipelineByOwner` and `pipelineByTerritory` give the refusal of the
+  read path.
+- The stage statistics (part A). A stage change is an Event record with
+  the type `eventStageChanged`, the subject `subjectCommercial` and a Text
+  `after` in its payload. `queryStageStats` gives one `StageStat` for each
+  stage text of the full log, in first-seen log order: a Commercial record
+  names its `stage`, and a stage change names its `before`, then its
+  `after`. `entered` is the number of stage changes whose `after` is the
+  stage, and `advanced` is the number of stage changes whose `before` is
+  the stage. `entriesInStage` is the sum of exit - enter over the stays
+  in the stage. A stay starts at a Commercial record in the stage or at a
+  stage change into the stage. Its exit is the position of the next stage
+  change of the deal out of the stage, else L. The unit is log entries,
+  because the schema has no clock.
+- The stale deals (part A). The last position of a Commercial record is
+  the larger of its position and the position of its `lastEvent` record.
+  `queryStaleDeals q` gives each Commercial record of the full log whose
+  last position p has p + q < L, as `Ref kindCommercial` items in log
+  order.
+- The renewals (part B). `queryRenewals` gives one `Renewal` for each
+  Commercial record of the full log that has an in-force `commitmentDate`
+  record, in log order. The `date` is the Text of the value of the oldest
+  such record (`""` for a value that is not a Text). The `term` is the
+  `Ref kindCommitment` item of the oldest in-force `commitmentTerm`
+  record of the deal, else `none`.
+- The account view (part B). `queryAccount360 p m` gives the `Account360`
+  of the Party record `p` as of `m`: the party record, its current
+  Membership records, and the Commercial, Assignment, Artifact and Event
+  (timeline) records that name the party or one of its deals. Each list
+  is in log order, and an empty list is `nil`. `momentAsOf h` reads the
+  entries up to and including the first entry whose hash is `h`. When the
+  Party record is not in these records (an unknown ref, a ref of a record
+  of another kind, or a hash that names no entry), the query gives the
+  refusal of the read path, because an `Account360` is not an Option.
+- The review queue (part C). `queryReviewQueue n` gives the ref of each
+  record of the full log whose `provenance` field has
+  `confidence = some k` with k < n, as `Hash` items in log order. The
+  kinds with a `provenance` field are Membership, Commitment and
+  Assignment. A record with no `provenance` field, or with
+  `confidence = none`, is not in the list. `n = 0` gives `nil`.
+- The work budget. The read application takes one work step. Each entry
+  that a query projects takes one work step. A walk over the records takes
+  no step. A budget of 0 gives the budget failure at the read application.
+- Out of M4: the other 11 Query constructors (the Artifact, Assignment and
+  Policy groups, and `queryTimeline`, `queryThread` and
+  `queryAuditByPolicy`), and the keys `pipelineByOwner` and
+  `pipelineByTerritory` of `queryPipeline`.
 
 ## Remaining M0 work
 

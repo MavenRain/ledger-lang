@@ -5275,6 +5275,124 @@ static void test_m4_account_queries(void) {
   assert(left == 0 && same_text(starved.message, eBudget));
 }
 
+/* The log of the M4 part C test plan with delta C-1 (L = 5): a Membership
+   with confidence = some 40 (entry 0), a Membership with confidence = none
+   (1), a Commercial (2; no provenance), a Commitment of it with some 50 (3)
+   and an Assignment with some 80 (4). */
+typedef struct {
+  Value confidences[4], provenances[4], kind, nothing;
+  Attrs confidence_fields[4];
+  AccountEntry entries[5];
+  Text hashes[5];
+  Value hash_texts[5];
+  Paired deal_storage;
+  Values items[5];
+  Value log;
+} ReviewLog;
+
+static void review_hashes(ReviewLog *s, const Value *const *entry, Nat at, Nat end, Nat *left, Failure *failure) {
+  if (at >= end || at >= 5) return;
+  assert(entry_hash(1000, 1, 0, entry[at], &s->hashes[at], left, failure));
+  s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+  review_hashes(s, entry, at + 1, end, left, failure);
+}
+
+static Values *review_entries(ReviewLog *s, const Value *const *entry, Nat at) {
+  if (at >= 5) return NULL;
+  s->items[at] = (Values){entry[at], review_entries(s, entry, at + 1)};
+  return &s->items[at];
+}
+
+/* The provenance at of s (at most 4) with the confidence value (a Nat, or
+   none). */
+static const Value *review_provenance(ReviewLog *s, Nat at, Value confidence) {
+  if (at >= 4) return &s->nothing;
+  s->confidences[at] = confidence;
+  s->confidence_fields[at] = (Attrs){text("confidence"), &s->confidences[at], NULL};
+  s->provenances[at] = (Value){.kind = VALUE_ATTRS, .attrs = &s->confidence_fields[at]};
+  return &s->provenances[at];
+}
+
+static const Value *review_log(ReviewLog *s, Nat *left, Failure *failure) {
+  const char *const membership_keys[] = {"endedBy", "provenance"};
+  const char *const commercial_keys[] = {"party", "lastEvent"};
+  const char *const commitment_keys[] = {"commercial", "provenance"};
+  const char *const assignment_keys[] = {"endedBy", "provenance"};
+  const Value *entry[5];
+  s->nothing = (Value){.kind = VALUE_NULL};
+  s->kind = account_text("kindCommercial");
+  const Value *low = review_provenance(s, 0, (Value){.kind = VALUE_NAT, .number = 40});
+  const Value *unscored = review_provenance(s, 1, (Value){.kind = VALUE_NULL});
+  const Value *middle = review_provenance(s, 2, (Value){.kind = VALUE_NAT, .number = 50});
+  const Value *high = review_provenance(s, 3, (Value){.kind = VALUE_NAT, .number = 80});
+  entry[0] = account_entry(&s->entries[0], "createsMembership", "membership", 2, membership_keys,
+                           (const Value *[]){&s->nothing, low});
+  entry[1] = account_entry(&s->entries[1], "createsMembership", "membership", 2, membership_keys,
+                           (const Value *[]){&s->nothing, unscored});
+  entry[2] = account_entry(&s->entries[2], "createsCommercial", "commercial", 2, commercial_keys,
+                           (const Value *[]){&s->nothing, &s->nothing});
+  review_hashes(s, entry, 0, 3, left, failure);
+  const Value *deal = paired(&s->deal_storage, NULL, "kind", &s->kind, "hash", &s->hash_texts[2]);
+  entry[3] = account_entry(&s->entries[3], "createsCommitment", "commitment", 2, commitment_keys,
+                           (const Value *[]){deal, middle});
+  entry[4] = account_entry(&s->entries[4], "createsAssignment", "assignment", 2, assignment_keys,
+                           (const Value *[]){&s->nothing, high});
+  review_hashes(s, entry, 3, 5, left, failure);
+  s->log = (Value){.kind = VALUE_ITEMS, .items = review_entries(s, entry, 0)};
+  return &s->log;
+}
+
+/* 1 when the items i to count - 1 of value are the hashes of the entries
+   at[i] of s. */
+static Nat review_from(const Value *value, const ReviewLog *s, Nat i, Nat count, const Nat *at) {
+  return i >= count ||
+         (at[i] < 5 && same_text(pipeline_at(value, i)->text, s->hashes[at[i]]) == 1 &&
+          review_from(value, s, i + 1, count, at) == 1);
+}
+
+/* 1 when value is the List Hash of the count entries at of s (count 0: nil). */
+static Nat review_is(const Value *value, const ReviewLog *s, Nat count, const Nat *at) {
+  return value->kind == VALUE_ITEMS && read_count(value->items) == count && review_from(value, s, 0, count, at) == 1;
+}
+
+/* M4 part C (design items 14, 15 and 17, delta C-1): queryReviewQueue on the
+   log of the test plan (L = 5). Each read takes 1 step and 1 step for each
+   projected entry; the walk takes no step. */
+static void test_m4_review_queue(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  Failure starved = {0, {NULL, 0}, {NULL, 0}};
+  ReviewLog storage;
+  const Value *log = review_log(&storage, &left, &failure);
+  Value fifty = {.kind = VALUE_NAT, .number = 50}, fifty_one = {.kind = VALUE_NAT, .number = 51};
+  Value hundred = {.kind = VALUE_NAT, .number = 100}, zero = {.kind = VALUE_NAT, .number = 0};
+  Tagged query_storage[5];
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* 50 gives [0]: entry 3 has 50, not below 50; 1 + 5 steps. */
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[0], "queryReviewQueue", "belowConfidence", &fifty),
+                   &value, &left, &failure));
+  assert(left == 14 && review_is(value, &storage, 1, (const Nat[]){0}) == 1);
+  /* 51 gives [0, 3]. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   tagged(&query_storage[1], "queryReviewQueue", "belowConfidence", &fifty_one), &value, &left,
+                   &failure));
+  assert(left == 14 && review_is(value, &storage, 2, (const Nat[]){0, 3}) == 1);
+  /* 100 gives [0, 3, 4]: entry 1 (confidence none) and entry 2 (no
+     provenance) are not listed. */
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[2], "queryReviewQueue", "belowConfidence", &hundred),
+                   &value, &left, &failure));
+  assert(left == 14 && review_is(value, &storage, 3, (const Nat[]){0, 3, 4}) == 1);
+  /* 0 gives nil. */
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[3], "queryReviewQueue", "belowConfidence", &zero),
+                   &value, &left, &failure));
+  assert(left == 14 && review_is(value, &storage, 0, NULL) == 1);
+  /* Budget 0 gives eBudget with left 0. */
+  assert(!read_step(1000, 0, 7, answer, log, tagged(&query_storage[4], "queryReviewQueue", "belowConfidence", &fifty),
+                    &value, &left, &starved));
+  assert(left == 0 && same_text(starved.message, eBudget));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -5347,6 +5465,7 @@ int main(void) {
   test_m3_membership_queries();
   test_m4_pipeline_queries();
   test_m4_account_queries();
+  test_m4_review_queue();
   test_m1_records();
   test_m1_projection_hash_failure();
   test_m1_projection_print_failure();

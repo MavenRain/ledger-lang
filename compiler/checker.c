@@ -3460,6 +3460,34 @@ static int read_account(Fuel hash_fuel, Nat budget, Nat position, const Values *
   return 1;
 }
 
+/* M4 part C (design item 15): the ref of each record of walk whose
+   provenance has confidence = some k with k < below, in log order: walk is
+   newest first, and items holds the refs of the newer records. A record
+   with no provenance field, or with confidence none, is not listed. */
+static const Values *review_items(Nat below, const Located *walk, const Values *items) {
+  if (walk == NULL) return items;
+  const Value *confidence = write_field(text_of_cstring("confidence"), commitment_field(walk->value, "provenance"));
+  Nat keep = confidence->kind == VALUE_NAT && confidence->number < below;
+  return review_items(below, walk->tail,
+                      keep == 1 ? values_item(write_field(text_of_cstring("ref"), walk->value), items) : items);
+}
+
+/* M4 part C (design items 14, 15 and 17): queryReviewQueue. The records
+   are the projection of the full log (project_entries), as read_account:
+   each entry takes one work step, and the walk takes no step. The answer is
+   a List Hash in log order; no record gives nil. */
+static int read_review(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query,
+                       const Value **value, Nat *left, Failure *failure) {
+  Text none = {NULL, 0};
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, none, &records, &found, left, failure)) return 0;
+  const Value *below = write_field(text_of_cstring("belowConfidence"), query);
+  *value = items_value(review_items(below->kind == VALUE_NAT ? below->number : 0, records, NULL));
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -3468,9 +3496,10 @@ static int read_account(Fuel hash_fuel, Nat budget, Nat position, const Values *
    give the answer of read_record. The four Commitment tags give the answer
    of read_commitment (M3 part A), and the three Membership tags the answer
    of read_membership (M3 part B), the three Rollups tags of M4 part A the
-   answer of read_pipeline, and queryRenewals and queryAccount360 (M4 part B)
-   the answer of read_account. Each other tag gives eRead at position (the
-   read application) with left budget - 1. */
+   answer of read_pipeline, queryRenewals and queryAccount360 (M4 part B)
+   the answer of read_account, and queryReviewQueue (M4 part C) the answer
+   of read_review. Each other tag gives eRead at position (the read
+   application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
   if (budget == 0) {
@@ -3496,6 +3525,7 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat stale = same_text(tag, text_of_cstring("queryStaleDeals"));
   Nat renewals = same_text(tag, text_of_cstring("queryRenewals"));
   Nat account = same_text(tag, text_of_cstring("queryAccount360"));
+  Nat review = same_text(tag, text_of_cstring("queryReviewQueue"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (commercial == 1 || sound == 1)
@@ -3508,6 +3538,7 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
     return read_pipeline(hash_fuel, ready, position, items, query, pipeline, stats, value, left, failure);
   if (renewals == 1 || account == 1)
     return read_account(hash_fuel, ready, position, items, query, renewals, value, left, failure);
+  if (review == 1) return read_review(hash_fuel, ready, position, items, query, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;

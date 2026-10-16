@@ -232,17 +232,23 @@ Encoding rules:
   whose identity is the hash of its `subject`. The final state of a record
   is its state at the end of the logs. The records are in the key `records`
   of the target (section 5).
-- M2: the read path. `read : ReadPath` answers twelve queries from the
+- M2: the read path. `read : ReadPath` answers eighteen queries from the
   log: `queryReplay`, `queryTail` and `queryAuditByActor` from the
   entries, `queryCommercial` and `queryProjectionSound` from the records
-  of the log, and the seven queries of M3. Each other `Query` constructor
-  gives the refusal "the read path does not answer this query". The
-  compiler runs the read path.
+  of the log, and the seven queries of M3 and the six queries of M4. Each
+  other `Query` constructor gives the refusal "the read path does not
+  answer this query". The compiler runs the read path.
 - M3: the Commitment and the Membership queries of the read path.
   `queryTermsInForce`, `queryTermHistory`, `queryAmountReconciled` and
   `queryDiscountPct` come from the Commitment and Commercial records of
   the log. `queryMembersOf`, `queryEmployer` and `queryJobChanges` come
   from the Membership records of the log (docs/STATUS.md `## M3`).
+- M4: the Rollups queries of the read path. `queryPipeline`,
+  `queryStageStats` and `queryStaleDeals` come from the Commercial and
+  Event records of the log. `queryRenewals` and `queryAccount360` come
+  from the Commercial, Commitment, Party, Membership, Assignment, Artifact
+  and Event records of the log. `queryReviewQueue` comes from the
+  `provenance` field of the records of the log (docs/STATUS.md `## M4`).
 
 ## 7. Milestones
 
@@ -252,4 +258,5 @@ Encoding rules:
 | M1 | Write path, entry hashes, projection |
 | M2 | Read path |
 | M3 | Read path: the Commitment and the Membership queries |
-| M4 | Speed and a kernel-checked certificate for the output |
+| M4 | Read path: the Rollups queries |
+| M5 | Speed and a kernel-checked certificate for the output |
