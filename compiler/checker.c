@@ -2629,18 +2629,121 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
                       value, failure);
 }
 
-/* M2 part A (design items 5 to 7): read log query on the answer type. One
-   work step; budget 0 gives eBudget with left 0. The tag of the Query value
-   selects the answer. In part A no tag has an answer: each read gives eRead
-   at position (the read application). */
+/* M2 part B (design item 8): the visit of the entries in log order. The
+   visit of an entry is its entry_hash (one work step). hashes gets the hash
+   of each entry as a Text value, in log order. When the budget runs out:
+   eBudget with left 0. */
+static int read_visit(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Values **hashes, Nat *left,
+                      Failure *failure) {
+  if (items == NULL) {
+    *hashes = NULL;
+    *left = budget;
+    return 1;
+  }
+  Text hash = {NULL, 0};
+  Nat done;
+  if (!entry_hash(hash_fuel, budget, position, items->head, &hash, &done, failure)) {
+    *left = done;
+    return 0;
+  }
+  const Values *rest;
+  if (!read_visit(hash_fuel, done, position, items->tail, &rest, left, failure)) return 0;
+  *hashes = values_item(text_value(hash), rest);
+  return 1;
+}
+
+/* The place (from 1) of the first hash that is hash. 0 when no hash is. */
+static Nat read_place(const Values *hashes, Text hash, Nat place) {
+  return hashes == NULL                          ? 0
+         : same_text(hashes->head->text, hash) == 1 ? place
+                                                    : read_place(hashes->tail, hash, place + 1);
+}
+
+/* A new list of the first count items. */
+static const Values *read_take(const Values *items, Nat count) {
+  return items == NULL || count == 0 ? NULL : values_item(items->head, read_take(items->tail, count - 1));
+}
+
+/* The items after the first count items. No item changes. */
+static const Values *read_drop(const Values *items, Nat count) {
+  return items == NULL || count == 0 ? items : read_drop(items->tail, count - 1);
+}
+
+static Nat read_same(const Value *a, const Value *b);
+
+static Nat read_same_items(const Values *a, const Values *b) {
+  return a == NULL || b == NULL ? a == b : read_same(a->head, b->head) == 1 ? read_same_items(a->tail, b->tail) : 0;
+}
+
+static Nat read_same_attrs(const Attrs *a, const Attrs *b) {
+  return a == NULL || b == NULL                                             ? a == b
+         : same_text(a->key, b->key) == 1 && read_same(a->value, b->value) == 1 ? read_same_attrs(a->rest, b->rest)
+                                                                              : 0;
+}
+
+/* M2 part B delta B-1 (design item 11): 1 when a and b are the same value:
+   the same kind, and the same flag, number or text, the same items in
+   order, or the same attrs (each key and value in order). Else 0. */
+static Nat read_same(const Value *a, const Value *b) {
+  if (a->kind != b->kind) return 0;
+  switch (a->kind) {
+  case VALUE_NULL: return 1;
+  case VALUE_FLAG: return a->flag == b->flag;
+  case VALUE_NAT: return a->number == b->number;
+  case VALUE_TEXT: return same_text(a->text, b->text);
+  case VALUE_ITEMS: return read_same_items(a->items, b->items);
+  case VALUE_ATTRS: return read_same_attrs(a->attrs, b->attrs);
+  }
+  return 0;
+}
+
+/* M2 part B (design item 11): for each entry in log order with a
+   createsEvent body and the same actor, one Ref kindEvent with the hash of
+   that entry. */
+static const Values *read_audit(const Values *items, const Values *hashes, const Value *actor) {
+  if (items == NULL || hashes == NULL) return NULL;
+  const Values *rest = read_audit(items->tail, hashes->tail, actor);
+  const Value *body = write_field(text_of_cstring("body"), items->head);
+  Nat event = same_text(write_field(kSchemaTag(), body)->text, text_of_cstring("createsEvent"));
+  Nat same = read_same(write_field(text_of_cstring("actor"), items->head), actor);
+  return event == 1 && same == 1
+             ? values_item(object_two(kRefKind(), text_value(text_of_cstring("kindEvent")), kRefHash(), hashes->head), rest)
+             : rest;
+}
+
+/* M2 parts A and B (design items 5 to 11): read log query on the answer
+   type. The read application takes one work step; budget 0 gives eBudget
+   with left 0. The tag of the Query value selects the answer. queryReplay,
+   queryTail and queryAuditByActor visit each entry of the log (item 8), then
+   give the answer of items 9 to 11. Each other tag gives eRead at position
+   (the read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
   if (budget == 0) {
     *left = 0;
     return fail_at(failure, position, eBudget);
   }
-  *left = budget - 1;
-  return fail_at(failure, position, eRead);
+  Nat ready = budget - 1;
+  Text tag = write_field(kSchemaTag(), query)->text;
+  Nat replay = same_text(tag, text_of_cstring("queryReplay"));
+  Nat tail = same_text(tag, text_of_cstring("queryTail"));
+  Nat audit = same_text(tag, text_of_cstring("queryAuditByActor"));
+  *left = ready;
+  if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
+  const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
+  const Values *hashes;
+  if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;
+  if (audit == 1) {
+    *value = items_value(read_audit(items, hashes, write_field(text_of_cstring("actor"), query)));
+    return 1;
+  }
+  const Value *moment = write_field(text_of_cstring(replay == 1 ? "moment" : "after"), query);
+  Nat now = same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentNow"));
+  Nat place = now == 1 ? 0 : read_place(hashes, write_field(text_of_cstring("entry"), moment)->text, 1);
+  const Values *replayed = now == 1 ? items : read_take(items, place);
+  const Values *after = now == 1 || place == 0 ? NULL : read_drop(items, place);
+  *value = items_value(replay == 1 ? replayed : after);
+  return 1;
 }
 
 /* The builtin write on the token path (the model of pack_term). At the

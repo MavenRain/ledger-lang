@@ -411,6 +411,59 @@ test('a wrong argument gives term does not have the declared type', () => {
   reject(`${readPre}def a : Flag := read Flag history 3`, termError, '3');
 });
 
+// M2 part B: the entry queries. A read visits each entry of the log. Each hash is the SHA-256 of the compact JSON
+// of its Entry.
+const entryPre = 'def acme : Ref kindParty := refTo (hashOf "party-acme") ' +
+  'def beta : Ref kindParty := refTo (hashOf "party-beta") ' +
+  'def n1 : Event := makeEvent eventNoteAdded (subjectParty acme) none none attrsEnd none ' +
+  'def n2 : Event := makeEvent eventNoteAdded (subjectParty beta) none none attrsEnd none ' +
+  'def e1 : Entry := makeEntry none (actorHuman acme) (createsEvent n1) ' +
+  'def e2 : Entry := makeEntry none (actorHuman beta) (createsEvent n1) ' +
+  'def e3 : Entry := makeEntry none (actorHuman acme) (createsEvent n2) ' +
+  'def book : Log := cons e1 (cons e2 (cons e3 nil)) ';
+const answerOf = source => named(`${entryPre}${source}`).r;
+const asOf = entry => `(momentAsOf (hashOf "${sha256(entry)}"))`;
+
+test('queryReplay at momentNow gives the full log', () => {
+  const { e1, e2, e3 } = named(entryPre);
+  assert.deepEqual(answerOf('def r : Log := read Log book (queryReplay momentNow)'), [e1, e2, e3]);
+});
+
+test('queryReplay as of an entry stops at that entry', () => {
+  const { e1, e2 } = named(entryPre);
+  assert.deepEqual(answerOf(`def r : Log := read Log book (queryReplay ${asOf(e2)})`), [e1, e2]);
+  assert.deepEqual(answerOf(`def r : Log := read Log book (queryReplay ${asOf(e1)})`), [e1]);
+});
+
+test('a hash that names no entry gives nil', () => {
+  assert.deepEqual(answerOf('def r : Log := read Log book (queryReplay (momentAsOf (hashOf "e9")))'), []);
+  assert.deepEqual(answerOf('def r : Log := read Log book (queryTail (momentAsOf (hashOf "e9")))'), []);
+});
+
+test('queryTail gives the entries after an entry', () => {
+  const { e1, e2, e3 } = named(entryPre);
+  assert.deepEqual(answerOf(`def r : Log := read Log book (queryTail ${asOf(e1)})`), [e2, e3]);
+  assert.deepEqual(answerOf(`def r : Log := read Log book (queryTail ${asOf(e3)})`), []);
+  assert.deepEqual(answerOf('def r : Log := read Log book (queryTail momentNow)'), []);
+});
+
+test('queryAuditByActor lists the events of one actor', () => {
+  const { e1, e2, e3 } = named(entryPre);
+  const party = 'def company : Party := makeParty partyOrg "Acme" none nil attrsEnd none none ' +
+    'def e4 : Entry := makeEntry none (actorHuman acme) (createsParty company) def all : Log := cons e4 book ';
+  const audit = actor => answerOf(`${party}def r : List (Ref kindEvent) := ` +
+    `read (List (Ref kindEvent)) all (queryAuditByActor (actorHuman ${actor}))`);
+  const ref = entry => ({ kind: 'kindEvent', hash: sha256(entry) });
+  assert.deepEqual(audit('acme'), [ref(e1), ref(e3)]);
+  assert.deepEqual(audit('beta'), [ref(e2)]);
+});
+
+test('a Log answer makes no second record of an entry', () => {
+  const { records } = run(entryPre);
+  assert.equal(records.length, 3);
+  assert.deepEqual(run(`${entryPre}def r : Log := read Log book (queryReplay momentNow)`).records, records);
+});
+
 test('the paths example compiles to its literal steps', async () => {
   const source = await readFile(new URL('../examples/paths.ledger', import.meta.url), 'utf8');
   const found = instances(source);
