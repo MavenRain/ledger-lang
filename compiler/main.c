@@ -9,7 +9,15 @@
                            compiler output (a document or an error) to stdout.
    ledgerc --certificate-core
                            writes the core rows (core/schema.def, core/ops.def)
-                           as one mechanism-lang module to stdout. */
+                           as one mechanism-lang module to stdout.
+   ledgerc --certificate PROGRAM.ledger
+                           compiles the program and writes its certificate
+                           to stdout: one mechanism-lang module whose last def
+                           claims that the render of the instances is the
+                           JSON document and its newline. A failure gives the
+                           line of ledgerc PROGRAM.ledger. A form that the
+                           certificate does not cover gives "PROGRAM.ledger:
+                           the certificate does not cover ... yet". */
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -102,7 +110,9 @@ static int compile_stdin(void) {
   return write_output(job.ok ? job.output : error_text(job.failure.position, job.failure.message), "");
 }
 
-static int compile_file(const char *path) {
+/* Reads and compiles PROGRAM.ledger into job. Gives 0, or the exit code after
+   the message on stderr. */
+static int compile_path(const char *path, Job *job) {
   static unsigned char bytes[SOURCE_LIMIT + 1];
   FILE *file = fopen(path, "rb");
   if (file == NULL) {
@@ -119,19 +129,38 @@ static int compile_file(const char *path) {
     fprintf(stderr, "%s: source exceeds %d bytes\n", path, SOURCE_LIMIT);
     return 1;
   }
-  Job job = {text_of_bytes(bytes, (size_t)size), 0, {NULL, 0}, {0, {NULL, 0}}};
-  if (!compile_on_big_stack(&job)) {
+  *job = (Job){text_of_bytes(bytes, (size_t)size), 0, {NULL, 0}, {0, {NULL, 0}}};
+  if (!compile_on_big_stack(job)) {
     fprintf(stderr, "%s: cannot start the compiler thread\n", path);
     return 70;
   }
-  if (job.ok) return write_output(job.output, "\n");
-  fprintf(stderr, "%s: byte %u: ", path, (unsigned)job.failure.position);
-  print_bytes(stderr, job.failure.message);
-  if (job.failure.name.size > 0) {
+  if (job->ok) return 0;
+  fprintf(stderr, "%s: byte %u: ", path, (unsigned)job->failure.position);
+  print_bytes(stderr, job->failure.message);
+  if (job->failure.name.size > 0) {
     fputs(" (in ", stderr);
-    print_bytes(stderr, job.failure.name);
+    print_bytes(stderr, job->failure.name);
     fputc(')', stderr);
   }
+  fputc('\n', stderr);
+  return 1;
+}
+
+static int compile_file(const char *path) {
+  Job job;
+  int code = compile_path(path, &job);
+  return code != 0 ? code : write_output(job.output, "\n");
+}
+
+static int certify_file(const char *path) {
+  Job job;
+  Text module = {NULL, 0};
+  Text refusal = {NULL, 0};
+  int code = compile_path(path, &job);
+  if (code != 0) return code;
+  if (certificate_module(job.source, job.output, &module, &refusal)) return write_output(module, "");
+  fprintf(stderr, "%s: ", path);
+  print_bytes(stderr, refusal);
   fputc('\n', stderr);
   return 1;
 }
@@ -139,6 +168,7 @@ static int compile_file(const char *path) {
 int main(int argc, char **argv) {
   if (argc == 2 && strcmp(argv[1], "--stdin") == 0) return compile_stdin();
   if (argc == 2 && strcmp(argv[1], "--certificate-core") == 0) return write_output(certificate_core(), "");
+  if (argc == 3 && strcmp(argv[1], "--certificate") == 0) return certify_file(argv[2]);
   if (argc == 2 && strncmp(argv[1], "--", 2) != 0) return compile_file(argv[1]);
   fputs("usage: bin/ledgerc PROGRAM.ledger\n", stderr);
   return 1;

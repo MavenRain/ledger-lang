@@ -1,0 +1,47 @@
+/* The fixed rows of the certificate module (M5 delta C-1, D4), in the row
+   forms of compiler/certificate.c. The rows through mechRefl (the first
+   DEFINE) are the copy of mechanism-lang prelude/init.mech lines 72 to 78.
+   They come before the core rows. The other rows come after the core rows:
+   the digits defs, the base encoders, the Value group and the encoders of
+   Values, Attrs, Option and List. Each encoder puts the JSON bytes of its
+   value in front of the tail. A row is one line, with no comma and no string
+   literal. */
+
+/* Equality keeps its endpoints erased and carries no constructor field. */
+CARRIER(MechEq, (0 A : Type 0) (0 x : A) : (0 y : A) -> Prop)
+  CONSTRUCTOR(mechReflCtor, MechEq A x x)
+DEFINE(mechRefl, : (0 A : Type 0) -> (0 x : A) -> MechEq A x x := fun (0 A : Type 0) (0 x : A) => mechReflCtor)
+
+/* The decimal digits of a Nat below 10^10. */
+DEFINE(tenPowers, : List Nat := cons 1000000000 (cons 100000000 (cons 10000000 (cons 1000000 (cons 100000 (cons 10000 (cons 1000 (cons 100 (cons 10 nil)))))))))
+DEFINE(digitAt, : Nat -> Nat -> Nat := fun (n : Nat) (p : Nat) => (case (natLt n (natMul 1 p)) as s1 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 2 p)) as s2 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 3 p)) as s3 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 4 p)) as s4 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 5 p)) as s5 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 6 p)) as s6 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 7 p)) as s7 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 8 p)) as s8 return Nat with | 0 (no : prod ()) => (case (natLt n (natMul 9 p)) as s9 return Nat with | 0 (no : prod ()) => 9 | 1 (yes : prod ()) => 8) | 1 (yes : prod ()) => 7) | 1 (yes : prod ()) => 6) | 1 (yes : prod ()) => 5) | 1 (yes : prod ()) => 4) | 1 (yes : prod ()) => 3) | 1 (yes : prod ()) => 2) | 1 (yes : prod ()) => 1) | 1 (yes : prod ()) => 0))
+DEFINE_REC(digitTail, : List Nat -> Nat -> Text := fun (ps : List Nat) (n : Nat) => case ps as self in List return Text with | nil => textByte (natAdd 48 n) textEnd | cons (p : Nat) (rest : List Nat) => textByte (natAdd 48 (digitAt n p)) (digitTail rest (natSub n (natMul (digitAt n p) p))))
+DEFINE_REC(digitLead, : List Nat -> Nat -> Text := fun (ps : List Nat) (n : Nat) => case ps as self in List return Text with | nil => textByte (natAdd 48 n) textEnd | cons (p : Nat) (rest : List Nat) => (case (natLt n p) as small return Text with | 0 (no : prod ()) => digitTail ps n | 1 (yes : prod ()) => digitLead rest n))
+DEFINE(digits, : Nat -> Text := fun (n : Nat) => digitLead tenPowers n)
+
+/* The base encoders. */
+DEFINE_REC(textThen, : Text -> Text -> Text := fun (s : Text) (tail : Text) => case s as self in Text return Text with | textEnd => tail | textByte (b : Nat) (rest : Text) => textByte b (textThen rest tail))
+DEFINE(hexLow, : Nat -> Nat := fun (d : Nat) => (case (natLt d 10) as s1 return Nat with | 0 (no : prod ()) => natAdd 87 d | 1 (yes : prod ()) => natAdd 48 d))
+DEFINE(escapeLow, : Nat -> Text -> Text := fun (b : Nat) (tail : Text) => textByte 92 (textByte 117 (textByte 48 (textByte 48 (case (natLt b 16) as s1 return Text with | 0 (no : prod ()) => textByte 49 (textByte (hexLow (natSub b 16)) tail) | 1 (yes : prod ()) => textByte 48 (textByte (hexLow b) tail))))))
+DEFINE(escapeByte, : Nat -> Text -> Text := fun (b : Nat) (tail : Text) => (case (natLt b 32) as s1 return Text with | 0 (no : prod ()) => (case (natEq b 34) as s2 return Text with | 0 (no : prod ()) => (case (natEq b 92) as s3 return Text with | 0 (no : prod ()) => textByte b tail | 1 (yes : prod ()) => textByte 92 (textByte 92 tail)) | 1 (yes : prod ()) => textByte 92 (textByte 34 tail)) | 1 (yes : prod ()) => escapeLow b tail))
+DEFINE_REC(escapeThen, : Text -> Text -> Text := fun (s : Text) (tail : Text) => case s as self in Text return Text with | textEnd => textByte 34 tail | textByte (b : Nat) (rest : Text) => escapeByte b (escapeThen rest tail))
+DEFINE(encodeText, : Text -> Text -> Text := fun (s : Text) (tail : Text) => textByte 34 (escapeThen s tail))
+DEFINE(encodeNat, : Nat -> Text -> Text := fun (n : Nat) (tail : Text) => textThen (digits n) tail)
+DEFINE(encodeFlag, : Flag -> Text -> Text := fun (b : Flag) (tail : Text) => case b as self in Flag return Text with | flagNo => textByte 102 (textByte 97 (textByte 108 (textByte 115 (textByte 101 tail)))) | flagYes => textByte 116 (textByte 114 (textByte 117 (textByte 101 tail))))
+DEFINE(encodeHash, : Hash -> Text -> Text := fun (h : Hash) (tail : Text) => case h as self in Hash return Text with | hashOf (d : Text) => encodeText d tail)
+
+/* The Value group: one mutual def rec group. */
+DEFINE_REC(encodeValue, : Value -> Text -> Text := fun (v : Value) (tail : Text) => case v as sv in Value return Text with | valueNull => textByte 110 (textByte 117 (textByte 108 (textByte 108 tail))) | valueFlag (b : Flag) => encodeFlag b tail | valueNat (n : Nat) => encodeNat n tail | valueText (s : Text) => encodeText s tail | valueItems (vs : Values) => textByte 91 (encodeFirst vs tail) | valueAttrs (a : Attrs) => textByte 123 (encodeKeys a tail))
+DEFINE_AND(encodeFirst, : Values -> Text -> Text := fun (vs : Values) (tail : Text) => case vs as s1 in Values return Text with | valuesEnd => textByte 93 tail | valuesItem (h : Value) (t : Values) => encodeValue h (encodeRest t tail))
+DEFINE_AND(encodeRest, : Values -> Text -> Text := fun (vs : Values) (tail : Text) => case vs as s2 in Values return Text with | valuesEnd => textByte 93 tail | valuesItem (h : Value) (t : Values) => textByte 44 (encodeValue h (encodeRest t tail)))
+DEFINE_AND(encodeKeys, : Attrs -> Text -> Text := fun (a : Attrs) (tail : Text) => case a as s3 in Attrs return Text with | attrsEnd => textByte 125 tail | attrsField (k : Text) (v : Value) (r : Attrs) => encodeText k (textByte 58 (encodeValue v (encodeMore r tail))))
+DEFINE_AND(encodeMore, : Attrs -> Text -> Text := fun (a : Attrs) (tail : Text) => case a as s4 in Attrs return Text with | attrsEnd => textByte 125 tail | attrsField (k : Text) (v : Value) (r : Attrs) => textByte 44 (encodeText k (textByte 58 (encodeValue v (encodeMore r tail)))))
+
+/* Values, Attrs, Option and List. The binder of the payload encoder is put.
+   encodeOptionSome gives {"some":v} for a payload type that encodes null. */
+DEFINE(encodeValues, : Values -> Text -> Text := fun (vs : Values) (tail : Text) => textByte 91 (encodeFirst vs tail))
+DEFINE(encodeAttrs, : Attrs -> Text -> Text := fun (a : Attrs) (tail : Text) => textByte 123 (encodeKeys a tail))
+DEFINE(encodeOptionBare, : (0 A : Type 0) -> (A -> Text -> Text) -> Option A -> Text -> Text := fun (0 A : Type 0) (put : A -> Text -> Text) (o : Option A) (tail : Text) => case o as self in Option return Text with | none => (textByte 110 (textByte 117 (textByte 108 (textByte 108 tail)))) | some (v : A) => put v tail)
+DEFINE(encodeOptionSome, : (0 A : Type 0) -> (A -> Text -> Text) -> Option A -> Text -> Text := fun (0 A : Type 0) (put : A -> Text -> Text) (o : Option A) (tail : Text) => case o as self in Option return Text with | none => (textByte 110 (textByte 117 (textByte 108 (textByte 108 tail)))) | some (v : A) => (textByte 123 (textByte 34 (textByte 115 (textByte 111 (textByte 109 (textByte 101 (textByte 34 (textByte 58 (put v (textByte 125 tail)))))))))))
+DEFINE_REC(encodeListRest, : (0 A : Type 0) -> (A -> Text -> Text) -> List A -> Text -> Text := fun (0 A : Type 0) (put : A -> Text -> Text) (l : List A) (tail : Text) => case l as self in List return Text with | nil => textByte 93 tail | cons (h : A) (t : List A) => textByte 44 (put h (encodeListRest A put t tail)))
+DEFINE(encodeList, : (0 A : Type 0) -> (A -> Text -> Text) -> List A -> Text -> Text := fun (0 A : Type 0) (put : A -> Text -> Text) (l : List A) (tail : Text) => textByte 91 (case l as self in List return Text with | nil => textByte 93 tail | cons (h : A) (t : List A) => put h (encodeListRest A put t tail)))

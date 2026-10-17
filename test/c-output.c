@@ -14,6 +14,11 @@ int compile_program(Text source, Text *output, Failure *failure) {
   return 0;
 }
 
+Nat reserved_name(Text name) {
+  (void)name;
+  return 0;
+}
+
 Text error_text(Nat position, Text message) {
   (void)position;
   return message;

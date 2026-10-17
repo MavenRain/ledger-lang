@@ -1,4 +1,4 @@
-.PHONY: build check test c-build c-check c-test bench certificate-check
+.PHONY: build check test c-build c-check c-test bench certificate-check certificate-test
 
 TCC ?= tcc
 C_SOURCES := $(wildcard compiler/*.c)
@@ -6,6 +6,7 @@ C_OBJECTS := $(patsubst compiler/%.c,build/c/%.o,$(C_SOURCES))
 C_HEADERS := $(wildcard compiler/*.h)
 C_SCHEMA := core/schema.def
 C_OPS := core/ops.def
+C_CERT := core/certificate.def
 
 build: build/ledgerc
 
@@ -23,12 +24,13 @@ c-check:
 # c-build compiles each module and links the compiler executable build/ledgerc.
 c-build: $(C_OBJECTS) build/ledgerc
 
-build/ledgerc: $(C_SOURCES) $(C_HEADERS) $(C_SCHEMA) $(C_OPS)
+build/ledgerc: $(C_SOURCES) $(C_HEADERS) $(C_SCHEMA) $(C_OPS) $(C_CERT)
 	@mkdir -p build
 	$(TCC) -Wall -Werror -o $@ $(C_SOURCES) -lpthread
 
 build/c/schema.o: $(C_SCHEMA)
 build/c/operations.o: $(C_OPS)
+build/c/certificate.o: $(C_SCHEMA) $(C_OPS) $(C_CERT)
 
 build/c/%.o: compiler/%.c $(C_HEADERS)
 	@mkdir -p build/c
@@ -38,19 +40,29 @@ c-test: build/c-modules-test build/c-output-test
 	./build/c-modules-test
 	./build/c-output-test
 
-build/c-modules-test: test/c-modules.c test/c-alloc.c $(filter-out compiler/main.c,$(C_SOURCES)) $(C_HEADERS) $(C_SCHEMA) $(C_OPS)
+build/c-modules-test: test/c-modules.c test/c-alloc.c $(filter-out compiler/main.c,$(C_SOURCES)) $(C_HEADERS) $(C_SCHEMA) $(C_OPS) $(C_CERT)
 	@mkdir -p build
 	$(TCC) -Wall -Werror -Dmalloc=ledger_test_malloc -o $@ test/c-modules.c test/c-alloc.c $(filter-out compiler/main.c,$(C_SOURCES))
 
-build/c-output-test: test/c-output.c compiler/main.c compiler/runtime.c compiler/certificate.c $(C_HEADERS) $(C_SCHEMA) $(C_OPS)
+build/c-output-test: test/c-output.c compiler/main.c compiler/runtime.c compiler/certificate.c $(C_HEADERS) $(C_SCHEMA) $(C_OPS) $(C_CERT)
 	@mkdir -p build
 	$(TCC) -Wall -Werror -o $@ test/c-output.c compiler/runtime.c compiler/certificate.c -lpthread
 
+build/c-certificate-test: test/c-certificate.c $(filter-out compiler/main.c,$(C_SOURCES)) $(C_HEADERS) $(C_SCHEMA) $(C_OPS) $(C_CERT)
+	@mkdir -p build
+	$(TCC) -Wall -Werror -o $@ test/c-certificate.c $(filter-out compiler/main.c,$(C_SOURCES))
+
 # certificate-check (M5 design item 10, delta B-1): checks the core module in
-# the mechanism-lang kernel under /usr/bin/time -l. It fails on an absent
+# the mechanism-lang kernel under /usr/bin/time -l, after the C certificate
+# regressions. It fails on an absent
 # kernel, on a refusal and on max RSS above 4 GB. MECH_BIN names the kernel.
 MECH_BIN ?= /Users/oobi/Documents/mechanism-lang/_tcc/bin/mech
-certificate-check: build/ledgerc
+certificate-test: build/c-certificate-test
+	@mkdir -p build/cert
+	@test -x "$(MECH_BIN)" || { echo "certificate-test: no kernel at $(MECH_BIN)"; exit 1; }
+	./build/c-certificate-test "$(MECH_BIN)"
+
+certificate-check: build/ledgerc certificate-test
 	@mkdir -p build/cert
 	@test -x "$(MECH_BIN)" || { echo "certificate-check: no kernel at $(MECH_BIN)"; exit 1; }
 	@echo "kernel $(MECH_BIN) sha256 $$(shasum -a 256 < "$(MECH_BIN)" | cut -c1-16) K HEAD $$(git -C "$$(dirname "$(MECH_BIN)")/../.." log -1 --format=%h)"

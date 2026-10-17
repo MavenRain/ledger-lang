@@ -251,6 +251,11 @@ int lex(Fuel fuel, Text source, Tokens *tokens, Failure *failure);
    mechanism-lang module, in row order (M5 delta B-1). */
 Text certificate_core(void);
 
+/* certificate.c: the certificate module of a program (M5 delta C-1). source
+   is the program and output its JSON document. Gives 1 with the module in
+   *module, or 0 with a refusal text in *refusal. */
+int certificate_module(Text source, Text output, Text *module, Text *refusal);
+
 /* json.c: every emitted output item takes one unit of fuel. */
 typedef struct {
   Fuel fuel;
