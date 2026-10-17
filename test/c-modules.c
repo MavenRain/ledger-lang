@@ -5750,6 +5750,65 @@ static void test_m5_record_index(void) {
   assert(budget == 0 && found == 0 && same_records(repeated, records));
 }
 
+/* M5 part B (B3, delta B-1, mutants B-M1 and B-M2): certificate_core gives one
+   line for each row of core/schema.def and then core/ops.def that is not a
+   FIELD row, in row order; each FIELD row is on the line of its constructor.
+   The rows come from the .def files through the X-macro of this test.
+   core_take matches string at *at before limit and moves *at past it. */
+static int core_take(Text core, Nat limit, Nat *at, const char *string) {
+  Nat place = *at;
+  for (const char *byte = string; *byte != 0; byte++, place++)
+    if (place >= limit || core.items[place] != (unsigned char)*byte) return 0;
+  *at = place;
+  return 1;
+}
+
+static void test_m5_core_module(void) {
+  typedef struct {
+    Nat field;
+    const char *start;
+    const char *name;
+    const char *gap;
+    const char *arg;
+  } CoreRow;
+#define CARRIER(name, header) {0, "mu ", #name, " ", #header},
+#define FAMILY(name, header) {0, "mu ", #name, " ", #header},
+#define AND(name, header) {0, "and ", #name, " ", #header},
+#define CONSTRUCTOR(name, result) {0, "| ", #name, " : ", #result},
+#define FIELD(name, type) {1, "(", #name, " : ", #type},
+#define DEFINE(name, rest) {0, "def ", #name, " ", #rest},
+  static const CoreRow rows[] = {
+#include "../core/schema.def"
+#include "../core/ops.def"
+  };
+#undef CARRIER
+#undef FAMILY
+#undef AND
+#undef CONSTRUCTOR
+#undef FIELD
+#undef DEFINE
+  Text core = certificate_core();
+  Nat lines = 0;
+  for (Nat place = 0; place < core.size; place++)
+    if (core.items[place] != '\n' && (place == 0 || core.items[place - 1] == '\n')) lines++;
+  Nat next = 0, at = 0, limit = 0, kept = 0;
+  for (Nat row = 0; row < (Nat)(sizeof rows / sizeof rows[0]); row++) {
+    const CoreRow *line = &rows[row];
+    if (line->field == 0) {
+      while (next < core.size && core.items[next] == '\n') next++;
+      at = next;
+      limit = next;
+      while (limit < core.size && core.items[limit] != '\n') limit++;
+      next = limit + 1;
+      kept++;
+    }
+    assert(core_take(core, limit, &at, line->start) && core_take(core, limit, &at, line->name) &&
+           core_take(core, limit, &at, line->gap));
+    assert(line->field == 0 || (core_take(core, limit, &at, line->arg) && core_take(core, limit, &at, ") -> ")));
+  }
+  assert(kept == 246 && lines == kept);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -5832,6 +5891,7 @@ int main(void) {
   test_m5_cons_chain();
   test_m5_write_last();
   test_m5_record_index();
+  test_m5_core_module();
   puts("C module tests passed");
   return 0;
 }

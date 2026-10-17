@@ -6,7 +6,10 @@
                            "PROGRAM.ledger: byte N: message (in NAME)",
                            where NAME is the name of the declaration.
    ledgerc --stdin         reads the source from stdin and writes the exact
-                           compiler output (a document or an error) to stdout. */
+                           compiler output (a document or an error) to stdout.
+   ledgerc --certificate-core
+                           writes the core rows (core/schema.def, core/ops.def)
+                           as one mechanism-lang module to stdout. */
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -135,6 +138,7 @@ static int compile_file(const char *path) {
 
 int main(int argc, char **argv) {
   if (argc == 2 && strcmp(argv[1], "--stdin") == 0) return compile_stdin();
+  if (argc == 2 && strcmp(argv[1], "--certificate-core") == 0) return write_output(certificate_core(), "");
   if (argc == 2 && strncmp(argv[1], "--", 2) != 0) return compile_file(argv[1]);
   fputs("usage: bin/ledgerc PROGRAM.ledger\n", stderr);
   return 1;

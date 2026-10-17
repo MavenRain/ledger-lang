@@ -1,4 +1,4 @@
-.PHONY: build check test c-build c-check c-test bench
+.PHONY: build check test c-build c-check c-test bench certificate-check
 
 TCC ?= tcc
 C_SOURCES := $(wildcard compiler/*.c)
@@ -42,9 +42,24 @@ build/c-modules-test: test/c-modules.c test/c-alloc.c $(filter-out compiler/main
 	@mkdir -p build
 	$(TCC) -Wall -Werror -Dmalloc=ledger_test_malloc -o $@ test/c-modules.c test/c-alloc.c $(filter-out compiler/main.c,$(C_SOURCES))
 
-build/c-output-test: test/c-output.c compiler/main.c compiler/runtime.c $(C_HEADERS)
+build/c-output-test: test/c-output.c compiler/main.c compiler/runtime.c compiler/certificate.c $(C_HEADERS) $(C_SCHEMA) $(C_OPS)
 	@mkdir -p build
-	$(TCC) -Wall -Werror -o $@ test/c-output.c compiler/runtime.c -lpthread
+	$(TCC) -Wall -Werror -o $@ test/c-output.c compiler/runtime.c compiler/certificate.c -lpthread
+
+# certificate-check (M5 design item 10, delta B-1): checks the core module in
+# the mechanism-lang kernel under /usr/bin/time -l. It fails on an absent
+# kernel, on a refusal and on max RSS above 4 GB. MECH_BIN names the kernel.
+MECH_BIN ?= /Users/oobi/Documents/mechanism-lang/_tcc/bin/mech
+certificate-check: build/ledgerc
+	@mkdir -p build/cert
+	@test -x "$(MECH_BIN)" || { echo "certificate-check: no kernel at $(MECH_BIN)"; exit 1; }
+	@echo "kernel $(MECH_BIN) sha256 $$(shasum -a 256 < "$(MECH_BIN)" | cut -c1-16) K HEAD $$(git -C "$$(dirname "$(MECH_BIN)")/../.." log -1 --format=%h)"
+	./build/ledgerc --certificate-core > build/cert/core.mech
+	@/usr/bin/time -l "$(MECH_BIN)" check build/cert/core.mech > build/cert/core.out 2> build/cert/core.time; rc=$$?; \
+	  rss=$$(awk '/maximum resident set size/ {print $$1}' build/cert/core.time); \
+	  echo "cert core rc $$rc max RSS $$rss"; \
+	  test $$rc -eq 0 || { head -1 build/cert/core.time; exit 1; }; \
+	  test "$$rss" -le 4294967296 || { echo "cert core max RSS above 4 GB"; exit 1; }
 
 build/bench-gen: test/bench-gen.c
 	@mkdir -p build

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createCompiler } from '../bin/bridge.mjs';
@@ -911,4 +913,25 @@ test('m5 long log keeps the answers', () => {
   const output = compile(benchLog(1000));
   assert.equal(JSON.parse(output)['ledger-lang'], 1);
   assert.equal(digest(output), '3a0490a1d33a1c64272d3c0950284f33d1e552237fe551858726b1f45f42d502');
+});
+
+// M5 part B (B3, delta B-1): the module of `ledgerc --certificate-core` checks
+// in the mechanism-lang kernel (`$MECH_BIN check FILE`: rc 0 and no output).
+// The kernel is a build product of mechanism-lang, thus the row prints its K
+// HEAD and SHA-256; an absent kernel fails the row.
+test('m5 core module checks in the kernel', async t => {
+  const mech = process.env.MECH_BIN ?? '/Users/oobi/Documents/mechanism-lang/_tcc/bin/mech';
+  const kernel = createHash('sha256').update(await readFile(mech)).digest('hex').slice(0, 16);
+  const head = spawnSync('git', ['-C', dirname(mech), 'log', '-1', '--format=%h'], { encoding: 'utf8' });
+  t.diagnostic(`kernel ${mech} sha256 ${kernel} K HEAD ${head.stdout.trim()}`);
+  const core = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate-core'],
+    { maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(core.status, 0, String(core.stderr));
+  const dir = await mkdtemp(join(tmpdir(), 'ledger-cert-'));
+  const file = join(dir, 'core.mech');
+  await writeFile(file, core.stdout);
+  const checked = spawnSync(mech, ['check', file], { encoding: 'utf8' });
+  await rm(dir, { recursive: true, force: true });
+  assert.equal(checked.status, 0, checked.stderr);
+  assert.equal(`${checked.stdout}${checked.stderr}`, '');
 });

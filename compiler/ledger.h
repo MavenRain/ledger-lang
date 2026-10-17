@@ -247,6 +247,10 @@ Nat has_field(Text key, const Attrs *attrs);
 /* lexer.c */
 int lex(Fuel fuel, Text source, Tokens *tokens, Failure *failure);
 
+/* certificate.c: the rows of core/schema.def and core/ops.def as one
+   mechanism-lang module, in row order (M5 delta B-1). */
+Text certificate_core(void);
+
 /* json.c: every emitted output item takes one unit of fuel. */
 typedef struct {
   Fuel fuel;
