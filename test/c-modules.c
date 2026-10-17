@@ -5275,6 +5275,97 @@ static void test_m4_account_queries(void) {
   assert(left == 0 && same_text(starved.message, eBudget));
 }
 
+/* M5 part A2 (delta A-13): the renewal log (L = 8): the Party records acme
+   (entry 0) and beta (1); the Commercial d1 of acme (2) and d2 of beta (3); a
+   commitmentDate "2027-01-31" of d1 with the status commitmentSuperseded (4)
+   and a commitmentDate "2027-03-31" commitmentAgreed of d1 (5); 2 in-force
+   commitmentDate records of d2, "2027-04-30" (6) and "2027-06-30" (7). refs
+   holds the Ref items of acme, beta, d1 and d2. */
+typedef struct {
+  Value names[2], kinds[2], dates[4], date, agreed, superseded, nothing;
+  AccountEntry entries[8];
+  Text hashes[8];
+  Value hash_texts[8];
+  Paired ref_storage[4];
+  const Value *refs[4];
+  Values items[8];
+  Value log;
+} RenewalLog;
+
+static void renewal_log_hashes(RenewalLog *s, const Value *const *entry, Nat at, Nat end, Nat *left,
+                               Failure *failure) {
+  if (at >= end || at >= 8) return;
+  assert(entry_hash(1000, 1, 0, entry[at], &s->hashes[at], left, failure));
+  s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+  renewal_log_hashes(s, entry, at + 1, end, left, failure);
+}
+
+static Values *renewal_log_items(RenewalLog *s, const Value *const *entry, Nat at) {
+  if (at >= 8) return NULL;
+  s->items[at] = (Values){entry[at], renewal_log_items(s, entry, at + 1)};
+  return &s->items[at];
+}
+
+static const Value *renewal_log(RenewalLog *s, Nat *left, Failure *failure) {
+  const char *const party_keys[] = {"name"};
+  const char *const commercial_keys[] = {"party", "lastEvent"};
+  const char *const commitment_keys[] = {"commercial", "kind", "value", "status", "supersedes"};
+  const Value *entry[8];
+  s->names[0] = account_text("acme");
+  s->names[1] = account_text("beta");
+  s->kinds[0] = account_text("kindParty");
+  s->kinds[1] = account_text("kindCommercial");
+  s->dates[0] = account_text("2027-01-31");
+  s->dates[1] = account_text("2027-03-31");
+  s->dates[2] = account_text("2027-04-30");
+  s->dates[3] = account_text("2027-06-30");
+  s->date = account_text("commitmentDate");
+  s->agreed = account_text("commitmentAgreed");
+  s->superseded = account_text("commitmentSuperseded");
+  s->nothing = (Value){.kind = VALUE_NULL};
+  entry[0] = account_entry(&s->entries[0], "createsParty", "party", 1, party_keys, (const Value *[]){&s->names[0]});
+  entry[1] = account_entry(&s->entries[1], "createsParty", "party", 1, party_keys, (const Value *[]){&s->names[1]});
+  renewal_log_hashes(s, entry, 0, 2, left, failure);
+  s->refs[0] = paired(&s->ref_storage[0], NULL, "kind", &s->kinds[0], "hash", &s->hash_texts[0]);
+  s->refs[1] = paired(&s->ref_storage[1], NULL, "kind", &s->kinds[0], "hash", &s->hash_texts[1]);
+  entry[2] = account_entry(&s->entries[2], "createsCommercial", "commercial", 2, commercial_keys,
+                           (const Value *[]){s->refs[0], &s->nothing});
+  entry[3] = account_entry(&s->entries[3], "createsCommercial", "commercial", 2, commercial_keys,
+                           (const Value *[]){s->refs[1], &s->nothing});
+  renewal_log_hashes(s, entry, 2, 4, left, failure);
+  s->refs[2] = paired(&s->ref_storage[2], NULL, "kind", &s->kinds[1], "hash", &s->hash_texts[2]);
+  s->refs[3] = paired(&s->ref_storage[3], NULL, "kind", &s->kinds[1], "hash", &s->hash_texts[3]);
+  entry[4] = account_entry(&s->entries[4], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[2], &s->date, &s->dates[0], &s->superseded, &s->nothing});
+  entry[5] = account_entry(&s->entries[5], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[2], &s->date, &s->dates[1], &s->agreed, &s->nothing});
+  entry[6] = account_entry(&s->entries[6], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[3], &s->date, &s->dates[2], &s->agreed, &s->nothing});
+  entry[7] = account_entry(&s->entries[7], "createsCommitment", "commitment", 5, commitment_keys,
+                           (const Value *[]){s->refs[3], &s->date, &s->dates[3], &s->agreed, &s->nothing});
+  renewal_log_hashes(s, entry, 4, 8, left, failure);
+  s->log = (Value){.kind = VALUE_ITEMS, .items = renewal_log_items(s, entry, 0)};
+  return &s->log;
+}
+
+/* M5 part A2 (delta A-13): queryRenewals on the renewal log. d1: entry 4 is
+   not in force (its status), thus the date is the one of entry 5. d2: entries
+   6 and 7 are in force, and the oldest gives the date. 1 + 8 steps. */
+static void test_a2_renewal_rows(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  RenewalLog storage;
+  const Value *log = renewal_log(&storage, &left, &failure);
+  Tagged renewals_storage;
+  const Value *renewals = tagged(&renewals_storage, "queryRenewals", NULL, NULL);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  assert(read_step(1000, 20, 7, answer, log, renewals, &value, &left, &failure));
+  assert(left == 11 && read_count(value->items) == 2 &&
+         renewal_is(pipeline_at(value, 0), storage.hashes[2], "2027-03-31", NULL) == 1 &&
+         renewal_is(pipeline_at(value, 1), storage.hashes[3], "2027-04-30", NULL) == 1);
+}
+
 /* The log of the M4 part C test plan with delta C-1 (L = 5): a Membership
    with confidence = some 40 (entry 0), a Membership with confidence = none
    (1), a Commercial (2; no provenance), a Commitment of it with some 50 (3)
@@ -5731,6 +5822,7 @@ int main(void) {
   test_m3_membership_queries();
   test_m4_pipeline_queries();
   test_m4_account_queries();
+  test_a2_renewal_rows();
   test_m4_review_queue();
   test_m1_records();
   test_m1_projection_hash_failure();

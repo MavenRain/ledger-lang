@@ -362,9 +362,10 @@ of records.
 ## M5
 
 M5 part A lets the compiler take long logs and cuts the memory of the read
-path. The bench is `build/bench-gen N` (test/bench-gen.c): a program with a
-Log of N entries with distinct texts, one `write`, and one `read` for each
-of the 18 queries.
+path. Part A2 removes the walks of the read path that grew with the square
+of the log length. The bench is `build/bench-gen N` (test/bench-gen.c): a
+program with a Log of N entries with distinct texts, one `write`, and one
+`read` for each of the 18 queries.
 
 - The limits. A source has at most 8388608 bytes (8 MiB, `SOURCE_LIMIT`).
   A longer source gives "source exceeds 8388608 bytes" (in file mode, after
@@ -403,19 +404,38 @@ of the 18 queries.
   - 16000 entries: 119.41 s, 7.54 GB (before: 60.1 GB, and the 16 MiB
     output limit of that tree stopped the run).
 
-  The Q-M5-4 time target is not met: t(16000) / t(1000) is 59.7, and the
-  target is at most 24 and the 16000 entry case under 1 s. The target of no
-  stack overflow at 16000 entries is met. The time target moves to part A2
-  (Q-M5-23). The profile of the 4000 entry run ranks `text_of_bytes`,
-  `same_text`, `write_field`, `renewal_first` and `write_attr` first.
+  Part A did not meet the Q-M5-4 time target: t(16000) / t(1000) was 59.7,
+  and the target is at most 24. The target of no stack overflow at 16000
+  entries is met. The time target moved to part A2 (Q-M5-23). The profile
+  of the 4000 entry run ranked `text_of_bytes`, `same_text`, `write_field`,
+  `renewal_first` and `write_attr` first.
+- The walks of part A2. Three walks grew with the square of the log length.
+  Now each query makes its index once, and each lookup is one `index_find`.
+  The output bytes and the refusals do not change.
+  - `renewal_first` walked all the records for each Commercial record.
+    `renewal_index` keys each in-force Commitment record by the hash of its
+    commercial and its kind tag. On equal keys the oldest record wins.
+  - `commitment_superseded` walked all the records for each in-force test.
+    `supersedes_index` keys the `supersedes` Ref of each Commitment record,
+    and `commitment_in_force` is the status test and one lookup.
+  - `account_listed` walked the list of commercials for each entry.
+    `account_index` keys each commercial by the hash of its Ref.
+- The speed after part A2 (the same bench):
+  - 1000 entries: 0.53 s, 127 MB.
+  - 4000 entries: 2.28 s, 507 MB.
+  - 16000 entries: 7.95 s, 2.04 GB, with no stack overflow.
+
+  t(16000) / t(1000) is 15.00, thus the Q-M5-4 growth target (at most 24)
+  is met. The Q-M5-4 target of the 16000 entry case under 1 s is not met.
+  It moves to a later part.
 - The tests. The Makefile has `test: build build/bench-gen`, because the
   node rows "m5 cons chain keeps the bytes" and "m5 long log keeps the
   answers" compile the bench logs of 64 and 1000 entries through the
   bridge. The rows hash the bridge output and a final newline, because the
   `--stdin` output has no final newline and the digests are of the CLI
   output. The row "m5 source limit" checks the source limit of the bridge.
-- Out of M5 part A: the time target (part A2) and the certificate of the
-  output (parts B to E).
+- Out of M5 parts A and A2: the 16000 entry case under 1 s (a later part)
+  and the certificate of the output (parts B to E).
 
 ## Remaining M0 work
 

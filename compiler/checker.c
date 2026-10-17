@@ -2792,21 +2792,37 @@ static const Value *commitment_field(const Value *record, const char *key) {
   return write_field(text_of_cstring(key), write_field(kValue, record));
 }
 
-/* Design item 4: 1 when a Commitment record of records has supersedes = some
-   a Ref whose hash is ref. */
-static Nat commitment_superseded(Text ref, const Located *records) {
-  if (records == NULL) return 0;
-  Nat names = same_text(write_field(kType, records->value)->text, text_of_cstring("Commitment")) == 1 &&
-              same_text(write_field(kRefHash(), commitment_field(records->value, "supersedes"))->text, ref) == 1;
-  return names == 1 ? 1 : commitment_superseded(ref, records->tail);
+/* M5 part A2 (delta A-13): the supersedes index of records, made once for
+   each query: key the hash of the supersedes Ref of each Commitment record,
+   value the record. */
+static Index supersedes_index(const Located *records) {
+  Text none = {NULL, 0};
+  Text commitment = text_of_cstring("Commitment");
+  Nat commitments = 0;
+  for (const Located *cell = records; cell != NULL; cell = cell->tail) {
+    commitments = commitments + (same_text(write_field(kType, cell->value)->text, commitment) == 1 ? 1 : 0);
+  }
+  Index supersedes = index_new(commitments);
+  Nat slot = 0;
+  for (const Located *cell = records; cell != NULL; cell = cell->tail) {
+    if (same_text(write_field(kType, cell->value)->text, commitment) == 1) {
+      supersedes.items[slot] =
+          (Keyed){write_field(kRefHash(), commitment_field(cell->value, "supersedes"))->text, none, slot, cell->value};
+      slot = slot + 1;
+    }
+  }
+  index_sort(supersedes);
+  return supersedes;
 }
 
-/* Design item 4: 1 when the Commitment record is in force in records: its
-   status is not commitmentSuperseded and no record of records supersedes it. */
-static Nat commitment_in_force(const Value *record, const Located *records) {
-  Text status = commitment_tag(commitment_field(record, "status"));
-  return same_text(status, text_of_cstring("commitmentSuperseded")) != 1 &&
-         commitment_superseded(write_field(text_of_cstring("ref"), record)->text, records) != 1;
+/* Design item 4: 1 when the Commitment record is in force: its status is not
+   commitmentSuperseded and no Commitment record supersedes it. M5 part A2
+   (delta A-13): supersedes is the supersedes_index of the records, thus one
+   index_find in place of a walk of the records. */
+static Nat commitment_in_force(const Value *record, Index supersedes) {
+  Text none = {NULL, 0};
+  return same_text(commitment_tag(commitment_field(record, "status")), text_of_cstring("commitmentSuperseded")) != 1 &&
+         index_find(supersedes, write_field(text_of_cstring("ref"), record)->text, none) == NULL;
 }
 
 /* A Ref kindCommitment item with the ref of record (the form of read_audit). */
@@ -2818,11 +2834,11 @@ static const Value *commitment_item(const Value *record) {
 /* Design item 4: the in-force Commitment records of the commercial in walk
    as Ref kindCommitment items, in log order: walk is newest first, and each
    kept record goes in front of the items of the newer records. */
-static const Values *commitment_terms(const Value *commercial, const Located *walk, const Located *records,
+static const Values *commitment_terms(const Value *commercial, const Located *walk, Index supersedes,
                                       const Values *items) {
   if (walk == NULL) return items;
-  Nat keep = commitment_of(walk->value, commercial) == 1 && commitment_in_force(walk->value, records) == 1;
-  return commitment_terms(commercial, walk->tail, records,
+  Nat keep = commitment_of(walk->value, commercial) == 1 && commitment_in_force(walk->value, supersedes) == 1;
+  return commitment_terms(commercial, walk->tail, supersedes,
                           keep == 1 ? values_item(commitment_item(walk->value), items) : items);
 }
 
@@ -2856,11 +2872,11 @@ static Nat commitment_price_of(const Value *record, const Value *commercial, con
 
 /* Design item 6: the newest in-force commitmentAgreed commitmentPrice record
    of the commercial, or NULL. */
-static const Value *commitment_agreed(const Value *commercial, const Located *walk, const Located *records) {
+static const Value *commitment_agreed(const Value *commercial, const Located *walk, Index supersedes) {
   if (walk == NULL) return NULL;
   Nat agreed = commitment_price_of(walk->value, commercial, "commitmentAgreed") == 1 &&
-               commitment_in_force(walk->value, records) == 1;
-  return agreed == 1 ? walk->value : commitment_agreed(commercial, walk->tail, records);
+               commitment_in_force(walk->value, supersedes) == 1;
+  return agreed == 1 ? walk->value : commitment_agreed(commercial, walk->tail, supersedes);
 }
 
 /* Design item 8: the oldest commitmentPrice record of the commercial in walk
@@ -2889,13 +2905,13 @@ static Nat commitment_nat(const Value *record, Nat *number) {
 
 /* Design item 6: any in-force agreed price of the commercial can reconcile
    the amount, even when a newer independent agreement has another value. */
-static Nat commitment_reconciled(const Value *commercial, const Located *walk, const Located *records, Nat amount) {
+static Nat commitment_reconciled(const Value *commercial, const Located *walk, Index supersedes, Nat amount) {
   if (walk == NULL) return 0;
   Nat price = 0;
   if (commitment_price_of(walk->value, commercial, "commitmentAgreed") == 1 &&
-      commitment_nat(walk->value, &price) == 1 && price == amount && commitment_in_force(walk->value, records) == 1)
+      commitment_nat(walk->value, &price) == 1 && price == amount && commitment_in_force(walk->value, supersedes) == 1)
     return 1;
-  return commitment_reconciled(commercial, walk->tail, records, amount);
+  return commitment_reconciled(commercial, walk->tail, supersedes, amount);
 }
 
 /* Design item 8: part * 100 / whole rounded down, with whole > 0 and
@@ -2924,7 +2940,7 @@ static int read_commitment(Fuel hash_fuel, Nat budget, Nat position, const Value
   const Value *commercial = write_field(text_of_cstring("commercial"), query);
   if (terms == 1) {
     const Located *known = asof == 1 && found == 0 ? NULL : records;
-    *value = items_value(commitment_terms(commercial, known, known, NULL));
+    *value = items_value(commitment_terms(commercial, known, supersedes_index(known), NULL));
     return 1;
   }
   if (history == 1) {
@@ -2935,11 +2951,12 @@ static int read_commitment(Fuel hash_fuel, Nat budget, Nat position, const Value
   if (reconciled == 1) {
     const Value *state = read_commercial(commercial, index);
     const Value *amount = state == NULL ? &null_value : write_field(text_of_cstring("amountCents"), state);
-    Nat same = amount->kind == VALUE_NAT && commitment_reconciled(commercial, records, records, amount->number) == 1;
+    Nat same = amount->kind == VALUE_NAT &&
+               commitment_reconciled(commercial, records, supersedes_index(records), amount->number) == 1;
     *value = make_value((Value){.kind = VALUE_FLAG, .flag = same == 1 ? FLAG_YES : FLAG_NO});
     return 1;
   }
-  const Value *agreed = commitment_agreed(commercial, records, records);
+  const Value *agreed = commitment_agreed(commercial, records, supersedes_index(records));
   const Located *earlier =
       agreed == NULL ? NULL : commitment_before(write_field(text_of_cstring("ref"), agreed)->text, records);
   Nat agreed_price = 0;
@@ -3325,19 +3342,44 @@ static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values 
   return 1;
 }
 
-/* M4 part B (design item 11): the oldest record of walk that is an in-force
-   Commitment record (commitment_in_force over records, the full fold) of the
-   commercial whose ref is deal, with the kind tag kind; NULL when there is
-   none. walk is newest first. */
-static const Value *renewal_first(Text deal, const char *kind, const Located *walk, const Located *records) {
-  if (walk == NULL) return NULL;
-  const Value *older = renewal_first(deal, kind, walk->tail, records);
-  const Value *record = walk->value;
-  Nat keep = record_is(record, "Commitment") == 1 &&
-             same_text(write_field(kRefHash(), commitment_field(record, "commercial"))->text, deal) == 1 &&
-             same_text(commitment_tag(commitment_field(record, "kind")), text_of_cstring(kind)) == 1 &&
-             commitment_in_force(record, records) == 1;
-  return older != NULL ? older : keep == 1 ? record : NULL;
+/* M5 part A2 (delta A-13): the renewal index of records (newest first), made
+   once for each renewals query. It keeps each in-force Commitment record
+   (commitment_in_force with the supersedes_index of records): key the hash
+   of its commercial, second its kind tag, place its position (the oldest
+   record has the position 0), value the record. */
+static Index renewal_index(const Located *records) {
+  Text commitment = text_of_cstring("Commitment");
+  Text hash = kRefHash();
+  Nat count = 0;
+  for (const Located *cell = records; cell != NULL; cell = cell->tail) {
+    count = count + 1;
+  }
+  Index supersedes = supersedes_index(records);
+  Index renewals = index_new(supersedes.count);
+  Nat kept = 0;
+  Nat position = count;
+  for (const Located *cell = records; cell != NULL; cell = cell->tail) {
+    position = position - 1;
+    const Value *record = cell->value;
+    Nat keep = same_text(write_field(kType, record)->text, commitment) == 1 && commitment_in_force(record, supersedes) == 1;
+    if (keep == 1) {
+      renewals.items[kept] = (Keyed){write_field(hash, commitment_field(record, "commercial"))->text,
+                                     commitment_tag(commitment_field(record, "kind")), position, record};
+      kept = kept + 1;
+    }
+  }
+  renewals.count = kept;
+  index_sort(renewals);
+  return renewals;
+}
+
+/* M4 part B (design item 11): the oldest record that is an in-force
+   Commitment record of the commercial whose ref is deal, with the kind tag
+   kind; NULL when there is none. M5 part A2 (delta A-13): one lookup in the
+   renewal index (the lower place, thus the older record, comes first). */
+static const Value *renewal_first(Text deal, const char *kind, Index renewals) {
+  const Keyed *found = index_find(renewals, deal, text_of_cstring(kind));
+  return found != NULL ? found->value : NULL;
 }
 
 /* A Ref item of the kind kind with the ref of record (the form of
@@ -3354,7 +3396,7 @@ static const Value *account_item(const Value *record, const char *kind) {
    value that is not a Text, delta B-1). The term is the Ref kindCommitment
    item of the oldest in-force commitmentTerm record of the deal, else none
    (null). */
-static int renewal_items(const Located *walk, const Located *records, const Values *items, const Values **answer,
+static int renewal_items(const Located *walk, Index renewals, const Values *items, const Values **answer,
                          Failure *failure) {
   if (walk == NULL) {
     *answer = items;
@@ -3362,18 +3404,17 @@ static int renewal_items(const Located *walk, const Located *records, const Valu
   }
   const Value *record = walk->value;
   Text deal = write_field(text_of_cstring("ref"), record)->text;
-  const Value *date =
-      record_is(record, "Commercial") == 1 ? renewal_first(deal, "commitmentDate", records, records) : NULL;
-  if (date == NULL) return renewal_items(walk->tail, records, items, answer, failure);
+  const Value *date = record_is(record, "Commercial") == 1 ? renewal_first(deal, "commitmentDate", renewals) : NULL;
+  if (date == NULL) return renewal_items(walk->tail, renewals, items, answer, failure);
   const Value *date_value = commitment_field(date, "value");
-  const Value *term = renewal_first(deal, "commitmentTerm", records, records);
+  const Value *term = renewal_first(deal, "commitmentTerm", renewals);
   const Values *fields =
       values_item(account_item(record, "kindCommercial"),
                   values_item(date_value->kind == VALUE_TEXT ? date_value : text_value(text_of_cstring("")),
                               values_item(term != NULL ? commitment_item(term) : &null_value, NULL)));
   const Value *renewal = NULL;
   if (!write_value("Renewal", "makeRenewal", fields, &renewal, failure)) return 0;
-  return renewal_items(walk->tail, records, values_item(renewal, items), answer, failure);
+  return renewal_items(walk->tail, renewals, values_item(renewal, items), answer, failure);
 }
 
 /* M4 part B (design item 12): the lists of an Account360 after its party. */
@@ -3390,16 +3431,35 @@ static Nat account_ref(const Value *value, const char *key, Text hash) {
   return same_text(write_field(kRefHash(), write_field(text_of_cstring(key), value))->text, hash);
 }
 
-/* 1 when a Ref item of items has the hash hash. */
-static Nat account_listed(Text hash, const Values *items) {
-  return items != NULL &&
-         (same_text(write_field(kRefHash(), items->head)->text, hash) == 1 || account_listed(hash, items->tail) == 1);
+/* M5 part A2 (delta A-13, site 3): deals with the slots from slot set to the
+   Ref items items: key the Ref hash of the item, value the item. */
+static Index account_fill(Index deals, const Values *items, Nat slot) {
+  Text none = {NULL, 0};
+  if (items == NULL) return deals;
+  deals.items[slot] = (Keyed){write_field(kRefHash(), items->head)->text, none, slot, items->head};
+  return account_fill(deals, items->tail, slot + 1);
+}
+
+/* M5 part A2 (delta A-13, site 3): the index of the Ref items commercials,
+   made once for each Account360: key the Ref hash of each item, value the
+   item. */
+static Index account_index(const Values *commercials) {
+  Index deals = account_fill(index_new(values_length(commercials)), commercials, 0);
+  index_sort(deals);
+  return deals;
+}
+
+/* 1 when a Ref item of the account_index deals has the hash hash. M5 part A2
+   (delta A-13, site 3): one index_find in place of a walk of the items. */
+static Nat account_listed(Text hash, Index deals) {
+  Text none = {NULL, 0};
+  return index_find(deals, hash, none) != NULL;
 }
 
 /* 1 when the Account or Subject value subject names the party whose hash is
-   party (accountParty, subjectParty) or a deal of the Ref items commercials
+   party (accountParty, subjectParty) or a deal of the account_index deals
    (accountCommercial, subjectCommercial). */
-static Nat account_names(const Value *subject, Text party, const Values *commercials) {
+static Nat account_names(const Value *subject, Text party, Index deals) {
   Text tag = commitment_tag(subject);
   Nat of_party =
       same_text(tag, text_of_cstring("accountParty")) == 1 || same_text(tag, text_of_cstring("subjectParty")) == 1;
@@ -3409,20 +3469,19 @@ static Nat account_names(const Value *subject, Text party, const Values *commerc
                        : of_deal == 1 && account_listed(write_field(kRefHash(), write_field(text_of_cstring("commercial"),
                                                                                              subject))
                                                             ->text,
-                                                        commercials) == 1;
+                                                        deals) == 1;
 }
 
 /* 1 when an item of the Account list subjects names the party or a deal. */
-static Nat account_any(const Values *subjects, Text party, const Values *commercials) {
+static Nat account_any(const Values *subjects, Text party, Index deals) {
   return subjects != NULL &&
-         (account_names(subjects->head, party, commercials) == 1 || account_any(subjects->tail, party, commercials) == 1);
+         (account_names(subjects->head, party, deals) == 1 || account_any(subjects->tail, party, deals) == 1);
 }
 
 /* M4 part B (design item 12): 1 when the list list of the Account360 of the
-   Ref value party (its hash hash) keeps record. commercials holds the Ref
-   kindCommercial items of the party. */
-static Nat account_keeps(AccountList list, const Value *record, const Value *party, Text hash,
-                         const Values *commercials) {
+   Ref value party (its hash hash) keeps record. deals is the account_index
+   of the Ref kindCommercial items of the party. */
+static Nat account_keeps(AccountList list, const Value *record, const Value *party, Text hash, Index deals) {
   const Value *subjects = commitment_field(record, "subjects");
   switch (list) {
     case ACCOUNT_MEMBERSHIPS:
@@ -3432,12 +3491,12 @@ static Nat account_keeps(AccountList list, const Value *record, const Value *par
       return record_is(record, "Commercial") == 1 && account_ref(write_field(kValue, record), "party", hash) == 1;
     case ACCOUNT_ASSIGNMENTS:
       return record_is(record, "Assignment") == 1 && commitment_field(record, "endedBy")->kind == VALUE_NULL &&
-             account_names(commitment_field(record, "subject"), hash, commercials) == 1;
+             account_names(commitment_field(record, "subject"), hash, deals) == 1;
     case ACCOUNT_ARTIFACTS:
       return record_is(record, "Artifact") == 1 && subjects->kind == VALUE_ITEMS &&
-             account_any(subjects->items, hash, commercials) == 1;
+             account_any(subjects->items, hash, deals) == 1;
     case ACCOUNT_TIMELINE:
-      return record_is(record, "Event") == 1 && account_names(commitment_field(record, "subject"), hash, commercials) == 1;
+      return record_is(record, "Event") == 1 && account_names(commitment_field(record, "subject"), hash, deals) == 1;
   }
   return 0;
 }
@@ -3446,10 +3505,10 @@ static Nat account_keeps(AccountList list, const Value *record, const Value *par
    log order: walk is newest first, and each kept record goes in front of the
    items of the newer records. */
 static const Values *account_list(AccountList list, const char *kind, const Located *walk, const Value *party, Text hash,
-                                  const Values *commercials, const Values *items) {
+                                  Index deals, const Values *items) {
   if (walk == NULL) return items;
-  Nat keep = account_keeps(list, walk->value, party, hash, commercials);
-  return account_list(list, kind, walk->tail, party, hash, commercials,
+  Nat keep = account_keeps(list, walk->value, party, hash, deals);
+  return account_list(list, kind, walk->tail, party, hash, deals,
                       keep == 1 ? values_item(account_item(walk->value, kind), items) : items);
 }
 
@@ -3467,11 +3526,13 @@ static int account_view(const Value *party, const Located *walk, Nat budget, Nat
     *left = budget;
     return fail_at(failure, position, eRead);
   }
-  const Values *commercials = account_list(ACCOUNT_COMMERCIALS, "kindCommercial", walk, party, hash, NULL, NULL);
-  const Values *memberships = account_list(ACCOUNT_MEMBERSHIPS, "kindMembership", walk, party, hash, commercials, NULL);
-  const Values *assignments = account_list(ACCOUNT_ASSIGNMENTS, "kindAssignment", walk, party, hash, commercials, NULL);
-  const Values *artifacts = account_list(ACCOUNT_ARTIFACTS, "kindArtifact", walk, party, hash, commercials, NULL);
-  const Values *timeline = account_list(ACCOUNT_TIMELINE, "kindEvent", walk, party, hash, commercials, NULL);
+  const Values *commercials =
+      account_list(ACCOUNT_COMMERCIALS, "kindCommercial", walk, party, hash, account_index(NULL), NULL);
+  Index deals = account_index(commercials);
+  const Values *memberships = account_list(ACCOUNT_MEMBERSHIPS, "kindMembership", walk, party, hash, deals, NULL);
+  const Values *assignments = account_list(ACCOUNT_ASSIGNMENTS, "kindAssignment", walk, party, hash, deals, NULL);
+  const Values *artifacts = account_list(ACCOUNT_ARTIFACTS, "kindArtifact", walk, party, hash, deals, NULL);
+  const Values *timeline = account_list(ACCOUNT_TIMELINE, "kindEvent", walk, party, hash, deals, NULL);
   const Values *fields =
       values_item(write_field(kValue, record),
                   values_item(items_value(memberships),
@@ -3503,7 +3564,7 @@ static int read_account(Fuel hash_fuel, Nat budget, Nat position, const Values *
   if (renewals != 1)
     return account_view(write_field(text_of_cstring("party"), query), known, budget, position, value, left, failure);
   const Values *answer = NULL;
-  if (!renewal_items(known, known, NULL, &answer, failure)) return 0;
+  if (!renewal_items(known, renewal_index(known), NULL, &answer, failure)) return 0;
   *value = items_value(answer);
   return 1;
 }
