@@ -2524,8 +2524,12 @@ static const Value *write_field(Text key, const Value *value) {
   return value->kind == VALUE_ATTRS ? write_attr(key, value->attrs) : &null_value;
 }
 
+/* The last item of the log, or NULL. A loop (M5 item 0d): a long log does
+   not take one C frame for each entry. */
 static const Value *write_last(const Values *items) {
-  return items == NULL ? NULL : items->tail == NULL ? items->head : write_last(items->tail);
+  const Value *last = NULL;
+  for (const Values *walk = items; walk != NULL; walk = walk->tail) last = walk->head;
+  return last;
 }
 
 /* The Commands with a Body (k5 item 12): the Command, its field, and the
@@ -2629,34 +2633,50 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
                       value, failure);
 }
 
+/* M5 item 5: the number of log entries, counted up to LOG_LIMIT + 1. */
+static Nat read_count(const Values *items) {
+  Nat count = 0;
+  for (const Values *cell = items; cell != NULL && count <= LOG_LIMIT; cell = cell->tail) count = count + 1;
+  return count;
+}
+
 /* M2 part B (design item 8): the visit of the entries in log order. The
    visit of an entry is its entry_hash (one work step). hashes gets the hash
-   of each entry as a Text value, in log order. When the budget runs out:
-   eBudget with left 0. */
-static int read_visit(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Values **hashes, Nat *left,
-                      Failure *failure) {
-  if (items == NULL) {
-    *hashes = NULL;
-    *left = budget;
-    return 1;
+   of each entry as a Text value, in log order, and index gets each hash with
+   its place (from 1), not sorted. When the budget runs out: eBudget with left
+   0. M5 item 2: a loop over at most LOG_LIMIT + 1 entries (read_step refuses
+   a longer log first). */
+static int read_visit(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Values **hashes, Index *index,
+                      Nat *left, Failure *failure) {
+  Text none = {NULL, 0};
+  Index visited = index_new(read_count(items));
+  Nat done = budget;
+  Nat place = 0;
+  for (const Values *cell = items; place < visited.count; cell = cell->tail) {
+    Text hash = {NULL, 0};
+    if (!entry_hash(hash_fuel, done, position, cell->head, &hash, &done, failure)) {
+      *left = done;
+      return 0;
+    }
+    visited.items[place] = (Keyed){hash, none, place + 1, NULL};
+    place = place + 1;
   }
-  Text hash = {NULL, 0};
-  Nat done;
-  if (!entry_hash(hash_fuel, budget, position, items->head, &hash, &done, failure)) {
-    *left = done;
-    return 0;
-  }
-  const Values *rest;
-  if (!read_visit(hash_fuel, done, position, items->tail, &rest, left, failure)) return 0;
-  *hashes = values_item(text_value(hash), rest);
+  const Values *list = NULL;
+  for (Nat k = visited.count; k > 0; k--) list = values_item(text_value(visited.items[k - 1].key), list);
+  *hashes = list;
+  *index = visited;
+  *left = done;
   return 1;
 }
 
-/* The place (from 1) of the first hash that is hash. 0 when no hash is. */
-static Nat read_place(const Values *hashes, Text hash, Nat place) {
-  return hashes == NULL                          ? 0
-         : same_text(hashes->head->text, hash) == 1 ? place
-                                                    : read_place(hashes->tail, hash, place + 1);
+/* The place (from 1) of the first hash that is hash. 0 when no hash is. M5
+   item 2: the index sorted by hash, then a binary search; on equal hashes
+   the lower place wins. */
+static Nat read_place(Index index, Text hash) {
+  Text none = {NULL, 0};
+  index_sort(index);
+  const Keyed *first = index_find(index, hash, none);
+  return first != NULL ? first->place : 0;
 }
 
 /* A new list of the first count items. */
@@ -2714,8 +2734,10 @@ static const Values *read_audit(const Values *items, const Values *hashes, const
 /* M2 part C (design items 14 and 15): the state of the record of the Ref
    commercial (the record whose ref is the hash of the Ref and whose type is
    Commercial), or NULL when no record is. */
-static const Value *read_commercial(const Value *commercial, const Located *records) {
-  const Value *record = project_find(write_field(kRefHash(), commercial)->text, records);
+static const Value *read_commercial(const Value *commercial, Index records) {
+  Text none = {NULL, 0};
+  const Keyed *found = index_find(records, write_field(kRefHash(), commercial)->text, none);
+  const Value *record = found != NULL ? found->value : NULL;
   return record != NULL && same_text(write_field(kType, record)->text, text_of_cstring("Commercial")) == 1
              ? write_field(kValue, record)
              : NULL;
@@ -2740,8 +2762,9 @@ static int read_record(Fuel hash_fuel, Nat budget, Nat position, const Values *i
   Nat found;
   *left = budget;
   if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
-  const Value *state =
-      asof == 1 && found == 0 ? NULL : read_commercial(write_field(text_of_cstring("commercial"), query), records);
+  const Value *state = asof == 1 && found == 0
+                           ? NULL
+                           : read_commercial(write_field(text_of_cstring("commercial"), query), record_index(records));
   if (commercial == 1) {
     *value = state != NULL ? state : &null_value;
     return 1;
@@ -2804,20 +2827,20 @@ static const Values *commitment_terms(const Value *commercial, const Located *wa
 }
 
 /* The Commitment record of records whose ref is hash, or NULL (the form of
-   read_commercial). */
-static const Value *commitment_find(Text hash, const Located *records) {
-  const Value *record = project_find(hash, records);
+   read_commercial). M5 item 3: records is the record index. */
+static const Value *commitment_find(Text hash, Index records) {
+  Text none = {NULL, 0};
+  const Keyed *found = index_find(records, hash, none);
+  const Value *record = found != NULL ? found->value : NULL;
   return record != NULL && same_text(write_field(kType, record)->text, text_of_cstring("Commitment")) == 1 ? record
                                                                                                            : NULL;
 }
-
-static Nat commitment_count(const Located *records) { return records == NULL ? 0 : 1 + commitment_count(records->tail); }
 
 /* Design item 5: the supersedes chain from record to older records as Ref
    kindCommitment items oldest first, in front of newer. The walk stops at
    supersedes = none, at a hash that names no Commitment record, and after
    fuel steps (no loop on a cycle). */
-static const Values *commitment_chain(const Value *record, const Located *records, Nat fuel, const Values *newer) {
+static const Values *commitment_chain(const Value *record, Index records, Nat fuel, const Values *newer) {
   if (record == NULL || fuel == 0) return newer;
   Text older = write_field(kRefHash(), commitment_field(record, "supersedes"))->text;
   return commitment_chain(commitment_find(older, records), records, fuel - 1, values_item(commitment_item(record), newer));
@@ -2897,6 +2920,7 @@ static int read_commitment(Fuel hash_fuel, Nat budget, Nat position, const Value
   Nat found;
   *left = budget;
   if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  Index index = record_index(records);
   const Value *commercial = write_field(text_of_cstring("commercial"), query);
   if (terms == 1) {
     const Located *known = asof == 1 && found == 0 ? NULL : records;
@@ -2905,11 +2929,11 @@ static int read_commitment(Fuel hash_fuel, Nat budget, Nat position, const Value
   }
   if (history == 1) {
     Text hash = write_field(kRefHash(), write_field(text_of_cstring("commitment"), query))->text;
-    *value = items_value(commitment_chain(commitment_find(hash, records), records, commitment_count(records), NULL));
+    *value = items_value(commitment_chain(commitment_find(hash, index), index, index.count, NULL));
     return 1;
   }
   if (reconciled == 1) {
-    const Value *state = read_commercial(commercial, records);
+    const Value *state = read_commercial(commercial, index);
     const Value *amount = state == NULL ? &null_value : write_field(text_of_cstring("amountCents"), state);
     Nat same = amount->kind == VALUE_NAT && commitment_reconciled(commercial, records, records, amount->number) == 1;
     *value = make_value((Value){.kind = VALUE_FLAG, .flag = same == 1 ? FLAG_YES : FLAG_NO});
@@ -3033,17 +3057,14 @@ static int read_membership(Fuel hash_fuel, Nat budget, Nat position, const Value
    NAT_MAX. No wrap and no refusal. */
 static Nat nat_add_saturating(Nat a, Nat b) { return b <= NAT_MAX - a ? a + b : NAT_MAX; }
 
-/* Delta A-1: the number of records of walk. The record at the head of walk
-   has the position count - 1, thus the oldest record has the position 0. */
-static Nat record_count(const Located *walk) { return walk == NULL ? 0 : 1 + record_count(walk->tail); }
-
-/* Delta A-1: 1 when a record of walk has the ref ref, and position gets its
-   position. count is the number of records of walk. */
-static Nat record_position(Text ref, const Located *walk, Nat count, Nat *position) {
-  if (walk == NULL) return 0;
-  if (same_text(write_field(text_of_cstring("ref"), walk->value)->text, ref) != 1)
-    return record_position(ref, walk->tail, count - 1, position);
-  *position = count - 1;
+/* Delta A-1: 1 when a record of records has the ref ref, and position gets
+   its position (the oldest record has the position 0). M5 item 3: records
+   is the record index. */
+static Nat record_position(Text ref, Index records, Nat *position) {
+  Text none = {NULL, 0};
+  const Keyed *found = index_find(records, ref, none);
+  if (found == NULL) return 0;
+  *position = found->place;
   return 1;
 }
 
@@ -3167,36 +3188,59 @@ static Nat stage_moves(Text stage, const char *key, const Located *walk) {
                                            stage_moves(stage, key, walk->tail));
 }
 
+/* M5 (delta A-7): the stage changes of records (newest first, total
+   records) with a Text before, as an index: key the deal, second key the
+   before stage, place the position. */
+static Index stage_index(const Located *records, Nat total) {
+  Index index = index_new(total);
+  Nat position = total;
+  Nat count = 0;
+  for (const Located *cell = records; cell != NULL && position > 0; cell = cell->tail) {
+    position = position - 1;
+    const Value *before = write_field(text_of_cstring("before"), commitment_field(cell->value, "payload"));
+    if (stage_change(cell->value) == 1 && before->kind == VALUE_TEXT) {
+      index.items[count] = (Keyed){stage_deal(cell->value), before->text, position, cell->value};
+      count = count + 1;
+    }
+  }
+  index.count = count;
+  index_sort(index);
+  return index;
+}
+
 /* Design item 6: the exit of a stay of deal in stage from enter: the
    position of the first stage change of the deal after enter with before =
-   stage, else best (L at the start). walk is newest first with count
-   records, thus each match replaces best and the oldest match wins. */
-static Nat stage_exit(Text deal, Text stage, Nat enter, const Located *walk, Nat count, Nat best) {
-  if (walk == NULL || count - 1 <= enter) return best;
-  Nat exits = stage_change(walk->value) == 1 && same_text(stage_deal(walk->value), deal) == 1 &&
-              stage_names(walk->value, "before", stage) == 1;
-  return stage_exit(deal, stage, enter, walk->tail, count - 1, exits == 1 ? count - 1 : best);
+   stage, else total (L). M5 (delta A-7): changes is the stage_index of the
+   records; the lower bound of (deal, stage, enter + 1) is that change when
+   it has the deal and the stage. */
+static Nat stage_exit(Text deal, Text stage, Nat enter, Index changes, Nat total) {
+  Nat slot = index_lower(changes, deal, stage, enter + 1);
+  return slot < changes.count && same_text(changes.items[slot].key, deal) == 1 &&
+                 same_text(changes.items[slot].second, stage) == 1
+             ? changes.items[slot].place
+             : total;
 }
 
 /* Design item 6: the sum of exit - enter over the stays in stage that start
    in walk (count records). A stay starts at a Commercial record whose stage
    is stage (its creation entry: the fold does not change stage) or at a
-   stage change with after = stage. records is the full walk with total
-   records. */
-static Nat stage_entries(Text stage, const Located *walk, Nat count, const Located *records, Nat total) {
+   stage change with after = stage. changes is the stage_index of the full
+   walk with total records. */
+static Nat stage_entries(Text stage, const Located *walk, Nat count, Index changes, Nat total) {
   if (walk == NULL) return 0;
   const Value *record = walk->value;
   Nat created = pipeline_match(stage, 0, record);
   Nat moved = stage_change(record) == 1 && stage_names(record, "after", stage) == 1;
   Text deal = created == 1 ? write_field(text_of_cstring("ref"), record)->text : stage_deal(record);
   Nat enter = count - 1;
-  Nat stay = created == 1 || moved == 1 ? stage_exit(deal, stage, enter, records, total, total) - enter : 0;
-  return nat_add_saturating(stay, stage_entries(stage, walk->tail, count - 1, records, total));
+  Nat stay = created == 1 || moved == 1 ? stage_exit(deal, stage, enter, changes, total) - enter : 0;
+  return nat_add_saturating(stay, stage_entries(stage, walk->tail, count - 1, changes, total));
 }
 
 /* Design items 3 and 6: one StageStat for each text of stages, in the
    order of stages. */
-static int stage_stats(const Values *stages, const Located *records, Nat total, const Values **items, Failure *failure) {
+static int stage_stats(const Values *stages, const Located *records, Nat total, Index changes, const Values **items,
+                       Failure *failure) {
   if (stages == NULL) {
     *items = NULL;
     return 1;
@@ -3206,10 +3250,10 @@ static int stage_stats(const Values *stages, const Located *records, Nat total, 
       text_value(stage),
       values_item(nat_value(stage_moves(stage, "after", records)),
                   values_item(nat_value(stage_moves(stage, "before", records)),
-                              values_item(nat_value(stage_entries(stage, records, total, records, total)), NULL))));
+                              values_item(nat_value(stage_entries(stage, records, total, changes, total)), NULL))));
   const Values *rest;
   const Value *stat;
-  if (!stage_stats(stages->tail, records, total, &rest, failure)) return 0;
+  if (!stage_stats(stages->tail, records, total, changes, &rest, failure)) return 0;
   if (!write_value("StageStat", "makeStageStat", fields, &stat, failure)) return 0;
   *items = values_item(stat, rest);
   return 1;
@@ -3217,25 +3261,25 @@ static int stage_stats(const Values *stages, const Located *records, Nat total, 
 
 /* Design item 7: the last position of the Commercial record at position:
    the larger of position and the position of its lastEvent record, when
-   some and found in records (total records). */
-static Nat stale_last(const Value *record, Nat position, const Located *records, Nat total) {
+   some and found in records (the record index). */
+static Nat stale_last(const Value *record, Nat position, Index records) {
   const Value *event = commitment_field(record, "lastEvent");
   Nat seen = 0;
-  Nat known = event->kind == VALUE_ATTRS &&
-              record_position(write_field(kRefHash(), event)->text, records, total, &seen) == 1;
+  Nat known = event->kind == VALUE_ATTRS && record_position(write_field(kRefHash(), event)->text, records, &seen) == 1;
   return known == 1 && seen > position ? seen : position;
 }
 
 /* Design item 7: the Commercial records of walk (count records) with no
    entry among the last quiet entries (p + quiet < L), as Ref kindCommercial
    items in log order: walk is newest first, and each kept record goes in
-   front of the items of the newer records. */
-static const Values *stale_deals(Nat quiet, const Located *walk, Nat count, const Located *records, Nat total,
+   front of the items of the newer records. records is the record index of
+   the full walk with total records. */
+static const Values *stale_deals(Nat quiet, const Located *walk, Nat count, Index records, Nat total,
                                  const Values *items) {
   if (walk == NULL) return items;
   const Value *record = walk->value;
   Nat stale = record_is(record, "Commercial") == 1 &&
-              nat_add_saturating(stale_last(record, count - 1, records, total), quiet) < total;
+              nat_add_saturating(stale_last(record, count - 1, records), quiet) < total;
   return stale_deals(quiet, walk->tail, count - 1, records, total,
                      stale == 1 ? values_item(object_two(kRefKind(), text_value(text_of_cstring("kindCommercial")),
                                                          kRefHash(), write_field(text_of_cstring("ref"), record)),
@@ -3268,14 +3312,16 @@ static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values 
   Nat found;
   if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
   const Located *known = asof == 1 && found == 0 ? NULL : records;
-  Nat total = record_count(known);
+  Index index = record_index(known);
+  Nat total = index.count;
   const Value *quiet = write_field(text_of_cstring("quietEntries"), query);
   const Values *answer = NULL;
   if (pipeline == 1 && !pipeline_buckets(close, known, known, &answer, failure)) return 0;
-  if (stats == 1 && !stage_stats(stage_list(known, NULL), known, total, &answer, failure)) return 0;
+  if (stats == 1 && !stage_stats(stage_list(known, NULL), known, total, stage_index(known, total), &answer, failure))
+    return 0;
   *value = items_value(pipeline == 1 || stats == 1
                            ? answer
-                           : stale_deals(quiet->kind == VALUE_NAT ? quiet->number : 0, known, total, known, total, NULL));
+                           : stale_deals(quiet->kind == VALUE_NAT ? quiet->number : 0, known, total, index, total, NULL));
   return 1;
 }
 
@@ -3414,7 +3460,9 @@ static const Values *account_list(AccountList list, const char *kind, const Loca
 static int account_view(const Value *party, const Located *walk, Nat budget, Nat position, const Value **value,
                         Nat *left, Failure *failure) {
   Text hash = write_field(kRefHash(), party)->text;
-  const Value *record = project_find(hash, walk);
+  Text none = {NULL, 0};
+  const Keyed *found = index_find(record_index(walk), hash, none);
+  const Value *record = found != NULL ? found->value : NULL;
   if (record == NULL || record_is(record, "Party") != 1) {
     *left = budget;
     return fail_at(failure, position, eRead);
@@ -3528,6 +3576,7 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat review = same_text(tag, text_of_cstring("queryReviewQueue"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
+  if (read_count(items) > LOG_LIMIT) return fail_at(failure, position, eReadLimit);
   if (commercial == 1 || sound == 1)
     return read_record(hash_fuel, ready, position, items, query, commercial, value, left, failure);
   if (terms == 1 || history == 1 || reconciled == 1 || discount == 1)
@@ -3541,14 +3590,15 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   if (review == 1) return read_review(hash_fuel, ready, position, items, query, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
-  if (!read_visit(hash_fuel, ready, position, items, &hashes, left, failure)) return 0;
+  Index index;
+  if (!read_visit(hash_fuel, ready, position, items, &hashes, &index, left, failure)) return 0;
   if (audit == 1) {
     *value = items_value(read_audit(items, hashes, write_field(text_of_cstring("actor"), query)));
     return 1;
   }
   const Value *moment = write_field(text_of_cstring(replay == 1 ? "moment" : "after"), query);
   Nat now = same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentNow"));
-  Nat place = now == 1 ? 0 : read_place(hashes, write_field(text_of_cstring("entry"), moment)->text, 1);
+  Nat place = now == 1 ? 0 : read_place(index, write_field(text_of_cstring("entry"), moment)->text);
   const Values *replayed = now == 1 ? items : read_take(items, place);
   const Values *after = now == 1 || place == 0 ? NULL : read_drop(items, place);
   *value = items_value(replay == 1 ? replayed : after);
@@ -3670,6 +3720,113 @@ static int checked_synth(Fuel fuel, Nat budget, Nat atom, Nat position, const LT
   return with_term(check_worked(position, expected, found, after, spent, value, rest, left, failure), term, made);
 }
 
+/* M5 item 0b (Q-M5-15): one level of a right-nested cons chain. at is the
+   cons token, open the position of the ( before it (each level after the
+   first), tail the tokens after cons. */
+typedef struct ChainLink ChainLink;
+struct ChainLink {
+  Plan plan;
+  Token at;
+  Nat open;
+  Tokens tail;
+  const Value *head;
+  const Term *made;
+  const ChainLink *outer;
+};
+
+/* A plan with a head and a tail argument. */
+static Nat chain_plan(const Plan *plan) {
+  const LTypes *types = plan_arguments(plan);
+  return types != NULL && types->tail != NULL && types->tail->tail == NULL ? 1 : 0;
+}
+
+/* M5 delta A-4 (USER ruling, part A s3): the scope of a value def, with no
+   binder (frame_slot 0) and no checking frame. Only there does a cons chain
+   take the loop. A body and a call scope keep the fuel of each level, as the
+   D3 term evaluator does (the rule E5 of both paths). */
+static Nat value_scope(const Bindings *environment) {
+  return frame_slot(environment) == 0 && checking_body(environment) == 0 ? 1 : 0;
+}
+
+/* The tokens start one more level of the chain: ( cons, and cons is a
+   constructor of the tail type with a head and a tail. */
+static int chained_tail(Tokens tokens, const LType *type, Plan *next) {
+  if (tokens.size < 2) return 0;
+  Token open = tokens.items[0];
+  Token name = tokens.items[1];
+  if (open.kind != TOKEN_PUNCTUATION || open.number != 40) return 0;
+  if (name.kind != TOKEN_IDENTIFIER || same_text(name.text, scons) != 1) return 0;
+  return constructor_plan(type, name.text, next) && chain_plan(next) == 1;
+}
+
+/* M5 item 0b (Q-M5-15): cons H (cons H (... T)) as a loop. fuel is the fuel
+   of parse_arguments at the first level. Each level takes the steps of
+   parse_arguments with that fuel, thus each head gets the fuel of the first
+   head, and the tail of a level is free of depth fuel. The ( and the cons of
+   a chained tail keep the fuel and budget checks of parse_term (the same
+   positions). The last tail T gets the fuel of a tail. Then from the last
+   level to the first: evaluate_plan of the level, then the ) before the
+   level (each level after the first). Thus the work charges, the charge
+   order and the failure positions of each level stay. The levels are an
+   arena list, the newest first: no C frame for each level. */
+static int chain_term(Fuel fuel, Nat budget, Token at, const Plan *first, const Bindings *environment, Tokens tokens,
+                      const Value **value, Tokens *rest, Nat *left, const Term **term, Failure *failure) {
+  const ChainLink *links = NULL;
+  Plan plan = *first;
+  Nat open = 0;
+  const Value *inner;
+  const Term *inner_term = NULL;
+  Tokens after;
+  for (;;) {
+    const LTypes *types = plan_arguments(&plan);
+    if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
+    const Value *head;
+    const Term *made = NULL;
+    if (!parse_term(fuel - 1, budget, 1, types->head, environment, tokens, &head, &after, &budget,
+                    want_term(term, &made), failure))
+      return 0;
+    if (fuel - 1 == 0) return fail_at(failure, first_position(after), eFuel);
+    ChainLink *link = arena_alloc(sizeof *link);
+    *link = (ChainLink){plan, at, open, tokens, head, made, links};
+    links = link;
+    Plan next;
+    if (!chained_tail(after, types->tail->head, &next)) {
+      if (!parse_term(fuel - 2, budget, 1, types->tail->head, environment, after, &inner, &after, &budget,
+                      want_term(term, &inner_term), failure))
+        return 0;
+      break;
+    }
+    if (fuel - 2 == 0) return fail_at(failure, first_position(after), eFuel);
+    if (budget == 0) return fail_at(failure, first_position(after), eBudget);
+    if (fuel - 3 == 0) return fail_at(failure, after.items[1].position, eFuel);
+    open = after.items[0].position;
+    at = after.items[1];
+    tokens = (Tokens){after.items + 2, after.size - 2};
+    plan = next;
+  }
+  for (const ChainLink *link = links; link != NULL; link = link->outer) {
+    const Term *built = term != NULL ? named_term(TERM_CONSTRUCT, link->at.position, link->at.text, NULL,
+                                                  terms_item(link->made, terms_item(inner_term, NULL)),
+                                                  taken_tokens(link->tail, after), first_position(after), environment)
+                                     : NULL;
+    const Value *made;
+    Failure refused;
+    if (!evaluate_plan(&link->plan, values_item(link->head, values_item(inner, NULL)), &made, &refused))
+      return fail_at(failure, link->at.position, refused.message);
+    inner = made;
+    inner_term = built;
+    if (link->outer != NULL) {
+      if (!close_parsed(after, &after, failure)) return 0;
+      inner_term = built != NULL ? term_form(TERM_GROUP, link->open, 0, terms_item(built, NULL)) : NULL;
+    }
+  }
+  *value = inner;
+  *rest = after;
+  *left = budget;
+  if (term != NULL) *term = inner_term;
+  return 1;
+}
+
 int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bindings *environment, Tokens tokens,
                const Value **value, Tokens *rest, Nat *left, const Term **term, Failure *failure) {
   if (fuel == 0) return fail_at(failure, first_position(tokens), eFuel);
@@ -3760,6 +3917,8 @@ int parse_term(Fuel fuel, Nat budget, Nat atom, const LType *expected, const Bin
                          failure);
     }
     if (atom == 1 && has_arguments(plan_arguments(&selected)) == 1) return fail_at(failure, head.position, eParen);
+    if (same_text(head.text, scons) == 1 && chain_plan(&selected) == 1 && value_scope(environment) == 1)
+      return chain_term(more, budget, head, &selected, environment, tail, value, rest, left, term, failure);
     const Values *values;
     Tokens after;
     Nat spent;

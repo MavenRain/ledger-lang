@@ -5393,6 +5393,272 @@ static void test_m4_review_queue(void) {
   assert(left == 0 && same_text(starved.message, eBudget));
 }
 
+/* The first place of hash in the walk of hashes in log order, or count. */
+static Nat walk_place(const char *const *hashes, Nat count, const char *hash) {
+  Nat place = count;
+  for (Nat index = count; index > 0; index--)
+    if (strcmp(hashes[index - 1], hash) == 0) place = index - 1;
+  return place;
+}
+
+/* M5 item 2: the binary search of a hash index gives the place of the walk
+   on lists of 0, 1, 2 and 7 hashes: the first place of a duplicate hash, and
+   no item for a missing hash. */
+static void test_m5_read_index(void) {
+  const char *const hashes[7] = {"d4", "a1", "c3", "a1", "f6", "b2", "e5"};
+  const char *const probes[8] = {"a1", "b2", "c3", "d4", "e5", "f6", "c0", "zz"};
+  const Nat counts[4] = {0, 1, 2, 7};
+  Text none = {NULL, 0};
+  for (Nat size = 0; size < 4; size++) {
+    Nat count = counts[size];
+    Index index = index_new(count);
+    for (Nat place = 0; place < count; place++) index.items[place] = (Keyed){text(hashes[place]), none, place, NULL};
+    index_sort(index);
+    for (Nat probe = 0; probe < 8; probe++) {
+      Nat want = walk_place(hashes, count, probes[probe]);
+      const Keyed *found = index_find(index, text(probes[probe]), none);
+      Nat slot = index_lower(index, text(probes[probe]), none, 0);
+      assert(want == count ? found == NULL : found != NULL && found->place == want);
+      assert(slot <= index.count);
+      assert(want == count || index.items[slot].place == want);
+    }
+  }
+}
+
+/* M5 item 5: read_step refuses a log of LOG_LIMIT + 1 entries before it
+   hashes an entry; a log of LOG_LIMIT entries passes that check. */
+static void test_m5_log_limit(void) {
+  static Values cells[LOG_LIMIT + 1];
+  static const Value zero = {.kind = VALUE_NAT, .number = 0};
+  for (Nat index = 0; index <= LOG_LIMIT; index++)
+    cells[index] = (Values){&zero, index < LOG_LIMIT ? &cells[index + 1] : NULL};
+  Value over = {.kind = VALUE_ITEMS, .items = &cells[0]};
+  Value at = {.kind = VALUE_ITEMS, .items = &cells[1]};
+  Value fifty = {.kind = VALUE_NAT, .number = 50};
+  Tagged query_storage;
+  const Value *query = tagged(&query_storage, "queryReviewQueue", "belowConfidence", &fifty);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(!read_step(1000, 20, 7, answer, &over, query, &value, &left, &failure));
+  assert(failure.position == 7 && same_text(failure.message, eReadLimit) == 1);
+  Failure walked = {0, {NULL, 0}, {NULL, 0}};
+  assert(read_step(1000, 20, 7, answer, &at, query, &value, &left, &walked) == 1 ||
+         same_text(walked.message, eReadLimit) != 1);
+}
+
+/* M5 part A (A3, delta A-4, mutants A-M6 and A-M7): the checker reads a cons
+   chain in a value def in a loop. A chain of 2000 items is accepted, with each
+   item in order; the same chain with one ")" less gets the close error; 600
+   nested parens around a Nat still get eFuel. */
+static void test_m5_cons_chain(void) {
+  static char source[32768];
+  int used = snprintf(source, sizeof source, "def xs : List Nat := ");
+  for (int index = 0; index < 1999; index++) used += snprintf(source + used, sizeof source - (size_t)used, "cons %d (", index);
+  used += snprintf(source + used, sizeof source - (size_t)used, "cons 1999 nil");
+  for (int index = 0; index < 1999; index++) source[used++] = ')';
+  source[used] = '\0';
+  const Bindings *environment = NULL;
+  Failure failure;
+  assert(check_definitions(text(source), &environment, &failure) == 1);
+  const Value *xs = environment->head.value;
+  assert(xs != NULL && xs->kind == VALUE_ITEMS && read_count(xs->items) == 2000);
+  Nat expected = 0;
+  for (const Values *item = xs->items; item != NULL; item = item->tail) assert(item->head->number == expected++);
+  source[used - 1] = '\0';
+  environment = NULL;
+  assert(check_definitions(text(source), &environment, &failure) == 0);
+  assert(same_text(failure.message, text("expected closing parenthesis")) == 1);
+  used = snprintf(source, sizeof source, "def n : Nat := ");
+  for (int index = 0; index < 600; index++) source[used++] = '(';
+  source[used++] = '7';
+  for (int index = 0; index < 600; index++) source[used++] = ')';
+  source[used] = '\0';
+  environment = NULL;
+  assert(check_definitions(text(source), &environment, &failure) == 0);
+  assert(same_text(failure.message, eFuel) == 1);
+}
+
+static int outcome_is(const Value *step, const char *outcome) {
+  const Value *made = step->attrs->rest->value;
+  return made->kind == VALUE_ATTRS && same_text(made->attrs->value->text, text(outcome)) == 1;
+}
+
+static int conflict_head(const Value *step, Text head) {
+  return outcome_is(step, "outcomeConflict") && same_text(step->attrs->rest->value->attrs->rest->value->text, head) == 1;
+}
+
+/* M5 part A (A3, mutant A-M8): write_last through write_step on logs of 0, 1
+   and 3 entries. An expect Text on an empty log is denied; an expect that is
+   not the hash of the last entry gets outcomeConflict with that hash; the
+   hash of the last entry gets outcomeAppended. */
+static void test_m5_write_last(void) {
+  Value p1 = {.kind = VALUE_TEXT, .text = text("p1")};
+  Value event = {.kind = VALUE_TEXT, .text = text("e1")};
+  Value no_expect = {.kind = VALUE_NULL};
+  Value stray = {.kind = VALUE_TEXT, .text = text("e9")};
+  Tagged record_storage;
+  Attrs command = {text("command"), tagged(&record_storage, "commandRecord", "event", &event), NULL};
+  Attrs open_expect = {text("expect"), &no_expect, &command};
+  Attrs open_actor = {text("actor"), &p1, &open_expect};
+  Value open = {.kind = VALUE_ATTRS, .attrs = &open_actor};
+  Attrs stray_expect = {text("expect"), &stray, &command};
+  Attrs stray_actor = {text("actor"), &p1, &stray_expect};
+  Value stray_write = {.kind = VALUE_ATTRS, .attrs = &stray_actor};
+  Value empty_log = {.kind = VALUE_ITEMS, .items = NULL};
+  const Value *step;
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(write_step(1000, 5, 3, &empty_log, &stray_write, &step, &left, &failure));
+  assert(outcome_is(step, "outcomeDenied") && step->attrs->value->items == NULL);
+  assert(write_step(1000, 5, 3, &empty_log, &open, &step, &left, &failure));
+  assert(outcome_is(step, "outcomeAppended"));
+  const Value *one = step->attrs->value;
+  assert(read_count(one->items) == 1);
+  Text first_hash = {NULL, 0};
+  assert(entry_hash(1000, 1, 0, one->items->head, &first_hash, &left, &failure));
+  Value first_text = {.kind = VALUE_TEXT, .text = first_hash};
+  Attrs first_expect = {text("expect"), &first_text, &command};
+  Attrs first_actor = {text("actor"), &p1, &first_expect};
+  Value expect_first = {.kind = VALUE_ATTRS, .attrs = &first_actor};
+  assert(write_step(1000, 5, 3, one, &stray_write, &step, &left, &failure));
+  assert(conflict_head(step, first_hash) && step->attrs->value == one);
+  assert(write_step(1000, 5, 3, one, &expect_first, &step, &left, &failure));
+  assert(outcome_is(step, "outcomeAppended"));
+  const Value *two = step->attrs->value;
+  Text second_hash = {NULL, 0};
+  assert(entry_hash(1000, 1, 0, two->items->tail->head, &second_hash, &left, &failure));
+  Value second_text = {.kind = VALUE_TEXT, .text = second_hash};
+  Attrs second_expect = {text("expect"), &second_text, &command};
+  Attrs second_actor = {text("actor"), &p1, &second_expect};
+  Value expect_second = {.kind = VALUE_ATTRS, .attrs = &second_actor};
+  assert(write_step(1000, 5, 3, two, &expect_second, &step, &left, &failure));
+  const Value *three = step->attrs->value;
+  assert(outcome_is(step, "outcomeAppended") && read_count(three->items) == 3);
+  Text third_hash = {NULL, 0};
+  assert(entry_hash(1000, 1, 0, three->items->tail->tail->head, &third_hash, &left, &failure));
+  Value third_text = {.kind = VALUE_TEXT, .text = third_hash};
+  Attrs third_expect = {text("expect"), &third_text, &command};
+  Attrs third_actor = {text("actor"), &p1, &third_expect};
+  Value expect_third = {.kind = VALUE_ATTRS, .attrs = &third_actor};
+  assert(write_step(1000, 5, 3, three, &expect_first, &step, &left, &failure));
+  assert(conflict_head(step, third_hash) && step->attrs->value == three);
+  assert(write_step(1000, 5, 3, three, &expect_third, &step, &left, &failure));
+  assert(outcome_is(step, "outcomeAppended") && read_count(step->attrs->value->items) == 4);
+}
+
+/* Delta A-7: two record lists are the same when each pair of records has the
+   same position, name and printed value. */
+static int same_records(const Located *a, const Located *b) {
+  int same = 1;
+  for (; a != NULL && b != NULL && same == 1; a = a->tail, b = b->tail)
+    same = a->position == b->position && same_text(a->name, b->name) && same_text(printed(a->value), printed(b->value));
+  return same == 1 && a == NULL && b == NULL;
+}
+
+/* M5 design item 3 and delta A-7: the record index gives each record by its
+   ref at its place (the oldest record has the place 0), and the lower place
+   on equal refs. The fold of the projection on known hashes (incoming records,
+   or a hash below) gives the records of the fold from no records, with the
+   createsEvent update. */
+static void test_m5_record_index(void) {
+  Text none = {NULL, 0};
+  Index empty = record_index(NULL);
+  assert(empty.count == 0 && index_find(empty, text("e9"), none) == NULL);
+  Value p1 = {.kind = VALUE_TEXT, .text = text("p1")};
+  Value first_name = {.kind = VALUE_TEXT, .text = text("c1")};
+  Value second_name = {.kind = VALUE_TEXT, .text = text("c2")};
+  Value commercial_kind = {.kind = VALUE_TEXT, .text = text("kindCommercial")};
+  Value nothing = {.kind = VALUE_NULL};
+  Paired first_deal_storage, second_deal_storage, first_ref_storage;
+  const Value *first_deal = paired(&first_deal_storage, NULL, "name", &first_name, "lastEvent", &nothing);
+  const Value *second_deal = paired(&second_deal_storage, NULL, "name", &second_name, "lastEvent", &nothing);
+  Written first_write, second_write, third_write;
+  Value empty_log = {.kind = VALUE_ITEMS, .items = NULL};
+  const Value *step;
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  assert(write_step(1000, 5, 3, &empty_log, written(&first_write, &p1, "commandOpenCommercial", "commercial", first_deal),
+                    &step, &left, &failure));
+  assert(write_step(1000, 5, 3, step->attrs->value,
+                    written(&second_write, &p1, "commandOpenCommercial", "commercial", second_deal), &step, &left,
+                    &failure));
+  Text first_hash = {NULL, 0};
+  Text second_hash = {NULL, 0};
+  Text event_hash = {NULL, 0};
+  assert(entry_hash(1000, 1, 0, step->attrs->value->items->head, &first_hash, &left, &failure));
+  assert(entry_hash(1000, 1, 0, step->attrs->value->items->tail->head, &second_hash, &left, &failure));
+  Value first_text = {.kind = VALUE_TEXT, .text = first_hash};
+  const Value *first_ref = paired(&first_ref_storage, NULL, "kind", &commercial_kind, "hash", &first_text);
+  Tagged subject_storage;
+  Attrs subject_field = {text("subject"), tagged(&subject_storage, "subjectCommercial", "commercial", first_ref),
+                         NULL};
+  Value event = {.kind = VALUE_ATTRS, .attrs = &subject_field};
+  assert(write_step(1000, 5, 3, step->attrs->value, written(&third_write, &p1, "commandRecord", "event", &event),
+                    &step, &left, &failure));
+  const Value *log = step->attrs->value;
+  assert(log->kind == VALUE_ITEMS && read_count(log->items) == 3);
+  assert(entry_hash(1000, 1, 0, log->items->tail->tail->head, &event_hash, &left, &failure));
+  /* The fold from no records: c1 (updated by the event), c2 and the event.
+     Each record is in the index at its place, and the keys are in order. */
+  const Located *records = NULL;
+  Nat found = 9;
+  Nat budget = 3;
+  assert(project_entries(1000, 7, text("log"), log->items, none, &records, &found, &budget, &failure));
+  assert(budget == 0 && found == 0);
+  Index full = record_index(records);
+  assert(full.count == 3);
+  Nat place = 3;
+  for (const Located *cell = records; cell != NULL; cell = cell->tail) {
+    place = place - 1;
+    const Keyed *item = index_find(full, cell->value->attrs->value->text, none);
+    assert(item != NULL && item->place == place && item->value == cell->value);
+  }
+  assert(place == 0);
+  for (Nat i = 1; i < full.count; i++) assert(text_order(full.items[i - 1].key, full.items[i].key) < 0);
+  const Keyed *c1 = index_find(full, first_hash, none);
+  const Keyed *c2 = index_find(full, second_hash, none);
+  const Keyed *noted = index_find(full, event_hash, none);
+  assert(c1 != NULL && c1->place == 0 && c2 != NULL && c2->place == 1 && noted != NULL && noted->place == 2);
+  assert(index_find(full, text("e9"), none) == NULL);
+  /* Two records with the same ref: the find gives the lower place. */
+  Located older = {.position = 1, .name = text("a"), .value = c1->value, .tail = NULL};
+  Located newer = {.position = 2, .name = text("b"), .value = c1->value, .tail = &older};
+  Index twin = record_index(&newer);
+  const Keyed *low = index_find(twin, first_hash, none);
+  assert(twin.count == 2 && low != NULL && low->place == 0 && index_find(twin, second_hash, none) == NULL);
+  /* The same fold in two steps: the first two entries, then the whole log on
+     those records. The two known entries change nothing; the event updates
+     c1, and c2 stays. */
+  Values part_tail = {.head = log->items->tail->head, .tail = NULL};
+  Values part_items = {.head = log->items->head, .tail = &part_tail};
+  const Located *part = NULL;
+  budget = 2;
+  assert(project_entries(1000, 7, text("log"), &part_items, none, &part, &found, &budget, &failure));
+  assert(budget == 0 && found == 0);
+  Index part_index = record_index(part);
+  const Keyed *c1_before = index_find(part_index, first_hash, none);
+  const Keyed *c2_before = index_find(part_index, second_hash, none);
+  assert(part_index.count == 2 && c1_before != NULL && c2_before != NULL);
+  assert(!same_text(printed(c1_before->value), printed(c1->value)));
+  assert(same_text(printed(c2_before->value), printed(c2->value)));
+  const Located *folded = part;
+  budget = 3;
+  assert(project_entries(1000, 7, text("log"), log->items, none, &folded, &found, &budget, &failure));
+  assert(budget == 0 && found == 0 && same_records(folded, records));
+  /* A log with the first entry twice: the second copy has a hash below it and
+     changes nothing. */
+  Values again_last = {.head = log->items->tail->tail->head, .tail = NULL};
+  Values again_first = {.head = log->items->head, .tail = &again_last};
+  Values again_second = {.head = log->items->tail->head, .tail = &again_first};
+  Values again = {.head = log->items->head, .tail = &again_second};
+  const Located *repeated = NULL;
+  budget = 4;
+  assert(project_entries(1000, 7, text("log"), &again, none, &repeated, &found, &budget, &failure));
+  assert(budget == 0 && found == 0 && same_records(repeated, records));
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -5469,6 +5735,11 @@ int main(void) {
   test_m1_records();
   test_m1_projection_hash_failure();
   test_m1_projection_print_failure();
+  test_m5_read_index();
+  test_m5_log_limit();
+  test_m5_cons_chain();
+  test_m5_write_last();
+  test_m5_record_index();
   puts("C module tests passed");
   return 0;
 }

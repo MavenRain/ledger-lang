@@ -359,6 +359,64 @@ of records.
   `queryAuditByPolicy`), and the keys `pipelineByOwner` and
   `pipelineByTerritory` of `queryPipeline`.
 
+## M5
+
+M5 part A lets the compiler take long logs and cuts the memory of the read
+path. The bench is `build/bench-gen N` (test/bench-gen.c): a program with a
+Log of N entries with distinct texts, one `write`, and one `read` for each
+of the 18 queries.
+
+- The limits. A source has at most 8388608 bytes (8 MiB, `SOURCE_LIMIT`).
+  A longer source gives "source exceeds 8388608 bytes" (in file mode, after
+  the path). The output has at most 67108864 bytes (64 MiB,
+  `OUTPUT_LIMIT`). A longer output gives "compiler output exceeds 67108864
+  bytes". The output of a bench log is about 1180 bytes for each entry,
+  thus the output of an 8 MiB bench log (about 49000 entries) stays under
+  the output limit. A `read` of a log of more than 65536 entries gives
+  "the read path takes at most 65536 log entries".
+- The bridge limits. `bin/bridge.mjs` has the limits of `build/ledgerc`:
+  `sourceLimit` is 8388608 bytes and `outputLimit` is 64 MiB (`maxBuffer`
+  is 2 * `outputLimit`). `compile` refuses a longer source with
+  "source exceeds 8388608 bytes" before it runs `build/ledgerc --stdin`.
+- The `cons` chain. In the scope of a value definition (no binder and no
+  checking frame), the checker reads a right-nested `cons` chain in a loop.
+  The tail of the chain takes no depth fuel, thus the chain has no nesting
+  limit. A log is a value definition, thus the bench uses this scope.
+- The limit of the D3 term evaluator. The evaluator takes one step of the
+  depth fuel for each level of a term. A function body, and each other
+  scope with a binder or a checking frame, keeps that fuel on the parse
+  path too, thus the two paths give the same failure. There a `cons` chain
+  has the depth fuel cap of 512 steps: 127 nested `cons` terms compile, and
+  128 give `compiler fuel exhausted`.
+- The indexes. The read path puts the entry hashes in one array sorted by
+  hash, and finds the place of a hash by binary search. On equal hashes the
+  lower place wins, as the walk did. The records get an index sorted by
+  ref. Item 3b gives these indexes to the projection of the records
+  (`project_find`), which walked the records for each entry. The walks over
+  the log are loops, thus a log of 16000 entries does not overflow the C
+  stack.
+- The speed (item 3b). The bench on macOS with `/usr/bin/time -l`, as
+  seconds and peak memory footprint. "Before" is the tree before the
+  indexes.
+  - 1000 entries: 2.00 s, 148 MB (before: 1.77 s, 356 MB).
+  - 4000 entries: 13.88 s, 842 MB (before: 15.06 s, 4.15 GB).
+  - 16000 entries: 119.41 s, 7.54 GB (before: 60.1 GB, and the 16 MiB
+    output limit of that tree stopped the run).
+
+  The Q-M5-4 time target is not met: t(16000) / t(1000) is 59.7, and the
+  target is at most 24 and the 16000 entry case under 1 s. The target of no
+  stack overflow at 16000 entries is met. The time target moves to part A2
+  (Q-M5-23). The profile of the 4000 entry run ranks `text_of_bytes`,
+  `same_text`, `write_field`, `renewal_first` and `write_attr` first.
+- The tests. The Makefile has `test: build build/bench-gen`, because the
+  node rows "m5 cons chain keeps the bytes" and "m5 long log keeps the
+  answers" compile the bench logs of 64 and 1000 entries through the
+  bridge. The rows hash the bridge output and a final newline, because the
+  `--stdin` output has no final newline and the digests are of the CLI
+  output. The row "m5 source limit" checks the source limit of the bridge.
+- Out of M5 part A: the time target (part A2) and the certificate of the
+  output (parts B to E).
+
 ## Remaining M0 work
 
 1. Add dependent function types and support computed function

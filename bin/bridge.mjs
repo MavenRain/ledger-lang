@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const sourceLimit = 65_536;
-export const outputLimit = 4 * 1024 * 1024;
+export const sourceLimit = 8_388_608;
+export const outputLimit = 64 * 1024 * 1024;
 
 // One scratch file per process holds the source. The compiler reads it as a
 // file descriptor: the spawnSync `input:` pipe sometimes did not reach EOF.

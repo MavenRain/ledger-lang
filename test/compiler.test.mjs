@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { createCompiler, sourceLimit } from '../bin/bridge.mjs';
+import { createCompiler, outputLimit, sourceLimit } from '../bin/bridge.mjs';
 
 const compile = await createCompiler();
 const encoder = new TextEncoder();
@@ -196,7 +196,7 @@ test('checker fuel bounds deep nesting at the token where fuel runs out', async 
   // Pin the measured limits stated in README.md. Each count includes the
   // innermost form: the stated count compiles and one more exhausts fuel.
   const readme = (await readFile(new URL('../README.md', import.meta.url), 'utf8')).replace(/\s+/g, ' ');
-  const limits = readme.match(/definition are (\d+) nested parentheses, (\d+) nested `Option` type formers, (\d+) nested `textByte` or `cons` terms, and (\d+) nested `attrsField` terms\./);
+  const limits = readme.match(/definition are (\d+) nested parentheses, (\d+) nested `Option` type formers, (\d+) nested `textByte` terms or `cons` terms in a function body, and (\d+) nested `attrsField` terms\./);
   assert.ok(limits, 'README.md states the fuel limits');
   const [parens, options, terms, attrs] = limits.slice(1).map(Number);
   const nest = (outer, inner, count) => Array.from({ length: count - 1 }, (_, index) => outer(index)).join('')
@@ -205,7 +205,8 @@ test('checker fuel bounds deep nesting at the token where fuel runs out', async 
     [parens, count => 'def a : Nat := ' + '('.repeat(count) + '0' + ')'.repeat(count)],
     [options, count => 'def a : ' + nest(() => 'Option (', () => 'Option Text', count) + ' := none'],
     [terms, count => 'def a : Text := ' + nest(() => 'textByte 97 (', () => 'textByte 97 textEnd', count)],
-    [terms, count => 'def a : List Nat := ' + nest(() => 'cons 0 (', () => 'cons 0 nil', count)],
+    [terms, count => 'def f : (k : Nat) -> List Nat := fun (k : Nat) => '
+      + nest(() => 'cons 0 (', () => 'cons 0 nil', count) + '\ndef a : List Nat := f 0'],
     [attrs, count => 'def a : Attrs := ' + nest(index => `attrsField "k${index}" (valueNat 0) (`,
       index => `attrsField "k${index}" (valueNat 0) attrsEnd`, count)],
   ];
@@ -213,6 +214,10 @@ test('checker fuel bounds deep nesting at the token where fuel runs out', async 
     assert.equal(values(form(limit)).length, 1, form(limit).slice(0, 40));
     reject(form(limit + 1), /fuel exhausted/);
   }
+  // M5 item 0b: the checker reads a cons chain in a value definition in a loop.
+  assert.match(readme, /A `cons` chain in a value definition has no nesting limit/);
+  const chain = values('def a : List Nat := ' + nest(() => 'cons 0 (', () => 'cons 0 nil', 2000));
+  assert.equal(chain[0].length, 2000);
 });
 
 const sharedValues = () => {
@@ -306,7 +311,7 @@ test('transport source limit is enforced before compilation', () => {
   assert.throws(() => compile(new Uint8Array(sourceLimit + 1)), /source exceeds/);
 });
 
-test('a valid source at the 65536-byte limit compiles', () => {
+test('a valid source at the 8388608-byte limit compiles', () => {
   const prefix = 'def text : Text := "';
   const text = 'a'.repeat(sourceLimit - encoder.encode(prefix).length - 1);
   const source = prefix + text + '"';
@@ -325,7 +330,7 @@ test('CLI emits JSON on success and only a diagnostic on failure', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ledger-lang-test-'));
   const path = join(directory, 'program.ledger');
   const launcher = fileURLToPath(new URL('../bin/ledgerc', import.meta.url));
-  const invoke = () => spawnSync('sh', [launcher, path], { encoding: 'utf8', timeout: 30_000 });
+  const invoke = () => spawnSync('sh', [launcher, path], { encoding: 'utf8', maxBuffer: 2 * outputLimit, timeout: 30_000 });
   try {
     await writeFile(path, 'def a : Nat := 7');
     const valid = invoke();
@@ -341,7 +346,7 @@ test('CLI emits JSON on success and only a diagnostic on failure', async () => {
     const oversized = invoke();
     assert.equal(oversized.status, 1);
     assert.equal(oversized.stdout, '');
-    assert.match(oversized.stderr, /program\.ledger: source exceeds 65536 bytes/);
+    assert.match(oversized.stderr, /program\.ledger: source exceeds 8388608 bytes/);
     await writeFile(path, sharedValues());
     const budget = invoke();
     assert.equal(budget.status, 1);

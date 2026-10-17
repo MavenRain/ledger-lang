@@ -12,7 +12,10 @@ typedef uint32_t Nat;
 #define NAT_MAX UINT32_MAX
 
 /* The byte limit for compiler output and an entry's hash encoding. */
-#define OUTPUT_LIMIT ((Nat)4 * 1024 * 1024)
+#define OUTPUT_LIMIT ((Nat)64 * 1024 * 1024)
+
+/* M5 design item 5: the most log entries that a read takes. */
+#define LOG_LIMIT ((Nat)65536)
 
 /* A text is a sequence of Nat items. Most texts hold bytes. A token text
    or a type name can hold larger items. A text never changes after it is
@@ -959,6 +962,47 @@ struct Located {
 int project_entries(Fuel hash_fuel, Nat position, Text name, const Values *items, Text stop, const Located **records, Nat *found,
                     Nat *budget, Failure *failure);
 const Value *project_find(Text ref, const Located *records);
+
+/* M5 design items 2, 3 and 3b (delta A-7): the index form. An index is an
+   arena array of keyed items and a count. index_sort orders the items by
+   key, then second key, then place (thus the lower place comes first on
+   equal keys). index_lower gives the first slot at or above (key, second,
+   place), or the count when none. index_find gives the item of the first
+   slot with key and second, or NULL. record_index gives the index of the
+   records (newest first): key ref, place the position (the oldest record
+   has the position 0), value the record. */
+typedef struct {
+  Text key;
+  Text second;
+  Nat place;
+  const Value *value;
+} Keyed;
+
+typedef struct {
+  Keyed *items;
+  Nat count;
+} Index;
+
+int text_order(Text a, Text b);
+Index index_new(Nat count);
+void index_sort(Index index);
+Nat index_lower(Index index, Text key, Text second, Nat place);
+const Keyed *index_find(Index index, Text key, Text second);
+Index record_index(const Located *records);
+
+/* M5 item (d): the hot keys of the fold. M5 item 5: the refusal of a log
+   longer than LOG_LIMIT. */
+extern const Text kRef;
+extern const Text kHash;
+extern const Text kBody;
+extern const Text kSubject;
+extern const Text kKind;
+extern const Text kKindEvent;
+extern const Text kCreatesEvent;
+extern const Text kLastEvent;
+extern const Text kParty;
+extern const Text kCommercial;
+extern const Text eReadLimit;
 
 /* eval_term evaluates a checked body term at run time (D3-s3). It follows
    parse_term with atom 0 on the tokens of the term: the same expected type,

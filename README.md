@@ -29,9 +29,10 @@ bin/ledgerc examples/algebra.ledger > algebra.json
 ```
 
 `make build` links `build/ledgerc` with `tcc`. `make check` compiles each C
-source with `-Wall -Werror`. `make test` builds `build/ledgerc` and runs the
-integration suite with `node --test`. `make c-test` runs the C module and
-output tests. `bin/ledgerc` runs `build/ledgerc`. For the tests,
+source with `-Wall -Werror`. `make test` builds `build/ledgerc` and
+`build/bench-gen`, then runs the integration suite with `node --test`.
+`make c-test` runs the C module and output tests. `bin/ledgerc` runs
+`build/ledgerc`. For the tests,
 `bin/bridge.mjs` exports `createCompiler`, which runs
 `build/ledgerc --stdin` for each source. Rebuild with `make build` after
 editing `compiler/*.c` or `core/*.def`. Build artifacts are ignored by Git.
@@ -355,13 +356,15 @@ while the output is written reports the first byte of that definition.
 - Parsing and checking fuel is one step per source byte, at most 512 steps
   on a path. Each definition has its own fuel. The measured limits for one
   definition are 511 nested parentheses, 256 nested `Option` type formers,
-  127 nested `textByte` or `cons` terms, and 102 nested `attrsField` terms.
+  127 nested `textByte` terms or `cons` terms in a function body, and 102
+  nested `attrsField` terms. A `cons` chain in a value definition has no
+  nesting limit, because the checker reads that chain in a loop.
   These limits use only required parentheses. For example, the innermost
   Option is `Option Nat`; writing `Option (Nat)` costs another fuel step.
   Each count includes the innermost form. The error reports the token where
-  the fuel ran out. Split a longer list or attribute object across
-  definitions, for example
-  `def rest : List Text := ...` and `def all : List Text := cons "a" rest`.
+  the fuel ran out. Split a longer list in a function body or a longer
+  attribute object across definitions, for example
+  `def rest : List Text := ...` and the body `cons "a" rest`.
 - Function evaluation shares a work budget of 8 bodies per source byte plus
   64 bodies across all definitions. Each application evaluates one body. This
   includes an application in another body, each application that a structure
@@ -374,7 +377,7 @@ while the output is written reports the first byte of that definition.
   across all instances. Each emitted byte costs one step. Thus the output is
   at most 32 bytes per source byte plus 128 bytes, also for shared values
   with a large expansion. When the budget runs out, the compiler reports
-  `output budget exceeded`. `build/ledgerc` also caps the result at 4 MiB.
+  `output budget exceeded`. `build/ledgerc` also caps the result at 64 MiB.
 
 ## Operation families
 

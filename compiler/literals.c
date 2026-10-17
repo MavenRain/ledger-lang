@@ -348,6 +348,46 @@ static const Nat eRead_items[] = {
 };
 const Text eRead = {eRead_items, 40};
 
+/* "the read path takes at most 65536 log entries" */
+static const Nat eReadLimit_items[] = {
+  't', 'h', 'e', ' ', 'r', 'e', 'a', 'd', ' ', 'p', 'a', 't', 'h', ' ', 't', 'a', 'k', 'e', 's', ' ',
+  'a', 't', ' ', 'm', 'o', 's', 't', ' ', '6', '5', '5', '3', '6', ' ', 'l', 'o', 'g', ' ',
+  'e', 'n', 't', 'r', 'i', 'e', 's',
+};
+const Text eReadLimit = {eReadLimit_items, 45};
+
+/* M5 item (d): the hot keys of the fold. */
+/* "ref" */
+static const Nat kRef_items[] = {'r', 'e', 'f'};
+const Text kRef = {kRef_items, 3};
+/* "hash" */
+static const Nat kHash_items[] = {'h', 'a', 's', 'h'};
+const Text kHash = {kHash_items, 4};
+/* "body" */
+static const Nat kBody_items[] = {'b', 'o', 'd', 'y'};
+const Text kBody = {kBody_items, 4};
+/* "subject" */
+static const Nat kSubject_items[] = {'s', 'u', 'b', 'j', 'e', 'c', 't'};
+const Text kSubject = {kSubject_items, 7};
+/* "kind" */
+static const Nat kKind_items[] = {'k', 'i', 'n', 'd'};
+const Text kKind = {kKind_items, 4};
+/* "kindEvent" */
+static const Nat kKindEvent_items[] = {'k', 'i', 'n', 'd', 'E', 'v', 'e', 'n', 't'};
+const Text kKindEvent = {kKindEvent_items, 9};
+/* "createsEvent" */
+static const Nat kCreatesEvent_items[] = {'c', 'r', 'e', 'a', 't', 'e', 's', 'E', 'v', 'e', 'n', 't'};
+const Text kCreatesEvent = {kCreatesEvent_items, 12};
+/* "lastEvent" */
+static const Nat kLastEvent_items[] = {'l', 'a', 's', 't', 'E', 'v', 'e', 'n', 't'};
+const Text kLastEvent = {kLastEvent_items, 9};
+/* "Party" */
+static const Nat kParty_items[] = {'P', 'a', 'r', 't', 'y'};
+const Text kParty = {kParty_items, 5};
+/* "Commercial" */
+static const Nat kCommercial_items[] = {'C', 'o', 'm', 'm', 'e', 'r', 'c', 'i', 'a', 'l'};
+const Text kCommercial = {kCommercial_items, 10};
+
 /* "duplicate definition name" */
 static const Nat eDuplicate_items[] = {
   'd', 'u', 'p', 'l', 'i', 'c', 'a', 't', 'e', ' ', 'd', 'e', 'f', 'i', 'n', 'i', 't', 'i', 'o',

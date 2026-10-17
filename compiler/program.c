@@ -1040,20 +1040,17 @@ static const Values *projection_log(const Value *instance) {
 /* One record: the identity (the hash of the creating entry), the family and
    the state. */
 static const Value *projection_record(Text ref, Text family, const Value *state) {
-  return projection_attrs(attrs_field(text_of_cstring("ref"), text_value(ref),
+  return projection_attrs(attrs_field(kRef, text_value(ref),
                                       attrs_field(kType, text_value(family), attrs_field(kValue, state, NULL))));
 }
 
 /* M2 design item 13: the find by entry hash. The record of records whose ref
    is ref, or NULL when no record has it. */
 const Value *project_find(Text ref, const Located *records) {
-  return records == NULL ? NULL
-         : same_text(projection_field(text_of_cstring("ref"), records->value)->text, ref) == 1
-             ? records->value
-             : project_find(ref, records->tail);
+  return records == NULL                                                       ? NULL
+         : same_text(projection_field(kRef, records->value)->text, ref) == 1 ? records->value
+                                                                              : project_find(ref, records->tail);
 }
-
-static Nat projection_known(Text ref, const Located *records) { return project_find(ref, records) != NULL; }
 
 static const Attrs *projection_replace(Text key, const Value *value, const Attrs *attrs) {
   return attrs == NULL ? NULL
@@ -1066,58 +1063,190 @@ static const Attrs *projection_replace(Text key, const Value *value, const Attrs
    lastEvent = some (refTo h). The value of some x is the value of x. */
 static const Value *projection_updated(Text subject, const Value *event, const Value *record) {
   Text family = projection_field(kType, record)->text;
-  if (same_text(projection_field(text_of_cstring("ref"), record)->text, subject) != 1) return record;
-  if (same_text(family, text_of_cstring("Party")) != 1 && same_text(family, text_of_cstring("Commercial")) != 1)
-    return record;
+  if (same_text(projection_field(kRef, record)->text, subject) != 1) return record;
+  if (same_text(family, kParty) != 1 && same_text(family, kCommercial) != 1) return record;
   const Value *state = projection_field(kValue, record);
-  return projection_record(subject, family,
-                           projection_attrs(projection_replace(text_of_cstring("lastEvent"), event, state->attrs)));
+  return projection_record(subject, family, projection_attrs(projection_replace(kLastEvent, event, state->attrs)));
 }
 
-static const Located *projection_update(Text subject, const Value *event, const Located *records) {
-  return records == NULL ? NULL
-                         : located_cons(records->position, records->name,
-                                        projection_updated(subject, event, records->value),
-                                        projection_update(subject, event, records->tail));
+/* M5 items 2, 3 and 3b (delta A-7): -1, 0 or 1 when a is below, equal to or
+   above b: item by item, then by size. */
+int text_order(Text a, Text b) {
+  Nat common = a.size < b.size ? a.size : b.size;
+  for (Nat i = 0; i < common; i++)
+    if (a.items[i] != b.items[i]) return a.items[i] < b.items[i] ? -1 : 1;
+  return a.size == b.size ? 0 : a.size < b.size ? -1 : 1;
 }
 
-/* Items 10, 11 and 13. The hash of the entry takes one work step. An entry
-   with a known hash is a known record, and it changes nothing. Else a
-   createsEvent entry first updates the record of its subject, and then the
-   entry makes the record of its Body. records holds the newest record first.
-   hash gets the hash of the entry. */
-static int projection_entry(Fuel hash_fuel, Nat position, Text name, const Value *entry, const Located **records, Text *hash,
-                            Nat *budget, Failure *failure) {
-  if (!entry_hash(hash_fuel, *budget, position, entry, hash, budget, failure)) return 0;
-  if (projection_known(*hash, *records) == 1) return 1;
-  const Value *body = projection_field(text_of_cstring("body"), entry);
+/* The order of two keyed items: key, then second key, then place. */
+static int keyed_order(const Keyed *a, const Keyed *b) {
+  int key = text_order(a->key, b->key);
+  int second = key != 0 ? key : text_order(a->second, b->second);
+  return second != 0 ? second : a->place == b->place ? 0 : a->place < b->place ? -1 : 1;
+}
+
+Index index_new(Nat count) {
+  Index index = {count == 0 ? NULL : arena_alloc((size_t)count * sizeof(Keyed)), count};
+  return index;
+}
+
+/* A bottom-up merge sort (widths 1, 2, 4 and so on) with one spare array.
+   Each read is guarded by left < middle or right < high. */
+void index_sort(Index index) {
+  Nat count = index.count;
+  if (count < 2) return;
+  Keyed *from = index.items;
+  Keyed *to = arena_alloc((size_t)count * sizeof(Keyed));
+  for (Nat width = 1; width < count; width = width * 2) {
+    for (Nat low = 0; low < count; low = low + 2 * width) {
+      Nat middle = width < count - low ? low + width : count;
+      Nat high = width < count - middle ? middle + width : count;
+      Nat left = low;
+      Nat right = middle;
+      for (Nat out = low; out < high; out++)
+        to[out] = left < middle && (right >= high || keyed_order(&from[left], &from[right]) <= 0) ? from[left++]
+                                                                                                    : from[right++];
+    }
+    Keyed *swap = from;
+    from = to;
+    to = swap;
+  }
+  if (from != index.items)
+    for (Nat i = 0; i < count; i++) index.items[i] = from[i];
+}
+
+/* The first slot at or above (key, second, place), or count when none. */
+Nat index_lower(Index index, Text key, Text second, Nat place) {
+  Keyed probe = {key, second, place, NULL};
+  Nat low = 0;
+  Nat high = index.count;
+  while (low < high) {
+    Nat middle = low + (high - low) / 2;
+    if (keyed_order(&index.items[middle], &probe) < 0)
+      low = middle + 1;
+    else
+      high = middle;
+  }
+  return low;
+}
+
+/* The item of the first slot with key and second (the lowest place), or
+   NULL when none. */
+const Keyed *index_find(Index index, Text key, Text second) {
+  Nat slot = index_lower(index, key, second, 0);
+  return slot < index.count && same_text(index.items[slot].key, key) == 1 &&
+                 same_text(index.items[slot].second, second) == 1
+             ? &index.items[slot]
+             : NULL;
+}
+
+/* Item 3: the records (newest first) by ref. The place of a record is its
+   position: the oldest record has the place 0. */
+Index record_index(const Located *records) {
+  Text none = {NULL, 0};
+  Nat count = 0;
+  for (const Located *cell = records; cell != NULL; cell = cell->tail) count = count + 1;
+  Index index = index_new(count);
+  Nat slot = count;
+  for (const Located *cell = records; cell != NULL; cell = cell->tail) {
+    slot = slot - 1;
+    index.items[slot] = (Keyed){projection_field(kRef, cell->value)->text, none, slot, cell->value};
+  }
+  index_sort(index);
+  return index;
+}
+
+/* Item 3b: a slot of the fold, a record with its own position and name. A
+   known entry has an empty slot (value NULL). */
+typedef struct {
+  Nat position;
+  Text name;
+  const Value *value;
+} ProjectionSlot;
+
+/* Item 3b: the slot of the record whose ref is ref before entry k: an
+   incoming record, else the record of the first entry with the hash ref
+   when that entry is below k and made a record. m + k when no record has
+   ref (m incoming records). */
+static Nat projection_slot(Text ref, Nat k, Index hashes, Index incoming, const ProjectionSlot *slots) {
+  Text none = {NULL, 0};
+  Nat m = incoming.count;
+  const Keyed *old = index_find(incoming, ref, none);
+  const Keyed *made = index_find(hashes, ref, none);
+  return old != NULL                                                                ? old->place
+         : made != NULL && made->place < k && slots[m + made->place].value != NULL ? m + made->place
+                                                                                    : m + k;
+}
+
+/* Items 10, 11 and 13 (item 3b, pass 2): entry k of entries. An entry with
+   a known hash (an incoming record, or the hash of an entry below k) changes
+   nothing. Else a createsEvent entry first updates the record of its
+   subject, and then the entry makes the record of its Body in slot m + k. */
+static void projection_entry(Nat position, Text name, Nat k, const Keyed *entries, Index hashes, Index incoming,
+                             ProjectionSlot *slots) {
+  Text none = {NULL, 0};
+  Text hash = entries[k].key;
+  Nat m = incoming.count;
+  slots[m + k] = (ProjectionSlot){0};
+  const Keyed *first = index_find(hashes, hash, none);
+  if (index_find(incoming, hash, none) != NULL || (first != NULL && first->place < k)) return;
+  const Value *body = projection_field(kBody, entries[k].value);
   Text tag = projection_field(kSchemaTag(), body)->text;
   const Value *state = projection_payload(body);
-  const Value *subject = projection_payload(projection_field(text_of_cstring("subject"), state));
-  const Value *event = object_two(text_of_cstring("kind"), text_value(text_of_cstring("kindEvent")),
-                                  text_of_cstring("hash"), text_value(*hash));
-  const Located *seen = same_text(tag, text_of_cstring("createsEvent")) == 1
-                           ? projection_update(projection_field(text_of_cstring("hash"), subject)->text, event, *records)
-                           : *records;
-  *records = located_cons(position, name, projection_record(*hash, text_drop(tag, 7), state), seen);
-  return 1;
+  if (same_text(tag, kCreatesEvent) == 1) {
+    Text subject = projection_field(kHash, projection_payload(projection_field(kSubject, state)))->text;
+    Nat slot = projection_slot(subject, k, hashes, incoming, slots);
+    const Value *event = object_two(kKind, text_value(kKindEvent), kHash, text_value(hash));
+    if (slot < m + k) slots[slot].value = projection_updated(subject, event, slots[slot].value);
+  }
+  slots[m + k] = (ProjectionSlot){position, name, projection_record(hash, text_drop(tag, 7), state)};
 }
 
 /* M2 design item 13: the fold of projection_entry over the entries items, in
    log order, on records (the newest record first). Each entry takes one work
    step (its hash). With a stop hash, the fold ends after the first entry
-   whose hash is stop, and found gets 1. Else found gets 0. */
+   whose hash is stop, and found gets 1. Else found gets 0. Item 3b (delta
+   A-7): pass 1 hashes the entries in order (the same stop, budget and
+   failure); pass 2 makes the records in a slot array (the incoming records
+   oldest first, then one slot for each entry), and the list is built once,
+   newest first. On a failure, records gets the records of the entries
+   before it. */
 int project_entries(Fuel hash_fuel, Nat position, Text name, const Values *items, Text stop, const Located **records, Nat *found,
                     Nat *budget, Failure *failure) {
-  Text hash = {NULL, 0};
+  Text none = {NULL, 0};
+  Nat count = 0;
+  for (const Values *cell = items; cell != NULL; cell = cell->tail) count = count + 1;
+  Index entries = index_new(count);
+  Nat hashed = 0;
+  int ok = 1;
   *found = 0;
-  if (items == NULL) return 1;
-  if (!projection_entry(hash_fuel, position, name, items->head, records, &hash, budget, failure)) return 0;
-  if (same_text(hash, stop) == 1) {
-    *found = 1;
-    return 1;
+  for (const Values *cell = items; cell != NULL && ok == 1 && *found == 0; cell = cell->tail) {
+    Text hash = {NULL, 0};
+    ok = entry_hash(hash_fuel, *budget, position, cell->head, &hash, budget, failure) != 0;
+    if (ok == 1) {
+      entries.items[hashed] = (Keyed){hash, none, hashed, cell->head};
+      hashed = hashed + 1;
+      *found = same_text(hash, stop);
+    }
   }
-  return project_entries(hash_fuel, position, name, items->tail, stop, records, found, budget, failure);
+  if (hashed == 0) return ok;
+  Index hashes = index_new(hashed);
+  for (Nat k = 0; k < hashed; k++) hashes.items[k] = entries.items[k];
+  index_sort(hashes);
+  Index incoming = record_index(*records);
+  Nat m = incoming.count;
+  ProjectionSlot *slots = arena_alloc((size_t)(m + hashed) * sizeof *slots);
+  Nat slot = m;
+  for (const Located *cell = *records; cell != NULL; cell = cell->tail) {
+    slot = slot - 1;
+    slots[slot] = (ProjectionSlot){cell->position, cell->name, cell->value};
+  }
+  for (Nat k = 0; k < hashed; k++) projection_entry(position, name, k, entries.items, hashes, incoming, slots);
+  const Located *list = NULL;
+  for (Nat i = 0; i < m + hashed; i++)
+    if (slots[i].value != NULL) list = located_cons(slots[i].position, slots[i].name, slots[i].value, list);
+  *records = list;
+  return ok;
 }
 
 /* The records of the Log and Step instances, in log order. A failure reports

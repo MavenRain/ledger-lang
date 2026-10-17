@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { createCompiler } from '../bin/bridge.mjs';
 
 const compile = await createCompiler();
@@ -876,4 +878,37 @@ test('the paths example compiles to its literal steps', async () => {
     { name: 'refused', type: 'Step', value: denied },
     { name: 'raced', type: 'Step', value: { log: [], outcome: { tag: 'outcomeConflict', head: 'entry-9' } } },
   ]);
+});
+
+// M5 part A (items 0a, 0b and 3b): the bench log of N entries from build/bench-gen,
+// and the SHA-256 of a bridge output with the final newline of the CLI output
+// (`ledgerc <path>`, the form of the A1 digests; the `--stdin` output has none).
+const benchLog = count => {
+  const made = spawnSync(fileURLToPath(new URL('../build/bench-gen', import.meta.url)), [String(count)],
+    { maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(made.status, 0, String(made.stderr));
+  return made.stdout;
+};
+const digest = output => createHash('sha256').update(`${output}\n`).digest('hex');
+
+test('m5 source limit', () => {
+  const limit = 8_388_608;
+  const source = 'def n : Nat := 7';
+  const padded = source + ' '.repeat(limit - source.length);
+  assert.equal(encoder.encode(padded).length, limit);
+  assert.deepEqual(instances(padded).map(item => item.name), ['n']);
+  assert.throws(() => run(`${padded} `), { message: `source exceeds ${limit} bytes` });
+});
+
+// The output of the b8ccdc5 ledgerc on the bench log of 64 entries.
+test('m5 cons chain keeps the bytes', () => {
+  assert.equal(digest(compile(benchLog(64))), '4423dabd8b0a2379506f5eee9030059bcc6c520567c5453fddb039a30c5bde60');
+});
+
+// The output of the ledgerc after items 0a to 0d, before item 2, on the bench
+// log of 1000 entries.
+test('m5 long log keeps the answers', () => {
+  const output = compile(benchLog(1000));
+  assert.equal(JSON.parse(output)['ledger-lang'], 1);
+  assert.equal(digest(output), '3a0490a1d33a1c64272d3c0950284f33d1e552237fe551858726b1f45f42d502');
 });
