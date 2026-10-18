@@ -54,10 +54,10 @@ build/c-certificate-test: test/c-certificate.c $(filter-out compiler/main.c,$(C_
 
 # certificate-check (M5 design item 10, delta B-1): checks the core module in
 # the mechanism-lang kernel under /usr/bin/time -l, after the C certificate
-# regressions. It fails on an absent
-# kernel, on a refusal and on max RSS above 4 GB. MECH_BIN names the kernel.
+# regressions. It fails on an absent kernel, on a refusal, and on a max RSS
+# or a peak footprint above 4 GB (ruling Q-M5-28). MECH_BIN names the kernel.
 # Then it checks the certificates of CERT_PROGRAMS (ruling Q-M5-30 (a)) in the
-# same way, and also fails on a peak footprint above 4 GB (ruling Q-M5-28).
+# same way.
 CERT_PROGRAMS := examples/crm.ledger test/certificate-small.ledger
 MECH_BIN ?= /Users/oobi/Documents/mechanism-lang/_tcc/bin/mech
 certificate-test: build/c-certificate-test
@@ -72,9 +72,11 @@ certificate-check: build/ledgerc certificate-test
 	./build/ledgerc --certificate-core > build/cert/core.mech
 	@/usr/bin/time -l "$(MECH_BIN)" check build/cert/core.mech > build/cert/core.out 2> build/cert/core.time; rc=$$?; \
 	  rss=$$(awk '/maximum resident set size/ {print $$1}' build/cert/core.time); \
-	  echo "cert core rc $$rc max RSS $$rss"; \
+	  foot=$$(awk '/peak memory footprint/ {print $$1}' build/cert/core.time); \
+	  echo "cert core rc $$rc max RSS $$rss footprint $$foot"; \
 	  test $$rc -eq 0 || { head -1 build/cert/core.time; exit 1; }; \
-	  test "$$rss" -le 4294967296 || { echo "cert core max RSS above 4 GB"; exit 1; }
+	  test "$$rss" -le 4294967296 || { echo "cert core max RSS above 4 GB"; exit 1; }; \
+	  test "$$foot" -le 4294967296 || { echo "cert core footprint above 4 GB"; exit 1; }
 	@for file in $(CERT_PROGRAMS); do \
 	  name=$$(basename $$file .ledger); \
 	  ./build/ledgerc --certificate $$file > build/cert/$$name.mech || { echo "cert $$name refused"; exit 1; }; \

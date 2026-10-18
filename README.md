@@ -38,6 +38,30 @@ source with `-Wall -Werror`. `make test` builds `build/ledgerc` and
 editing `compiler/*.c` or `core/*.def`. Build artifacts are ignored by Git.
 No package installation is needed.
 
+`bin/ledgerc --certificate PROGRAM.ledger` compiles the program and writes
+its certificate to stdout. The certificate is one mechanism-lang module. Its
+last def claims that the render of the instances is the JSON document and
+its newline. A compile error gives the same line as
+`bin/ledgerc PROGRAM.ledger`. A form that the certificate does not cover
+gives exit status 1 and the stderr line
+`PROGRAM.ledger: the certificate does not cover SUBJECT yet`. Examples of
+SUBJECT:
+
+- a checker name that the module does not bind, for example `Prod`, `Eq`
+  or `fold`;
+- `the write path` and `the read path`;
+- `the records`, for a `Log` or `Step` instance that holds entries;
+- `a text longer than 64 bytes`, for a longer string literal;
+- the name of a family that has no encoder.
+
+`bin/ledgerc --certificate-core` writes the rows of `core/schema.def` and
+`core/ops.def` as one module. `make certificate-check` first runs the C
+certificate tests. Then it checks the core module and the certificates of
+`examples/crm.ledger` and `test/certificate-small.ledger` in the
+mechanism-lang kernel. Set `MECH_BIN` to the kernel executable. The target
+fails if the kernel is absent, if `ledgerc` or the kernel refuses a module,
+or if the max RSS or the peak footprint is above 4 GB.
+
 The C port is in progress. With TinyCC installed, `make c-build` compiles
 the available modules to `build/c/*.o`, and `make c-check` checks each source.
 Run `make c-test` for the C module regression tests.
