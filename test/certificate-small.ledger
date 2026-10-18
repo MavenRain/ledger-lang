@@ -1,0 +1,4 @@
+-- M5 part C (ruling Q-M5-30 (a)): the small certificate fixture. Its
+-- certificate checks in the kernel (make certificate-check).
+def smallKind : Kind := kindParty
+def smallRef : Ref smallKind := refTo (hashOf "s")
