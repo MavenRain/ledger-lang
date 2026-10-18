@@ -87,6 +87,15 @@ int main(int argc, char **argv) {
   assert(compile_program(source, &output, &failure));
   assert(!certificate_module(source, output, &module, &refusal));
   assert(same_text(refusal, text("the certificate does not cover Prod yet")));
+  /* Only the name check refuses a checker name outside the instance types. */
+  source = text("def T : Type 0 := Prod Nat Nat\ndef n : Nat := 5\n");
+  assert(compile_program(source, &output, &failure));
+  assert(!certificate_module(source, output, &module, &refusal));
+  assert(same_text(refusal, text("the certificate does not cover Prod yet")));
+  source = text("def refuse : WritePath :=\n  fun (log : Log) (write : Write) => makeStep log (outcomeDenied none nil)\n");
+  assert(compile_program(source, &output, &failure));
+  assert(!certificate_module(source, output, &module, &refusal));
+  assert(same_text(refusal, text("the certificate does not cover the write path yet")));
   source = text("def s : Text := \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abc\"\n");
   assert(compile_program(source, &output, &failure));
   assert(!certificate_module(source, output, &module, &refusal));
