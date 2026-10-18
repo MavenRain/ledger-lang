@@ -1,0 +1,10 @@
+-- M5 part D (the part D test plan, on the model of ruling Q-M5-30 (a)): the
+-- 1-entry write fixture. Its certificate checks in the kernel (make
+-- certificate-check).
+def acme : Ref kindParty := refTo (hashOf "party-acme")
+def deal : Ref kindCommercial := refTo (hashOf "deal-1")
+def advance : Write := makeWrite (actorHuman acme) none (commandTransition deal "negotiation")
+def history : Log := nil
+def note : Event := makeEvent eventNoteAdded (subjectParty acme) none none attrsEnd none
+def noted : Write := makeWrite (actorHuman acme) none (commandRecord note)
+def s : Step := write history noted

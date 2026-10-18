@@ -35,11 +35,12 @@ typedef struct {
   int ok;
   Text output;
   Failure failure;
+  Hashed hashed;
 } Job;
 
 static void *run_job(void *argument) {
   Job *job = argument;
-  job->ok = compile_program(job->source, &job->output, &job->failure);
+  job->ok = compile_collect(job->source, &job->output, &job->hashed, &job->failure);
   return NULL;
 }
 
@@ -130,6 +131,7 @@ static int compile_path(const char *path, Job *job) {
     return 1;
   }
   *job = (Job){text_of_bytes(bytes, (size_t)size), 0, {NULL, 0}, {0, {NULL, 0}}};
+  job->hashed = (Hashed){builder_new(), builder_new(), builder_new()};
   if (!compile_on_big_stack(job)) {
     fprintf(stderr, "%s: cannot start the compiler thread\n", path);
     return 70;
@@ -158,7 +160,7 @@ static int certify_file(const char *path) {
   Text refusal = {NULL, 0};
   int code = compile_path(path, &job);
   if (code != 0) return code;
-  if (certificate_module(job.source, job.output, &module, &refusal)) return write_output(module, "");
+  if (certificate_module(job.source, job.output, &job.hashed, &module, &refusal)) return write_output(module, "");
   fprintf(stderr, "%s: ", path);
   print_bytes(stderr, refusal);
   fputc('\n', stderr);

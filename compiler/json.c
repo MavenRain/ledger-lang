@@ -115,6 +115,26 @@ int print_value(Printer *printer, const Value *value, Failure *failure) {
   return 0;
 }
 
+/* Q-M5-35 (a): the collector of the compile run (compile_collect). It keeps
+   each distinct text that entry_hash hashes, once, in first-hash order. */
+static Hashed *collector = NULL;
+
+void entry_hash_collect(Hashed *into) {
+  collector = into;
+}
+
+static void collect_text(Text text) {
+  if (collector == NULL) return;
+  Text bytes = builder_text(&collector->bytes), ends = builder_text(&collector->ends);
+  Nat from = 0;
+  for (Nat at = 0; at < ends.size; at++) {
+    if (same_text((Text){bytes.items + from, ends.items[at] - from}, text) == 1) return;
+    from = ends.items[at];
+  }
+  builder_append(&collector->bytes, text);
+  builder_push(&collector->ends, bytes.size + text.size);
+}
+
 /* M1 part A (design items 2 to 4): the hash of an Entry is the SHA-256 of
    the compact JSON text that print_value writes for it, as 64 lowercase hex
    digits. One work step for each entry: at budget 0 it gives eBudget at
@@ -128,7 +148,9 @@ int entry_hash(Fuel fuel, Nat budget, Nat position, const Value *entry, Text *ha
   *left = budget - 1;
   Printer printer = {fuel, builder_new()};
   if (!print_value(&printer, entry, failure)) return 0;
-  if (!sha256_hex(builder_text(&printer.output), hash)) return fail_at(failure, position, eUtf8);
+  Text printed = builder_text(&printer.output);
+  if (!sha256_hex(printed, hash)) return fail_at(failure, position, eUtf8);
+  collect_text(printed);
   return 1;
 }
 

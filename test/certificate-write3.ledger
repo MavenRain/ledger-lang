@@ -1,0 +1,12 @@
+-- M5 part D (the part D test plan, on the model of ruling Q-M5-30 (a)): the
+-- 3-entry write fixture. Its certificate checks in the kernel (make
+-- certificate-check).
+def acme : Ref kindParty := refTo (hashOf "party-acme")
+def org : Party := makeParty partyOrg "Acme" none nil attrsEnd none none
+def e1 : Entry := makeEntry none (actorHuman acme) (createsParty org)
+def p : Ref kindParty := refTo (hashOf "67c41c5e875d43c1aa25db2818c267421dd6fddced90fa9aa267c116de2b5cd6")
+def note : Event := makeEvent eventNoteAdded (subjectParty p) none none attrsEnd none
+def e2 : Entry := makeEntry (some (hashOf "67c41c5e875d43c1aa25db2818c267421dd6fddced90fa9aa267c116de2b5cd6")) (actorHuman acme) (createsEvent note)
+def log2 : Log := cons e1 (cons e2 nil)
+def next : Write := makeWrite (actorHuman acme) (some (hashOf "f641629be89139d8229891b6e29d02e01ebbdfc85d6fab311fd5ace36cc19d9e")) (commandRecord note)
+def s : Step := write log2 next

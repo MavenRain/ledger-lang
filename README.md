@@ -49,18 +49,25 @@ SUBJECT:
 
 - a checker name that the module does not bind, for example `Prod`, `Eq`
   or `fold`;
-- `the write path` and `the read path`;
-- `the records`, for a `Log` or `Step` instance that holds entries;
+- `the read path`;
+- `this step`, for a `Step` instance whose write the certificate does not
+  cover;
+- `more than 24 hash blocks`, for a hashed entry text longer than 24
+  SHA-256 blocks;
 - `a text longer than 64 bytes`, for a longer string literal;
 - the name of a family that has no encoder.
 
 `bin/ledgerc --certificate-core` writes the rows of `core/schema.def` and
 `core/ops.def` as one module. `make certificate-check` first runs the C
 certificate tests. Then it checks the core module and the certificates of
-`examples/crm.ledger` and `test/certificate-small.ledger` in the
-mechanism-lang kernel. Set `MECH_BIN` to the kernel executable. The target
-fails if the kernel is absent, if `ledgerc` or the kernel refuses a module,
-or if the max RSS or the peak footprint is above 4 GB.
+`examples/crm.ledger`, `test/certificate-small.ledger`,
+`test/certificate-write1.ledger` and `test/certificate-write3.ledger` in the
+mechanism-lang kernel. Set `MECH_BIN` to the kernel executable. A watchdog
+reads the RSS and the footprint of the kernel each 0.1 s and kills the
+check above `CERT_LIMIT` bytes (default 4294967296, 4 GB). The target fails
+if the kernel is absent, if `ledgerc` or the kernel refuses a module, if the
+watchdog kills a check, or if the max RSS or the peak footprint is above
+4 GB.
 
 The C port is in progress. With TinyCC installed, `make c-build` compiles
 the available modules to `build/c/*.o`, and `make c-check` checks each source.

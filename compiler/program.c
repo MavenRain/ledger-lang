@@ -1277,7 +1277,7 @@ static int print_records(Printer *printer, const Located *records, Failure *fail
   return print_instances(printer, 1, records, jEnd, failure);
 }
 
-int compile_program(Text source, Text *output, Failure *failure) {
+static int compile_run(Text source, Text *output, Hashed *hashed, Failure *failure) {
   Nat position;
   Tokens tokens;
   const Located *instances;
@@ -1289,6 +1289,9 @@ int compile_program(Text source, Text *output, Failure *failure) {
   if (!parse_program(fuel_for(source), work_budget_from(65, source), depth_fuel_from(0, 0, source), NULL, NULL,
                      tokens, &instances, &checked, &left, failure))
     return 0;
+  /* Q-M5-35 (a): the written mark of each instance, for the certificate. */
+  if (hashed != NULL)
+    for (const Located *cell = instances; cell != NULL; cell = cell->tail) builder_push(&hashed->written, projection_field(kValue, cell->value)->written);
   if (!project_records(left, instances, &records, failure)) return 0;
   Printer printer = {output_fuel_from(0, source), builder_new()};
   if (!emit_text(&printer, jHeader, failure)) return 0;
@@ -1297,6 +1300,17 @@ int compile_program(Text source, Text *output, Failure *failure) {
   if (records != NULL && !print_records(&printer, records, failure)) return 0;
   *output = builder_text(&printer.output);
   return 1;
+}
+
+int compile_collect(Text source, Text *output, Hashed *hashed, Failure *failure) {
+  entry_hash_collect(hashed);
+  int ok = compile_run(source, output, hashed, failure);
+  entry_hash_collect(NULL);
+  return ok;
+}
+
+int compile_program(Text source, Text *output, Failure *failure) {
+  return compile_collect(source, output, NULL, failure);
 }
 
 int check_definitions(Text source, const Bindings **environment, Failure *failure) {

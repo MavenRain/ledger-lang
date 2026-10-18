@@ -37,6 +37,20 @@ static void check_module(const char *kernel, Text module, unsigned row, int expe
   }
 }
 
+/* The module must define qh0 as the textByte chain of the hex digest. */
+static int holds_digest(Text module, const char *hex) {
+  char line[2048];
+  int size = snprintf(line, sizeof line, "\ndef qh0 : Text := ");
+  for (const char *digit = hex; *digit != '\0'; digit++) size += snprintf(line + size, sizeof line - size, "(textByte %d ", *digit);
+  size += snprintf(line + size, sizeof line - size, "textEnd");
+  for (const char *digit = hex; *digit != '\0'; digit++) line[size++] = ')';
+  line[size++] = '\n';
+  Text want = text_of_bytes((const unsigned char *)line, (size_t)size);
+  for (Nat start = 0; start + want.size <= module.size; start++)
+    if (same_text((Text){module.items + start, want.size}, want)) return 1;
+  return 0;
+}
+
 int main(int argc, char **argv) {
   assert(argc == 2);
   static const char *const programs[] = {
@@ -70,35 +84,86 @@ int main(int argc, char **argv) {
     Text source = text(programs[row]), output, module, refusal;
     Failure failure;
     assert(compile_program(source, &output, &failure));
-    assert(certificate_module(source, output, &module, &refusal));
+    assert(certificate_module(source, output, NULL, &module, &refusal));
     check_module(argv[1], module, row, 0);
   }
 
-  /* The kernel must reject a claim whose output disagrees with the source. */
   Text source = text("def n : Nat := 7\n"), output, other, module, refusal;
   Failure failure;
+  /* A direct write keeps its head across lexer whitespace and comments. */
+  static const char *const layouts[] = {
+    "def s : Step :=\twrite history request\n",
+    "def s : Step := -- body comment\n write history request\n",
+    "-- def ledgerUser_s : Step := makeStep nil (outcomeDenied none nil)\n"
+    "def s : Step := write history request\n",
+    "def\t-- definition comment\n s : Step -- := ignored\n := write history request\n"
+  };
+  for (unsigned layout = 0; layout < sizeof layouts / sizeof layouts[0]; layout++) {
+    TextBuilder program = builder_new();
+    builder_append(&program, text("def acme : Ref kindParty := refTo (hashOf \"party-acme\")\n"
+                                 "def history : Log := nil\n"
+                                 "def request : Write := makeWrite (actorHuman acme) none (commandDeleteParty acme)\n"));
+    builder_append(&program, text(layouts[layout]));
+    Hashed collected = {builder_new(), builder_new(), builder_new()};
+    Text formatted = builder_text(&program);
+    assert(compile_collect(formatted, &output, &collected, &failure));
+    assert(certificate_module(formatted, output, &collected, &module, &refusal));
+    check_module(argv[1], module, count++, 0);
+  }
+  /* The kernel must reject a claim whose output disagrees with the source. */
   assert(compile_program(source, &output, &failure));
   assert(compile_program(text("def n : Nat := 8\n"), &other, &failure));
-  assert(certificate_module(source, other, &module, &refusal));
+  assert(certificate_module(source, other, NULL, &module, &refusal));
   check_module(argv[1], module, count++, 1);
 
   /* A refusal remains a refusal, including unsupported names after CR. */
   source = text("-- comment\rdef p : Prod Nat Nat := pair 1 2\n");
   assert(compile_program(source, &output, &failure));
-  assert(!certificate_module(source, output, &module, &refusal));
+  assert(!certificate_module(source, output, NULL, &module, &refusal));
   assert(same_text(refusal, text("the certificate does not cover Prod yet")));
   /* Only the name check refuses a checker name outside the instance types. */
   source = text("def T : Type 0 := Prod Nat Nat\ndef n : Nat := 5\n");
   assert(compile_program(source, &output, &failure));
-  assert(!certificate_module(source, output, &module, &refusal));
+  assert(!certificate_module(source, output, NULL, &module, &refusal));
   assert(same_text(refusal, text("the certificate does not cover Prod yet")));
   source = text("def refuse : WritePath :=\n  fun (log : Log) (write : Write) => makeStep log (outcomeDenied none nil)\n");
   assert(compile_program(source, &output, &failure));
-  assert(!certificate_module(source, output, &module, &refusal));
-  assert(same_text(refusal, text("the certificate does not cover the write path yet")));
+  assert(certificate_module(source, output, NULL, &module, &refusal));
+  check_module(argv[1], module, count++, 0);
+  /* The sum rule: two texts of 760 bytes take 13 blocks each. */
+  Hashed many = {builder_new(), builder_new(), builder_new()};
+  for (Nat index = 0; index < 1520; index++) builder_push(&many.bytes, 97);
+  builder_push(&many.ends, 760);
+  builder_push(&many.ends, 1520);
+  source = text("def n : Nat := 8\n");
+  assert(compile_program(source, &output, &failure));
+  assert(!certificate_module(source, output, &many, &module, &refusal));
+  assert(same_text(refusal, text("the certificate does not cover more than 24 hash blocks yet")));
+  /* The "abc" and "" vectors: the kernel checks each block step, and qh0 is the published digest. */
+  static const char *const vectors[][2] = {
+    {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+    {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+  };
+  for (unsigned vector = 0; vector < 2; vector++) {
+    Hashed one = {builder_new(), builder_new(), builder_new()};
+    for (const char *byte = vectors[vector][0]; *byte != '\0'; byte++) builder_push(&one.bytes, (unsigned char)*byte);
+    builder_push(&one.ends, one.bytes.size);
+    assert(certificate_module(source, output, &one, &module, &refusal));
+    assert(holds_digest(module, vectors[vector][1]));
+    check_module(argv[1], module, count++, 0);
+  }
+  /* A Step that write gives under another head: its written mark is 1. */
+  Hashed marks = {builder_new(), builder_new(), builder_new()};
+  source = text("def acme : Ref kindParty := refTo (hashOf \"party-acme\")\ndef history : Log := nil\n"
+                "def note : Event := makeEvent eventNoteAdded (subjectParty acme) none none attrsEnd none\n"
+                "def noted : Write := makeWrite (actorHuman acme) none (commandRecord note)\n"
+                "def w : WritePath := write\ndef s : Step := w history noted\n");
+  assert(compile_collect(source, &output, &marks, &failure));
+  assert(!certificate_module(source, output, &marks, &module, &refusal));
+  assert(same_text(refusal, text("the certificate does not cover this step yet")));
   source = text("def s : Text := \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abc\"\n");
   assert(compile_program(source, &output, &failure));
-  assert(!certificate_module(source, output, &module, &refusal));
+  assert(!certificate_module(source, output, NULL, &module, &refusal));
   assert(same_text(refusal, text("the certificate does not cover a text longer than 64 bytes yet")));
   printf("C certificate tests passed (%u kernel checks)\n", count);
   return 0;

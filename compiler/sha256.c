@@ -35,8 +35,10 @@ static Nat padded_byte(Text text, uint64_t total, uint64_t position) {
   return (Nat)((bits >> (8 * (total - 1 - position))) & 255);
 }
 
-/* FIPS 180-4 section 6.2.2: one 64-byte block into the state. */
-static void compress_block(Text text, uint64_t total, uint64_t block, uint32_t state[8]) {
+/* FIPS 180-4 section 6.2.2: one 64-byte block into the state. A trace that
+   is not NULL gets the schedule, the state before each group of 8 rounds and
+   the state after the block. */
+static void compress_block(Text text, uint64_t total, uint64_t block, uint32_t state[8], Sha256Block *trace) {
   uint32_t schedule[64];
   for (Nat index = 0; index < 16; index++) {
     uint64_t start = block * 64 + 4 * index;
@@ -53,6 +55,10 @@ static void compress_block(Text text, uint64_t total, uint64_t block, uint32_t s
   uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
   uint32_t e = state[4], f = state[5], g = state[6], h = state[7];
   for (Nat index = 0; index < 64; index++) {
+    if (trace != NULL && index % 8 == 0) {
+      uint32_t now[8] = {a, b, c, d, e, f, g, h};
+      for (Nat word = 0; word < 8; word++) trace->before[index / 8][word] = now[word];
+    }
     uint32_t big1 = rotate_right(e, 6) ^ rotate_right(e, 11) ^ rotate_right(e, 25);
     uint32_t choose = (e & f) ^ (~e & g);
     uint32_t first = h + big1 + choose + round_constants[index] + schedule[index];
@@ -76,19 +82,43 @@ static void compress_block(Text text, uint64_t total, uint64_t block, uint32_t s
   state[5] += f;
   state[6] += g;
   state[7] += h;
+  if (trace == NULL) return;
+  for (Nat index = 0; index < 64; index++) trace->schedule[index] = schedule[index];
+  for (Nat index = 0; index < 8; index++) trace->after[index] = state[index];
 }
+
+static int bytes_only(Text text) {
+  for (Nat index = 0; index < text.size; index++) {
+    if (text.items[index] > 255) return 0;
+  }
+  return 1;
+}
+
+/* The count of 64-byte blocks of the padded message. */
+static uint64_t block_count(Text text) { return ((uint64_t)text.size + 8) / 64 + 1; }
 
 /* Returns 0 when an item of the text is 256 or more. Else it writes the 32
    digest bytes and returns 1. */
 int sha256(Text text, Nat digest[32]) {
-  for (Nat index = 0; index < text.size; index++) {
-    if (text.items[index] > 255) return 0;
-  }
+  if (!bytes_only(text)) return 0;
   uint32_t state[8];
   for (Nat index = 0; index < 8; index++) state[index] = initial_hash[index];
-  uint64_t blocks = ((uint64_t)text.size + 8) / 64 + 1;
-  for (uint64_t block = 0; block < blocks; block++) compress_block(text, blocks * 64, block, state);
+  uint64_t blocks = block_count(text);
+  for (uint64_t block = 0; block < blocks; block++) compress_block(text, blocks * 64, block, state, NULL);
   for (Nat index = 0; index < 32; index++) digest[index] = (state[index / 4] >> (24 - 8 * (index % 4))) & 255;
+  return 1;
+}
+
+/* Returns 0 as sha256 does, and when the padded message has more than
+   capacity blocks. Else it writes the trace of each block and the block
+   count, and returns 1. */
+int sha256_trace(Text text, Sha256Block *blocks, Nat capacity, Nat *count) {
+  if (!bytes_only(text) || block_count(text) > capacity) return 0;
+  uint32_t state[8];
+  for (Nat index = 0; index < 8; index++) state[index] = initial_hash[index];
+  uint64_t total = block_count(text);
+  for (uint64_t block = 0; block < total; block++) compress_block(text, total * 64, block, state, &blocks[block]);
+  *count = (Nat)total;
   return 1;
 }
 

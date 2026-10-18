@@ -13,6 +13,7 @@
    DEFINE_REC          def rec NAME REST
    DEFINE_AND          and NAME REST
    A blank line comes before each mu and def line except the first. */
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -69,6 +70,12 @@ typedef struct {
 
 #define TABLE(array) ((Table){(array), (Nat)(sizeof(array) / sizeof((array)[0]))})
 #define SCHEMA_COUNT ((Nat)(sizeof schema_rows / sizeof schema_rows[0]))
+/* A row number below ALL_COUNT names a schema.def row, then an ops.def row. */
+#define ALL_COUNT (SCHEMA_COUNT + (Nat)(sizeof ops_rows / sizeof ops_rows[0]))
+
+static const Row *row_at(Nat row) {
+  return row < SCHEMA_COUNT ? &schema_rows[row] : &ops_rows[row - SCHEMA_COUNT];
+}
 
 /* CHUNK is the byte count of a literal, a renderLitN def and a claim chunk.
    TERM bounds an encoder term and a type text. */
@@ -229,7 +236,6 @@ static int name_byte(Nat byte) {
 static int covered_name(Text source, Nat at, Nat size, Text *refusal) {
   for (size_t index = 0; index < sizeof unbound_names / sizeof unbound_names[0]; index++)
     if (same_word(source, at, size, unbound_names[index])) return refuse(refusal, unbound_names[index]);
-  if (same_word(source, at, size, "WritePath")) return refuse(refusal, "the write path");
   if (same_word(source, at, size, "ReadPath")) return refuse(refusal, "the read path");
   return 1;
 }
@@ -339,6 +345,19 @@ static int read_instances(Text json, TextBuilder *spans, Text *refusal) {
     depth = depth + (byte == 123 || byte == 91) - (byte == 125 || byte == 93);
     at++;
   }
+  /* M5 delta D-1 (b): the records tail ,"records":[...] (program.c:1272). */
+  if (depth == 1 && expect_word(json, &at, ",\"records\":[")) {
+    for (depth = 2; at < json.size && depth > 1; at++) {
+      Nat byte = json.items[at];
+      if (quoted) {
+        quoted = byte != 34;
+        at += byte == 92;
+        continue;
+      }
+      quoted = byte == 34;
+      depth = depth + (byte == 123 || byte == 91) - (byte == 125 || byte == 93);
+    }
+  }
   if (depth != 1 || at + 1 != json.size || json.items[at] != 125) return refuse(refusal, "the records");
   return 1;
 }
@@ -351,17 +370,19 @@ static int same_name(const char *name, const char *word, size_t size) {
   return strlen(name) == size && strncmp(name, word, size) == 0;
 }
 
-/* The schema.def row of the family or carrier named word[0, size), or SCHEMA_COUNT. */
+/* The schema.def or ops.def row of the family or carrier named word[0, size),
+   or ALL_COUNT. */
 static Nat family_row(const char *word, size_t size) {
   Nat row = 0;
-  while (row < SCHEMA_COUNT && !(is_head_row(&schema_rows[row]) && same_name(schema_rows[row].name, word, size))) row++;
+  while (row < ALL_COUNT && !(is_head_row(row_at(row)) && same_name(row_at(row)->name, word, size))) row++;
   return row;
 }
 
-/* The row after the constructor and field rows of the family at row. */
+/* The row after the constructor and field rows of the family at row, in the
+   same .def file. */
 static Nat family_end(Nat row) {
-  Nat end = row + 1;
-  while (end < SCHEMA_COUNT && !is_head_row(&schema_rows[end])) end++;
+  Nat end = row + 1, limit = row < SCHEMA_COUNT ? SCHEMA_COUNT : ALL_COUNT;
+  while (end < limit && !is_head_row(row_at(end))) end++;
   return end;
 }
 
@@ -399,12 +420,14 @@ static int encoder(const unsigned char *made, const char *type, size_t from, siz
   while (rest < end && type[rest] == ' ') rest++;
   snprintf(missing, TERM, "%.*s", (int)(head - from), type + from);
   if (rest == end) {
+    /* ops.def:5: Log is a DEFINE of List Entry, not a FAMILY. */
+    if (same_name("Log", type + from, head - from)) return encoder(made, "List Entry", 0, 10, to, missing);
     for (size_t index = 0; index < sizeof base_encoders / sizeof base_encoders[0]; index++)
       if (same_name(base_encoders[index][0], type + from, head - from))
         return snprintf(to, TERM, "%s", base_encoders[index][1]) < TERM;
     Nat row = family_row(type + from, head - from);
-    if (row == SCHEMA_COUNT || schema_rows[row].kind != ROW_FAMILY || !made[row]) return 0;
-    return snprintf(to, TERM, "encode%s", schema_rows[row].name) < TERM;
+    if (row == ALL_COUNT || row_at(row)->kind != ROW_FAMILY || !made[row]) return 0;
+    return snprintf(to, TERM, "encode%s", row_at(row)->name) < TERM;
   }
   size_t a = rest, b = end;
   bare(type, &a, &b);
@@ -451,8 +474,7 @@ static void append_kinds(TextBuilder *builder) {
 static int fields_covered(const unsigned char *made, Nat row) {
   char term[TERM], missing[TERM];
   for (Nat at = row + 1; at < family_end(row); at++)
-    if (schema_rows[at].kind == ROW_FIELD &&
-        !encoder(made, schema_rows[at].arg, 0, strlen(schema_rows[at].arg), term, missing))
+    if (row_at(at)->kind == ROW_FIELD && !encoder(made, row_at(at)->arg, 0, strlen(row_at(at)->arg), term, missing))
       return 0;
   return 1;
 }
@@ -460,16 +482,16 @@ static int fields_covered(const unsigned char *made, Nat row) {
 /* The arm of the constructor at row: only constants gives the name string,
    one constructor the object, else "tag" first and then the fields. */
 static void append_arm(TextBuilder *builder, const unsigned char *made, Nat row, int constants, int tagged) {
-  const Row *ctor = &schema_rows[row];
+  const Row *ctor = row_at(row);
   Nat end = row + 1;
-  while (end < SCHEMA_COUNT && schema_rows[end].kind == ROW_FIELD) end++;
+  while (end < ALL_COUNT && row_at(end)->kind == ROW_FIELD) end++;
   append_string(builder, "  | ");
   append_string(builder, ctor->name);
   for (Nat at = row + 1; at < end; at++) {
     append_string(builder, " (x");
     append_nat(builder, at - row - 1);
     append_string(builder, " : ");
-    append_string(builder, schema_rows[at].arg);
+    append_string(builder, row_at(at)->arg);
     append_string(builder, ")");
   }
   append_string(builder, " => ");
@@ -487,9 +509,9 @@ static void append_arm(TextBuilder *builder, const unsigned char *made, Nat row,
     closers += strlen(key);
   }
   for (Nat at = row + 1; at < end; at++) {
-    snprintf(key, TERM, "%s\"%s\":", at == row + 1 && !tagged ? "{" : ",", schema_rows[at].name);
+    snprintf(key, TERM, "%s\"%s\":", at == row + 1 && !tagged ? "{" : ",", row_at(at)->name);
     open_bytes(builder, key);
-    encoder(made, schema_rows[at].arg, 0, strlen(schema_rows[at].arg), term, missing);
+    encoder(made, row_at(at)->arg, 0, strlen(row_at(at)->arg), term, missing);
     append_string(builder, "(");
     append_string(builder, term);
     append_string(builder, " x");
@@ -502,35 +524,48 @@ static void append_arm(TextBuilder *builder, const unsigned char *made, Nat row,
   append_string(builder, "\n");
 }
 
+/* The encoder of the family at row; made marks it. */
+static void append_family(TextBuilder *builder, unsigned char *made, Nat row) {
+  const char *name = row_at(row)->name;
+  Nat end = family_end(row), ctors = 0;
+  int constants = 1;
+  for (Nat at = row + 1; at < end; at++) {
+    ctors += row_at(at)->kind == ROW_CONSTRUCTOR;
+    constants = constants && row_at(at)->kind != ROW_FIELD;
+  }
+  append_string(builder, "\ndef encode");
+  append_string(builder, name);
+  append_string(builder, " : ");
+  append_string(builder, name);
+  append_string(builder, " -> Text -> Text := fun (x : ");
+  append_string(builder, name);
+  append_string(builder, ") (tail : Text) =>\n  case x as self in ");
+  append_string(builder, name);
+  append_string(builder, " return Text with\n");
+  for (Nat at = row + 1; at < end; at++)
+    if (row_at(at)->kind == ROW_CONSTRUCTOR) append_arm(builder, made, at, constants, !constants && ctors > 1);
+  made[row] = 1;
+}
+
 /* One encoder for each schema.def FAMILY row whose field types all have one,
-   in row order; made marks them. */
+   in row order, then the same for the ops.def families of delta D-1 (b) in
+   the order of ops_families (each one cites only earlier ones); made marks
+   them. */
 static void append_families(TextBuilder *builder, unsigned char *made) {
-  for (Nat row = 0; row < SCHEMA_COUNT; row++) {
-    if (schema_rows[row].kind != ROW_FAMILY || !fields_covered(made, row)) continue;
-    const char *name = schema_rows[row].name;
-    Nat end = family_end(row), ctors = 0;
-    int constants = 1;
-    for (Nat at = row + 1; at < end; at++) {
-      ctors += schema_rows[at].kind == ROW_CONSTRUCTOR;
-      constants = constants && schema_rows[at].kind != ROW_FIELD;
-    }
-    append_string(builder, "\ndef encode");
-    append_string(builder, name);
-    append_string(builder, " : ");
-    append_string(builder, name);
-    append_string(builder, " -> Text -> Text := fun (x : ");
-    append_string(builder, name);
-    append_string(builder, ") (tail : Text) =>\n  case x as self in ");
-    append_string(builder, name);
-    append_string(builder, " return Text with\n");
-    for (Nat at = row + 1; at < end; at++)
-      if (schema_rows[at].kind == ROW_CONSTRUCTOR) append_arm(builder, made, at, constants, !constants && ctors > 1);
-    made[row] = 1;
+  static const char *const ops_families[] = {"Missing", "Outcome", "Command", "Write", "Step"};
+  for (Nat row = 0; row < SCHEMA_COUNT; row++)
+    if (schema_rows[row].kind == ROW_FAMILY && fields_covered(made, row)) append_family(builder, made, row);
+  for (size_t index = 0; index < sizeof ops_families / sizeof ops_families[0]; index++) {
+    Nat row = family_row(ops_families[index], strlen(ops_families[index]));
+    if (row < ALL_COUNT && row_at(row)->kind == ROW_FAMILY && fields_covered(made, row)) append_family(builder, made, row);
   }
 }
 
 /* The encoder of the instance type json[at, at + size) in to, or 0 with a
-   refusal that names the family with no encoder. */
+   refusal that names the family with no encoder. Each schema.def family and
+   the ops.def families Missing, Outcome, Command, Write and Step have one, so
+   of the FAMILY rows the refusal can name only Moment, Verdict, PipelineKey,
+   Bucket, StageStat, Renewal, Account360 and Query. */
 static int instance_encoder(const unsigned char *made, Text json, Nat at, Nat size, char *to, Text *refusal) {
   char type[TERM], missing[TERM];
   if (size >= TERM) return refuse(refusal, "a type text this long");
@@ -563,17 +598,18 @@ static Nat append_lits(TextBuilder *module, TextBuilder *render, Text piece, Nat
 
 /* The bytes as defs certificateBytes0, 1, ... of CHUNK bytes each, the last
    chunk first (no forward names). */
-static void append_chunks(TextBuilder *builder, Text bytes) {
+static void append_chunks(TextBuilder *builder, const char *name, Text bytes) {
   Nat count = bytes.size == 0 ? 1 : (bytes.size + CHUNK - 1) / CHUNK;
   for (Nat chunk = count; chunk > 0; chunk--) {
     Nat at = (chunk - 1) * CHUNK;
     Nat take = bytes.size - at < CHUNK ? bytes.size - at : CHUNK;
-    append_string(builder, "\ndef certificateBytes");
+    append_string(builder, "\ndef ");
+    append_string(builder, name);
     append_nat(builder, chunk - 1);
     append_string(builder, " : Text :=\n  ");
     open_items(builder, bytes.items + at, take);
     if (chunk < count) {
-      append_string(builder, "certificateBytes");
+      append_string(builder, name);
       append_nat(builder, chunk);
     } else {
       append_string(builder, "textEnd");
@@ -583,19 +619,340 @@ static void append_chunks(TextBuilder *builder, Text bytes) {
   }
 }
 
-int certificate_module(Text source, Text output, Text *module, Text *refusal) {
+/* M5 delta D-1 (b): the rows of the write path and the records. A Line is
+   a short name or claim side (O/m5/part-d/s10/probe.c). */
+typedef struct {
+  char items[2048];
+  size_t size;
+} Line;
+
+static void put_line(Line *line, const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  int wrote = vsnprintf(line->items + line->size, sizeof line->items - line->size, format, args);
+  va_end(args);
+  size_t room = sizeof line->items - 1 - line->size;
+  line->size += wrote < 0 ? 0 : ((size_t)wrote < room ? (size_t)wrote : room);
+}
+
+/* "(cons qwKxBxLOW ... nil)" up to qwKxBx(HIGH - 1). */
+static void put_names(Line *line, Nat text, Nat block, Nat low, Nat high) {
+  for (Nat index = low; index < high; index++) put_line(line, "(cons qw%ux%ux%u ", text, block, index);
+  put_line(line, "nil");
+  for (Nat index = low; index < high; index++) put_line(line, ")");
+}
+
+/* A word as 32 bits, the most significant bit first. */
+static void append_bits(TextBuilder *builder, Nat word) {
+  for (Nat bit = 0; bit < 32; bit++) append_string(builder, (word >> (31 - bit)) & 1 ? "(cons 1 " : "(cons 0 ");
+  append_string(builder, "nil");
+  close_chain(builder, 32);
+}
+
+static void append_state(TextBuilder *builder, const Nat *words) {
+  for (Nat word = 0; word < 8; word++) {
+    append_string(builder, "(cons ");
+    append_bits(builder, words[word]);
+    append_string(builder, " ");
+  }
+  append_string(builder, "nil");
+  close_chain(builder, 8);
+}
+
+static void append_head(TextBuilder *builder, const char *name, const char *type) {
+  const char *parts[] = {"\ndef ", name, " : ", type, " := "};
+  for (Nat index = 0; index < sizeof parts / sizeof parts[0]; index++) append_string(builder, parts[index]);
+}
+
+static void append_claim(TextBuilder *builder, const char *name, const char *type, const Line *left, const Line *right) {
+  const char *parts[] = {"\ndef ", name, " : MechEq (", type, ") ", left->items, " ", right->items,
+                         " := mechRefl (", type, ") ", left->items, "\n"};
+  for (Nat index = 0; index < sizeof parts / sizeof parts[0]; index++) append_string(builder, parts[index]);
+}
+
+/* The rows of the hashed text K: qmsgK (chunks), the sha256_trace literals,
+   per block 48 shaNext, 8 shaRounds and 1 shaAddState claims, then the parse
+   claim qcpK and the hex claim qchK to qhK. */
+static int append_hashed(TextBuilder *builder, Text message, Nat text, Text *refusal) {
+  Sha256Block blocks[24];
+  Nat count = 0;
+  char name[64];
+  if (!sha256_trace(message, blocks, 24, &count)) return refuse(refusal, "more than 24 hash blocks");
+  snprintf(name, sizeof name, "qmsg%ux", text);
+  append_chunks(builder, name, message);
+  snprintf(name, sizeof name, "qs%ux0x0", text);
+  append_head(builder, name, "List (List Nat)");
+  append_string(builder, "shaH\n");
+  for (Nat block = 0; block < count; block++) {
+    const Sha256Block *trace = &blocks[block];
+    for (Nat index = 0; index < 64; index++) {
+      snprintf(name, sizeof name, "qw%ux%ux%u", text, block, index);
+      append_head(builder, name, "List Nat");
+      append_bits(builder, trace->schedule[index]);
+      append_string(builder, "\n");
+    }
+    for (Nat index = 16; index < 64; index++) {
+      Line left = {0}, right = {0};
+      put_line(&left, "(shaNext ");
+      put_names(&left, text, block, index - 16, index);
+      put_line(&left, ")");
+      put_line(&right, "qw%ux%ux%u", text, block, index);
+      snprintf(name, sizeof name, "qcw%ux%ux%u", text, block, index);
+      append_claim(builder, name, "List Nat", &left, &right);
+    }
+    /* The trace has no state after round 64: it is after - before[0]. */
+    for (Nat group = 1; group <= 8; group++) {
+      Nat words[8];
+      for (Nat word = 0; word < 8; word++)
+        words[word] = group < 8 ? trace->before[group][word] : (Nat)(trace->after[word] - trace->before[0][word]);
+      snprintf(name, sizeof name, "qs%ux%ux%u", text, block, 8 * group);
+      append_head(builder, name, "List (List Nat)");
+      append_state(builder, words);
+      append_string(builder, "\n");
+    }
+    for (Nat group = 0; group < 8; group++) {
+      Line left = {0}, right = {0};
+      put_line(&left, "(shaRounds shaKg%u ", group);
+      put_names(&left, text, block, 8 * group, 8 * group + 8);
+      put_line(&left, " qs%ux%ux%u)", text, block, 8 * group);
+      put_line(&right, "qs%ux%ux%u", text, block, 8 * group + 8);
+      snprintf(name, sizeof name, "qcr%ux%ux%u", text, block, 8 * group);
+      append_claim(builder, name, "List (List Nat)", &left, &right);
+    }
+    snprintf(name, sizeof name, "qs%ux%ux0", text, block + 1);
+    append_head(builder, name, "List (List Nat)");
+    append_state(builder, trace->after);
+    append_string(builder, "\n");
+    Line left = {0}, right = {0};
+    put_line(&left, "(shaAddState qs%ux%ux0 qs%ux%ux64)", text, block, text, block);
+    put_line(&right, "qs%ux%ux0", text, block + 1);
+    snprintf(name, sizeof name, "qca%ux%u", text, block);
+    append_claim(builder, name, "List (List Nat)", &left, &right);
+  }
+  snprintf(name, sizeof name, "qblocks%u", text);
+  append_head(builder, name, "List (List (List Nat))");
+  for (Nat block = 0; block < count; block++) {
+    Line list = {0};
+    put_names(&list, text, block, 0, 16);
+    append_string(builder, "(cons ");
+    append_string(builder, list.items);
+    append_string(builder, " ");
+  }
+  append_string(builder, "nil");
+  close_chain(builder, count);
+  append_string(builder, "\n");
+  Line parse = {0}, blocks_name = {0};
+  put_line(&parse, "(shaBlocks (shaWords (shaBytes qmsg%ux0 (cons 128 (shaPadZeros shaIdx (shaPadCount (shaLenMod qmsg%ux0 0)) nil)))"
+                   " (cons shaC32 (cons (shaBits shaPow32 (natMul 8 (shaLen qmsg%ux0 0))) nil))))", text, text, text);
+  put_line(&blocks_name, "qblocks%u", text);
+  snprintf(name, sizeof name, "qcp%u", text);
+  append_claim(builder, name, "List (List (List Nat))", &parse, &blocks_name);
+  char hex[65];
+  for (Nat index = 0; index < 64; index++) {
+    Nat digit = (blocks[count - 1].after[index / 8] >> (28 - 4 * (index % 8))) & 15;
+    hex[index] = (char)(digit < 10 ? 48 + digit : 87 + digit);
+  }
+  hex[64] = 0;
+  snprintf(name, sizeof name, "qh%u", text);
+  append_head(builder, name, "Text");
+  append_literal(builder, hex);
+  append_string(builder, "\n");
+  Line left = {0}, right = {0};
+  put_line(&left, "(shaHexWords qs%ux%ux0 textEnd)", text, count);
+  put_line(&right, "qh%u", text);
+  snprintf(name, sizeof name, "qch%u", text);
+  append_claim(builder, name, "Text", &left, &right);
+  return 1;
+}
+
+/* The Body payloads (schema.def:272 to :280): createsX carries an X. */
+static const char *const bodies[] = {"Party", "Membership", "Commercial", "Commitment",
+                                     "Artifact", "Event", "Assignment", "Policy"};
+
+/* The lastEvent setter (schema.def:123 and :153: field 6 of 7 of makeParty,
+   field 10 of 10 of makeCommercial). */
+static const char last_event[] =
+    "\ndef ledgerLastEvent : Text -> Body -> Body := fun (h : Text) (b : Body) => case b as s1 in Body return Body with"
+    " | createsParty (m : Party) => createsParty (case m as s2 in Party return Party with | makeParty (x0 : KindParty)"
+    " (x1 : Text) (x2 : Option Text) (x3 : List Identifier) (x4 : Attrs) (x5 : Option (Ref kindEvent))"
+    " (x6 : Option (Ref kindEvent)) => makeParty x0 x1 x2 x3 x4 (some (refTo (hashOf h))) x6)"
+    " | createsMembership (m : Membership) => createsMembership m"
+    " | createsCommercial (m : Commercial) => createsCommercial (case m as s2 in Commercial return Commercial with"
+    " | makeCommercial (x0 : KindCommercial) (x1 : Text) (x2 : Ref kindParty) (x3 : Text) (x4 : Option Nat) (x5 : Text)"
+    " (x6 : Option Text) (x7 : CommercialStatus) (x8 : Attrs) (x9 : Option (Ref kindEvent))"
+    " => makeCommercial x0 x1 x2 x3 x4 x5 x6 x7 x8 (some (refTo (hashOf h))))"
+    " | createsCommitment (m : Commitment) => createsCommitment m | createsArtifact (m : Artifact) => createsArtifact m"
+    " | createsEvent (m : Event) => createsEvent m | createsAssignment (m : Assignment) => createsAssignment m"
+    " | createsPolicy (m : Policy) => createsPolicy m\n";
+
+/* The rows that ledgerUser_write cites, before the lowered source: the rows
+   of each hashed text, ledgerHashOf (a hit gives qhK, the miss arm is not
+   taken), ledgerHs, ledgerUser_write, ledgerLastEvent and the record
+   encoder ledgerPut ({"ref":"H","type":"X","value":V}, program.c:1202). */
+static int append_write_rows(TextBuilder *builder, const Hashed *hashed, Text *refusal) {
+  Text bytes = {0}, ends = {0};
+  if (hashed != NULL) {
+    bytes = builder_text(&hashed->bytes);
+    ends = builder_text(&hashed->ends);
+  }
+  /* The sum rule: the text K takes (len + 8) / 64 + 1 blocks (FIPS 180-4 padding). */
+  Nat blocks = 0;
+  for (Nat text = 0, start = 0; text < ends.size; start = ends.items[text], text++)
+    blocks += (ends.items[text] - start + 8) / 64 + 1;
+  if (blocks > 24) return refuse(refusal, "more than 24 hash blocks");
+  for (Nat text = 0, start = 0; text < ends.size; start = ends.items[text], text++) {
+    Text message = {0};
+    message.items = bytes.items + start;
+    message.size = ends.items[text] - start;
+    if (!append_hashed(builder, message, text, refusal)) return 0;
+  }
+  append_string(builder, "\ndef ledgerHashOf : Text -> Text := fun (m : Text) => ");
+  for (Nat text = 0; text < ends.size; text++) {
+    append_string(builder, "(case (textSame m qmsg");
+    append_nat(builder, text);
+    append_string(builder, "x0) as s");
+    append_nat(builder, text + 1);
+    append_string(builder, " in Flag return Text with | flagNo => ");
+  }
+  append_string(builder, "sha256Hex m textEnd");
+  for (Nat text = ends.size; text > 0; text--) {
+    append_string(builder, " | flagYes => qh");
+    append_nat(builder, text - 1);
+    append_string(builder, ")");
+  }
+  append_string(builder, "\n\ndef ledgerHs : Entry -> Text := fun (e : Entry) => ledgerHashOf (encodeEntry e textEnd)\n");
+  append_string(builder, "\ndef ledgerUser_write : Log -> Write -> Step := writeWith ledgerHs\n");
+  append_string(builder, last_event);
+  append_string(builder, "\ndef ledgerPut : Text -> Body -> Text -> Text := fun (h : Text) (b : Body) (tail : Text) => ");
+  open_bytes(builder, "{\"ref\":\"");
+  append_string(builder, "(textThen h ");
+  open_bytes(builder, "\",\"type\":\"");
+  append_string(builder, "(case b as s1 in Body return Text with");
+  for (Nat body = 0; body < sizeof bodies / sizeof bodies[0]; body++) {
+    char value[64];
+    snprintf(value, sizeof value, "%s\",\"value\":", bodies[body]);
+    const char *parts[] = {" | creates", bodies[body], " (m : ", bodies[body], ") => "};
+    for (Nat index = 0; index < sizeof parts / sizeof parts[0]; index++) append_string(builder, parts[index]);
+    open_bytes(builder, value);
+    append_string(builder, "(encode");
+    append_string(builder, bodies[body]);
+    append_string(builder, " m (textByte 125 tail))");
+    close_chain(builder, strlen(value));
+  }
+  append_string(builder, "))");
+  close_chain(builder, strlen("{\"ref\":\"") + strlen("\",\"type\":\""));
+  append_string(builder, "\n");
+  return 1;
+}
+
+static int text_has(Text text, Nat at, const char *word) {
+  Nat size = strlen(word);
+  if (at + size > text.size) return 0;
+  for (Nat index = 0; index < size; index++)
+    if (text.items[at + index] != (unsigned char)word[index]) return 0;
+  return 1;
+}
+
+/* The lexer whitespace and line comments between lowered source tokens. */
+static Nat skip_trivia(Text source, Nat at) {
+  while (at < source.size) {
+    Nat byte = source.items[at];
+    if (byte == 32 || byte == 9 || byte == 10 || byte == 13) {
+      at++;
+    } else if (text_has(source, at, "--")) {
+      while (at < source.size && source.items[at] != 10 && source.items[at] != 13) at++;
+    } else {
+      break;
+    }
+  }
+  return at;
+}
+
+/* 1 when the lowered def of the instance NAME has the head ledgerUser_write.
+   lower_source replaces string literals, so only comments can hide tokens. */
+static int writes_head(Text lowered, Text name) {
+  Nat prefix = strlen(user_prefix);
+  for (Nat at = 0; at < lowered.size; at++) {
+    at = skip_trivia(lowered, at);
+    if (!text_has(lowered, at, "def") ||
+        (at > 0 && name_byte(lowered.items[at - 1])) ||
+        (at + 3 < lowered.size && name_byte(lowered.items[at + 3]))) continue;
+    Nat start = skip_trivia(lowered, at + 3);
+    if (!text_has(lowered, start, user_prefix) || start + prefix + name.size > lowered.size) continue;
+    Nat end = start + prefix, index = 0;
+    while (index < name.size && lowered.items[end + index] == name.items[index]) index++;
+    if (index < name.size || (end + index < lowered.size && name_byte(lowered.items[end + index]))) continue;
+    Nat body = end + index;
+    while (body < lowered.size) {
+      body = skip_trivia(lowered, body);
+      if (text_has(lowered, body, ":=")) break;
+      if (body < lowered.size) body++;
+    }
+    if (body == lowered.size) return 0;
+    body = skip_trivia(lowered, body + 2);
+    return text_has(lowered, body, "ledgerUser_write") && (body + 16 >= lowered.size || !name_byte(lowered.items[body + 16]));
+  }
+  return 0;
+}
+
+/* 0 with a refusal when the instance at found[at] is a Step whose written
+   mark (Hashed written) and the writes_head rule differ: the JSON and
+   ledgerLogs would not agree on its log. With no marks, the mark is 0. */
+static int step_covered(Text output, Text found, Nat at, Text lowered, Text marks, Text *refusal) {
+  Text name = {0};
+  name.items = output.items + found.items[at];
+  name.size = found.items[at + 1];
+  if (found.items[at + 3] != 4 || !text_has(output, found.items[at + 2], "Step")) return 1;
+  Nat mark = at / 4 < marks.size ? marks.items[at / 4] : 0;
+  return (mark == 1) == writes_head(lowered, name) || refuse(refusal, "this step");
+}
+
+/* def ledgerLogs, the feeding logs in definition order (program.c:1030 to
+   :1038): an instance of type text List (Entry) gives itself; a Step
+   instance with the head ledgerUser_write gives its stepLog. Gives their
+   count. */
+static Nat append_logs(TextBuilder *builder, Text output, Text found, Text lowered) {
+  Nat logs = 0;
+  TextBuilder list = builder_new();
+  for (Nat at = 0; at + 4 <= found.size; at += 4) {
+    Text name = {0};
+    name.items = output.items + found.items[at];
+    name.size = found.items[at + 1];
+    Nat type = found.items[at + 2], size = found.items[at + 3];
+    int log = size == 12 && text_has(output, type, "List (Entry)");
+    int step = size == 4 && text_has(output, type, "Step") && writes_head(lowered, name);
+    if (!log && !step) continue;
+    append_string(&list, step ? "(cons (stepLog " : "(cons ");
+    append_string(&list, user_prefix);
+    append_items(&list, name.items, name.size);
+    append_string(&list, step ? ") " : " ");
+    logs++;
+  }
+  append_string(builder, "\ndef ledgerLogs : List Log := ");
+  builder_append(builder, builder_text(&list));
+  append_string(builder, "nil");
+  close_chain(builder, logs);
+  append_string(builder, "\n");
+  return logs;
+}
+
+int certificate_module(Text source, Text output, const Hashed *hashed, Text *module, Text *refusal) {
   TextBuilder lowered = builder_new();
   TextBuilder spans = builder_new();
   TextBuilder encoders = builder_new();
-  unsigned char made[SCHEMA_COUNT];
+  unsigned char made[ALL_COUNT];
   char term[TERM];
   memset(made, 0, sizeof made);
   if (!lower_source(source, &lowered, refusal) || !read_instances(output, &spans, refusal)) return 0;
   append_kinds(&encoders);
   append_families(&encoders, made);
   Text found = builder_text(&spans);
+  Text marks = {0};
+  if (hashed != NULL) marks = builder_text(&hashed->written);
   for (Nat at = 0; at + 4 <= found.size; at += 4)
-    if (!instance_encoder(made, output, found.items[at + 2], found.items[at + 3], term, refusal)) return 0;
+    if (!instance_encoder(made, output, found.items[at + 2], found.items[at + 3], term, refusal) ||
+        !step_covered(output, found, at, builder_text(&lowered), marks, refusal))
+      return 0;
 
   TextBuilder builder = builder_new();
   TextBuilder render = builder_new();
@@ -606,8 +963,10 @@ int certificate_module(Text source, Text output, Text *module, Text *refusal) {
   append_rows(&builder, fixed, eq, fixed.count, 1);
   builder_append(&builder, builder_text(&encoders));
   append_string(&builder, "\n");
+  if (!append_write_rows(&builder, hashed, refusal)) return 0;
   builder_append(&builder, builder_text(&lowered));
   append_string(&builder, "\n");
+  Nat logs = append_logs(&builder, output, found, builder_text(&lowered));
   for (Nat at = 0; at + 4 <= found.size; at += 4) {
     TextBuilder piece = builder_new();
     append_string(&piece, at == 0 ? json_head : "},");
@@ -627,9 +986,18 @@ int certificate_module(Text source, Text output, Text *module, Text *refusal) {
     opens++;
   }
   TextBuilder end = builder_new();
-  append_string(&end, found.size > 0 ? "}]}\n" : json_head);
+  append_string(&end, found.size > 0 ? "}]" : json_head);
   if (found.size == 0) append_string(&end, "]}\n");
+  if (found.size > 0 && logs == 0) append_string(&end, "}\n");
   opens += append_lits(&builder, &render, builder_text(&end), &lits);
+  /* M5 delta D-1 (b): the records (program.c:1295), then the TAIL }LF. */
+  if (logs > 0) {
+    TextBuilder tail = builder_new();
+    append_string(&render, "(recordsThen ledgerPut (recordsWith ledgerHs ledgerLastEvent ledgerLogs) ");
+    opens++;
+    append_string(&tail, "}\n");
+    opens += append_lits(&builder, &render, builder_text(&tail), &lits);
+  }
   append_string(&builder, "\ndef certificateRender : Text := ");
   builder_append(&builder, builder_text(&render));
   append_string(&builder, "textEnd");
@@ -638,7 +1006,7 @@ int certificate_module(Text source, Text output, Text *module, Text *refusal) {
   TextBuilder bytes = builder_new();
   builder_append(&bytes, output);
   builder_push(&bytes, 10);
-  append_chunks(&builder, builder_text(&bytes));
+  append_chunks(&builder, "certificateBytes", builder_text(&bytes));
   append_string(&builder, "\ndef certificate : MechEq Text certificateRender certificateBytes0 := "
                           "mechRefl Text certificateRender\n");
   *module = builder_text(&builder);

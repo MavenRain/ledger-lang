@@ -254,7 +254,17 @@ Text certificate_core(void);
 /* certificate.c: the certificate module of a program (M5 delta C-1). source
    is the program and output its JSON document. Gives 1 with the module in
    *module, or 0 with a refusal text in *refusal. */
-int certificate_module(Text source, Text output, Text *module, Text *refusal);
+/* M5 delta D-1 (b), Q-M5-35 (a): the distinct texts that entry_hash hashes in
+   one compile run, in first-hash order. bytes holds the texts one after the
+   other, and ends holds the end offset of each text in bytes. written holds
+   the written mark of each instance, in definition order (program.c:1030 to
+   :1038). */
+typedef struct {
+  TextBuilder bytes;
+  TextBuilder ends;
+  TextBuilder written;
+} Hashed;
+int certificate_module(Text source, Text output, const Hashed *hashed, Text *module, Text *refusal);
 
 /* json.c: every emitted output item takes one unit of fuel. */
 typedef struct {
@@ -274,11 +284,22 @@ int read_printed_value(Text text, const Value **value);
 /* M1 part A (design items 2 to 4): the hash of an Entry, 64 lowercase hex
    digits. One work step; budget 0 gives eBudget at position. */
 int entry_hash(Fuel fuel, Nat budget, Nat position, const Value *entry, Text *hash, Nat *left, Failure *failure);
+/* Sets the collector that entry_hash adds its texts to (NULL for none). */
+void entry_hash_collect(Hashed *into);
 
 /* sha256.c (M1 part A, design item 1): FIPS 180-4 SHA-256 on a text of
    bytes. Each returns 0 when an item of the text is 256 or more. */
 int sha256(Text text, Nat digest[32]);
 int sha256_hex(Text text, Text *hex);
+/* M5 delta D-1 (b): the values of one block for the certificate claims. The
+   schedule starts with the 16 parsed words. before[G] is the state before
+   rounds 8G to 8G + 7. after is the state after the block. */
+typedef struct {
+  Nat schedule[64];
+  Nat before[8][8];
+  Nat after[8];
+} Sha256Block;
+int sha256_trace(Text text, Sha256Block *blocks, Nat capacity, Nat *count);
 
 /* schema.c: the families of core/schema.def. Only the added families
    (Account on) have plans and schema types. schema_constructor_plan and
@@ -775,6 +796,8 @@ int unfold_seeds(Fuel fuel, Nat budget, Nat position, Stepper op, Nat keyed, Nat
 /* program.c: compile_program returns 1 and writes the JSON document, or
    returns 0 and writes the failure. error_text is the JSON of a failure. */
 int compile_program(Text source, Text *output, Failure *failure);
+/* compile_program with the entry_hash texts in hashed (NULL for none). */
+int compile_collect(Text source, Text *output, Hashed *hashed, Failure *failure);
 /* check_definitions checks a program as compile_program does and gives
    the bindings of its definitions, the latest first (the C test). */
 int check_definitions(Text source, const Bindings **environment, Failure *failure);

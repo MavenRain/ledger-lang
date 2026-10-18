@@ -7,7 +7,8 @@
 #include "../compiler/main.c"
 #undef main
 
-int compile_program(Text source, Text *output, Failure *failure) {
+int compile_collect(Text source, Text *output, Hashed *hashed, Failure *failure) {
+  (void)hashed;
   (void)source;
   (void)output;
   (void)failure;
