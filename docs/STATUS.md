@@ -469,6 +469,35 @@ program with a Log of N entries with distinct texts, one `write`, and one
 - Out of M5: the 16000 entry case under 1 s (a later part) and the forms
   of the refusal "the certificate does not cover SUBJECT yet" (README.md).
 
+## M6
+
+M6 answers the remaining queries of the read path. Part A answers the two
+Artifact queries from the records of the projection (`read_artifact` in
+compiler/checker.c, beside the M4 readers). Each entry takes one work step
+and the walks take no step (the D10 budget model).
+
+- `queryEvidence fact`: the entry whose hash is `fact`. An Event entry gives
+  its `artifact` as a list of one ref, or `nil` when the field is `none`. An
+  Artifact entry gives the ref of kind `kindArtifact` to `fact`. Each other
+  entry, and no entry at that hash, gives `nil`.
+- `queryArtifactIntact artifact digest`: `flagYes` when the Artifact record
+  named by the ref has a `sha256` equal to `digest`, else `flagNo`. No record
+  gives `flagNo`.
+- The certificate. The core module answers the two queries with the arms
+  `evidenceRead` and `intactRead` of `readWithH` (core/certificate.def). The
+  program test/certificate-read-m6a.ledger (3 entries, 7 reads, 14 hash
+  blocks) is in CERT_PROGRAMS of `make certificate-check`: max RSS 968998912 B,
+  footprint 634340384 B (the kernel fc80b5d). The d3 case 109 holds the
+  same program; its certificate case runs through CERT_EXTRA of the gate
+  script.
+- The refusal "the read path does not answer this query" now names nine
+  constructors: twenty of the 29 `Query` constructors have an answer.
+- Tests: `test_m6_evidence` and `test_m6_intact` in test/c-modules.c; the
+  rows "m6 queryEvidence lists the artifact of an event", "m6
+  queryArtifactIntact compares the sha256" and "m6 certificate of the
+  Artifact queries checks" in test/paths.test.mjs. The row "m5 certificate
+  refuses an out query" now reads `queryTimeline`, a part B constructor.
+
 ## Remaining M0 work
 
 1. Add dependent function types and support computed function

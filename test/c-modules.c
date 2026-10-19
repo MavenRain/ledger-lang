@@ -4157,7 +4157,6 @@ static void test_m2_read_path(void) {
   assert(binders->tail != NULL && same_text(binders->tail->head.name, text("log")));
   assert(binders->tail->tail != NULL && same_text(binders->tail->tail->head.name, text("query")));
   assert(binders->tail->tail->tail == NULL);
-  read_refused("queryArtifactIntact");
 }
 
 /* M2 part B: a tagged value with one field (no field when key is NULL), in
@@ -4785,15 +4784,15 @@ static void test_m3_membership_queries(void) {
 static void test_m2_read_callback_check(void) {
   const char *prefix =
       "def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-      "def ask : Query Flag := queryArtifactIntact (refTo (hashOf \"art-1\")) \"d\" "
-      "def F : Type 0 := (n : Nat) -> Flag "
+      "def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow "
+      "def F : Type 0 := (n : Nat) -> List (Ref kindEvent) "
       "def ignore : (f : F) -> Nat := fun (f : F) => 3 ";
   char source[2048];
   const Bindings *environment = NULL;
   Failure failure = {0};
   snprintf(source, sizeof source,
            "%sdef wrap : (n : Nat) -> Nat := fun (n : Nat) => "
-           "ignore (fun (k : Nat) => read Flag nil ask) def out : Nat := wrap 0", prefix);
+           "ignore (fun (k : Nat) => read (List (Ref kindEvent)) nil ask) def out : Nat := wrap 0", prefix);
   assert(check_definitions(text(source), &environment, &failure));
   const Binding *out;
   assert(lookup(text("out"), environment, &out));
@@ -4801,32 +4800,32 @@ static void test_m2_read_callback_check(void) {
 
   /* Checking a callback must not suppress refusal when it is invoked. */
   snprintf(source, sizeof source,
-           "%sdef call : (f : F) -> Flag := fun (f : F) => f 0 "
-           "def wrap : (n : Nat) -> Flag := fun (n : Nat) => "
-           "call (fun (k : Nat) => read Flag nil ask) def out : Flag := wrap 0", prefix);
+           "%sdef call : (f : F) -> List (Ref kindEvent) := fun (f : F) => f 0 "
+           "def wrap : (n : Nat) -> List (Ref kindEvent) := fun (n : Nat) => "
+           "call (fun (k : Nat) => read (List (Ref kindEvent)) nil ask) def out : List (Ref kindEvent) := wrap 0", prefix);
   environment = NULL;
   failure = (Failure){0};
   assert(!check_definitions(text(source), &environment, &failure));
   assert(same_text(failure.message, eRead));
-  assert(failure.position == (Nat)(strstr(source, "read Flag") - source));
+  assert(failure.position == (Nat)(strstr(source, "read (List") - source));
 }
 
 static void test_m2_read_check_parity(void) {
   const Bindings *environment = NULL;
   Failure failure = {0};
   assert(check_definitions(text("def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-                                "def ask : Query Flag := queryArtifactIntact (refTo (hashOf \"art-1\")) \"d\""),
+                                "def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow"),
                            &environment, &failure));
   const LType *flag;
   Tokens rest;
   Nat left;
-  assert(parse_type(1000, 1000, 0, environment, lexed("Flag"), &flag, &rest, &left, &failure));
+  assert(parse_type(1000, 1000, 0, environment, lexed("List (Ref kindEvent)"), &flag, &rest, &left, &failure));
   Binding markers[] = {check_marker(), body_marker(0)};
   for (Nat i = 0; i < 2; i++) {
     Bindings scope = {.head = markers[i], .tail = environment};
     const Value *value;
     const Term *node = NULL;
-    assert(parse_term(1000, 1, 0, flag, &scope, lexed("read Flag nil ask"), &value, &rest, &left, &node, &failure));
+    assert(parse_term(1000, 1, 0, flag, &scope, lexed("read (List (Ref kindEvent)) nil ask"), &value, &rest, &left, &node, &failure));
     assert(left == 1 && same_text(printed(value), text("null")));
     assert(eval_term(1000, 1, flag, &scope, node, &value, &left, &failure));
     assert(left == 1 && same_text(printed(value), text("null")));
@@ -4834,7 +4833,7 @@ static void test_m2_read_check_parity(void) {
     assert(!eval_term(1000, 1, flag, environment, node, &value, &left, &failure));
     assert(left == 0 && same_text(failure.message, eRead));
     failure = (Failure){0};
-    assert(!parse_term(1000, 1, 0, flag, &scope, lexed("read Flag nil 3"), &value, &rest, &left, NULL, &failure));
+    assert(!parse_term(1000, 1, 0, flag, &scope, lexed("read (List (Ref kindEvent)) nil 3"), &value, &rest, &left, NULL, &failure));
     assert(same_text(failure.message, eTerm));
   }
 }
@@ -5484,6 +5483,141 @@ static void test_m4_review_queue(void) {
   assert(left == 0 && same_text(starved.message, eBudget));
 }
 
+/* M6 part A: the text of the field key of an attrs value, or the empty
+   text when the key is absent or its value is not a text. */
+static Text attr_text(const Value *value, const char *key) {
+  Text none = {NULL, 0};
+  if (value->kind != VALUE_ATTRS) return none;
+  for (const Attrs *field = value->attrs; field != NULL; field = field->rest)
+    if (same_text(field->key, text(key)) == 1) return field->value->kind == VALUE_TEXT ? field->value->text : none;
+  return none;
+}
+
+typedef struct { Value name; Attrs digest; Attrs artifact; Attrs tag; Value value; } IntactQuery;
+
+/* M6 part A: the queryArtifactIntact query with its two fields. */
+static const Value *intact_query(IntactQuery *s, const Value *artifact, const Value *digest) {
+  s->name = (Value){.kind = VALUE_TEXT, .text = text("queryArtifactIntact")};
+  s->digest = (Attrs){text("digest"), digest, NULL};
+  s->artifact = (Attrs){text("artifact"), artifact, &s->digest};
+  s->tag = (Attrs){text("tag"), &s->name, &s->artifact};
+  s->value = (Value){.kind = VALUE_ATTRS, .attrs = &s->tag};
+  return &s->value;
+}
+
+/* M6 part A (test plan): the log of the Artifact rows: entry 0 an Event
+   with artifact some art-1, entry 1 an Event with artifact none, entry 2
+   an Artifact with sha256 s1 and uri u1. hashes holds the entry hashes. */
+typedef struct {
+  Value art_kind, art_hash, art_none, sha, uri;
+  Attrs art_fields[2];
+  Value art_ref;
+  AccountEntry entries[3];
+  Values cells[3];
+  Value log;
+  Text hashes[3];
+  Value hash_texts[3];
+} ArtifactLog;
+
+static const Value *artifact_log(ArtifactLog *s, Nat *left, Failure *failure) {
+  s->art_kind = account_text("kindArtifact");
+  s->art_hash = account_text("art-1");
+  s->art_none = (Value){.kind = VALUE_NULL};
+  s->sha = account_text("s1");
+  s->uri = account_text("u1");
+  s->art_fields[1] = (Attrs){text("hash"), &s->art_hash, NULL};
+  s->art_fields[0] = (Attrs){text("kind"), &s->art_kind, &s->art_fields[1]};
+  s->art_ref = (Value){.kind = VALUE_ATTRS, .attrs = &s->art_fields[0]};
+  const Value *entries[3] = {
+      account_entry(&s->entries[0], "createsEvent", "event", 1, (const char *const[]){"artifact"},
+                    (const Value *const[]){&s->art_ref}),
+      account_entry(&s->entries[1], "createsEvent", "event", 1, (const char *const[]){"artifact"},
+                    (const Value *const[]){&s->art_none}),
+      account_entry(&s->entries[2], "createsArtifact", "artifact", 2, (const char *const[]){"sha256", "uri"},
+                    (const Value *const[]){&s->sha, &s->uri})};
+  for (Nat at = 0; at < 3; at++) {
+    assert(entry_hash(1000, 1, 0, entries[at], &s->hashes[at], left, failure));
+    s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+    s->cells[at] = (Values){entries[at], NULL};
+  }
+  s->cells[0].tail = &s->cells[1];
+  s->cells[1].tail = &s->cells[2];
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->cells[0]};
+  return &s->log;
+}
+
+/* The answer is a list of one Ref kindArtifact whose hash is hash. */
+static Nat one_artifact(const Value *value, Text hash) {
+  if (value->kind != VALUE_ITEMS || value->items == NULL || value->items->tail != NULL) return 0;
+  return same_text(attr_text(value->items->head, "kind"), text("kindArtifact")) == 1 &&
+         same_text(attr_text(value->items->head, "hash"), hash) == 1;
+}
+
+/* M6 part A (test plan, mutant A-M1): queryEvidence on the artifact log,
+   budget 20: 1 + 3 steps. The event with some a gives [a]; the event with
+   none gives nil; the artifact entry gives [its own ref]; a hash that
+   names no entry gives nil. */
+static void test_m6_evidence(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  ArtifactLog storage;
+  const Value *log = artifact_log(&storage, &left, &failure);
+  Value unknown = account_text("zz");
+  Tagged query_storage[4];
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[0], "queryEvidence", "fact", &storage.hash_texts[0]),
+                   &value, &left, &failure));
+  assert(left == 16 && one_artifact(value, text("art-1")) == 1);
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[1], "queryEvidence", "fact", &storage.hash_texts[1]),
+                   &value, &left, &failure));
+  assert(left == 16 && value->kind == VALUE_ITEMS && value->items == NULL);
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[2], "queryEvidence", "fact", &storage.hash_texts[2]),
+                   &value, &left, &failure));
+  assert(left == 16 && one_artifact(value, storage.hashes[2]) == 1);
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[3], "queryEvidence", "fact", &unknown), &value, &left,
+                   &failure));
+  assert(left == 16 && value->kind == VALUE_ITEMS && value->items == NULL);
+}
+
+/* M6 part A (test plan, mutant A-M2): queryArtifactIntact on the artifact
+   log, budget 20: 1 + 3 steps. The Artifact record with the same sha256
+   gives flagYes; a different digest, the ref of an Event record, and a ref
+   that names no record give flagNo. Budget 0 gives eBudget with left 0. */
+static void test_m6_intact(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  Failure starved = {0, {NULL, 0}, {NULL, 0}};
+  ArtifactLog storage;
+  const Value *log = artifact_log(&storage, &left, &failure);
+  Value unknown = account_text("zz"), other = account_text("s2");
+  Value kind = account_text("kindArtifact");
+  Attrs hashes[3] = {{text("hash"), &storage.hash_texts[2], NULL},
+                     {text("hash"), &storage.hash_texts[0], NULL},
+                     {text("hash"), &unknown, NULL}};
+  Attrs kinds[3] = {{text("kind"), &kind, &hashes[0]}, {text("kind"), &kind, &hashes[1]}, {text("kind"), &kind, &hashes[2]}};
+  Value refs[3] = {{.kind = VALUE_ATTRS, .attrs = &kinds[0]},
+                   {.kind = VALUE_ATTRS, .attrs = &kinds[1]},
+                   {.kind = VALUE_ATTRS, .attrs = &kinds[2]}};
+  IntactQuery query_storage[5];
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  assert(read_step(1000, 20, 7, answer, log, intact_query(&query_storage[0], &refs[0], &storage.sha), &value, &left,
+                   &failure));
+  assert(left == 16 && value->kind == VALUE_FLAG && value->flag == FLAG_YES);
+  assert(read_step(1000, 20, 7, answer, log, intact_query(&query_storage[1], &refs[0], &other), &value, &left, &failure));
+  assert(left == 16 && value->kind == VALUE_FLAG && value->flag == FLAG_NO);
+  assert(read_step(1000, 20, 7, answer, log, intact_query(&query_storage[2], &refs[1], &storage.sha), &value, &left,
+                   &failure));
+  assert(left == 16 && value->kind == VALUE_FLAG && value->flag == FLAG_NO);
+  assert(read_step(1000, 20, 7, answer, log, intact_query(&query_storage[3], &refs[2], &storage.sha), &value, &left,
+                   &failure));
+  assert(left == 16 && value->kind == VALUE_FLAG && value->flag == FLAG_NO);
+  assert(!read_step(1000, 0, 7, answer, log, intact_query(&query_storage[4], &refs[0], &storage.sha), &value, &left,
+                    &starved));
+  assert(left == 0 && same_text(starved.message, eBudget));
+}
+
 /* The first place of hash in the walk of hashes in log order, or count. */
 static Nat walk_place(const char *const *hashes, Nat count, const char *hash) {
   Nat place = count;
@@ -5892,6 +6026,8 @@ int main(void) {
   test_m5_write_last();
   test_m5_record_index();
   test_m5_core_module();
+  test_m6_evidence();
+  test_m6_intact();
   puts("C module tests passed");
   return 0;
 }

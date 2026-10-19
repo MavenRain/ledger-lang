@@ -378,7 +378,7 @@ test('a type argument after a value argument is not read (D-B5)', () => {
 
 const readError = 'the read path does not answer this query';
 const readPre = 'def deal : Ref kindCommercial := refTo (hashOf "deal-1") def history : Log := nil ' +
-  'def ask : Query Flag := queryArtifactIntact (refTo (hashOf "art-1")) "d" ';
+  'def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow ';
 
 test('read is a builtin ReadPath term', () => {
   assert.deepEqual(instances('def r : ReadPath := read'), []);
@@ -394,12 +394,12 @@ test('read with the answer type first checks in a function body', () => {
 });
 
 test('a read of a query out of the read path gives the new refusal', () => {
-  reject(`${readPre}def a : Flag := read Flag history ask`, readError, 'read');
+  reject(`${readPre}def a : List (Ref kindEvent) := read (List (Ref kindEvent)) history ask`, readError, 'read');
 });
 
 test('read as a ReadPath argument', () => {
-  const source = `${readPre}def lift : (r : ReadPath) -> (log : Log) -> (ask : Query Flag) -> Flag := ` +
-    'fun (r : ReadPath) (log : Log) (ask : Query Flag) => r Flag log ask def a : Flag := lift read history ask';
+  const source = `${readPre}def lift : (r : ReadPath) -> (log : Log) -> (ask : Query (List (Ref kindEvent))) -> List (Ref kindEvent) := ` +
+    'fun (r : ReadPath) (log : Log) (ask : Query (List (Ref kindEvent))) => r (List (Ref kindEvent)) log ask def a : List (Ref kindEvent) := lift read history ask';
   assert.ok(Array.isArray(instances(source.slice(0, source.lastIndexOf(' def a')))));
   const result = run(source);
   assert.deepEqual(Object.keys(result), ['error'], JSON.stringify(result));
@@ -944,8 +944,8 @@ test('m5 certificate refuses an out query', async () => {
   await writeFile(file, [
     'def deal : Ref kindCommercial := refTo (hashOf "deal-1")',
     'def history : Log := nil',
-    'def ask : Query Flag := queryArtifactIntact (refTo (hashOf "art-1")) "d"',
-    'def a : Flag := read Flag history ask',
+    'def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow',
+    'def a : List (Ref kindEvent) := read (List (Ref kindEvent)) history ask',
     ''
   ].join('\n'));
   const refused = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', file],
@@ -954,4 +954,47 @@ test('m5 certificate refuses an out query', async () => {
   assert.equal(refused.status, 1, refused.stderr);
   assert.equal(refused.stdout, '');
   assert.match(refused.stderr, /: byte \d+: the read path does not answer this query \(in a\)$/m);
+});
+
+// M6 part A (design items 1 to 3): the Artifact queries. The log: an Event
+// with the artifact art-1 (x1), an Event with no artifact (x2) and an
+// Artifact with the sha256 s1 (x3).
+const artifactLog = [
+  'def who : Ref kindParty := refTo (hashOf "p")',
+  'def e1 : Event := makeEvent eventStageChanged (subjectParty who) (some (refTo (hashOf "art-1"))) none attrsEnd none',
+  'def x1 : Entry := makeEntry none (actorAgent "a") (createsEvent e1)',
+  'def e2 : Event := makeEvent eventStageChanged (subjectParty who) none none attrsEnd none',
+  'def x2 : Entry := makeEntry none (actorAgent "a") (createsEvent e2)',
+  'def art : Artifact := makeArtifact artifactEmail "s1" "u1" "text/plain" nil attrsEnd',
+  'def x3 : Entry := makeEntry none (actorAgent "a") (createsArtifact art)',
+  'def book : Log := cons x1 (cons x2 (cons x3 nil))',
+  ''
+].join('\n');
+const artifacts = 'List (Ref kindArtifact)';
+
+test('m6 queryEvidence lists the artifact of an event', () => {
+  const entries = named(artifactLog);
+  const evidence = hash => termAnswer(artifactLog, artifacts, `queryEvidence (hashOf "${hash}")`);
+  assert.deepEqual(evidence(sha256(entries.x1)), [{ kind: 'kindArtifact', hash: 'art-1' }]);
+  assert.deepEqual(evidence(sha256(entries.x2)), []);
+  assert.deepEqual(evidence(sha256(entries.x3)), [{ kind: 'kindArtifact', hash: sha256(entries.x3) }]);
+  assert.deepEqual(evidence('unknown'), []);
+});
+
+test('m6 queryArtifactIntact compares the sha256', () => {
+  const entries = named(artifactLog);
+  const intact = (hash, digest) => termAnswer(artifactLog, 'Flag', `queryArtifactIntact (refTo (hashOf "${hash}")) "${digest}"`);
+  assert.equal(intact(sha256(entries.x3), 's1'), true);
+  assert.equal(intact(sha256(entries.x3), 's2'), false);
+  assert.equal(intact(sha256(entries.x1), 's1'), false);
+});
+
+// The kernel check of the program stays in `make certificate-check`.
+test('m6 certificate of the Artifact queries checks', () => {
+  const program = fileURLToPath(new URL('../test/certificate-read-m6a.ledger', import.meta.url));
+  const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(certified.status, 0, certified.stderr);
+  assert.match(certified.stdout, /evidenceRead/);
+  assert.match(certified.stdout, /intactRead/);
 });

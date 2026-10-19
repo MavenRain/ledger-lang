@@ -1,0 +1,17 @@
+-- M6 part A (design item 3): the 2 Artifact read queries over one log of 3 entries (14 hash blocks).
+-- The first Event names the artifact art-1, the second has none; the Artifact entry has the sha256 s1.
+def who : Ref kindParty := refTo (hashOf "p")
+def e1 : Event := makeEvent eventStageChanged (subjectParty who) (some (refTo (hashOf "art-1"))) none attrsEnd none
+def x1 : Entry := makeEntry none (actorAgent "a") (createsEvent e1)
+def e2 : Event := makeEvent eventStageChanged (subjectParty who) none none attrsEnd none
+def x2 : Entry := makeEntry none (actorAgent "a") (createsEvent e2)
+def art : Artifact := makeArtifact artifactEmail "s1" "u1" "text/plain" nil attrsEnd
+def x3 : Entry := makeEntry none (actorAgent "a") (createsArtifact art)
+def book : Log := cons x1 (cons x2 (cons x3 nil))
+def ev1 : List (Ref kindArtifact) := read (List (Ref kindArtifact)) book (queryEvidence (hashOf "db68ad1f9cd32ac761a4b3060ef06bd394efeebd3491b05859abd60e67bd699b"))
+def ev2 : List (Ref kindArtifact) := read (List (Ref kindArtifact)) book (queryEvidence (hashOf "0b5855bf1ddd4b4e56f6b994d3770ebd22193c87d62517d741e7782e0dd2fa89"))
+def ev3 : List (Ref kindArtifact) := read (List (Ref kindArtifact)) book (queryEvidence (hashOf "8aff1124b6a0beb61b4e5a5352c686f836848e280be8649a258339b563010677"))
+def ev0 : List (Ref kindArtifact) := read (List (Ref kindArtifact)) book (queryEvidence (hashOf "unknown"))
+def ok : Flag := read Flag book (queryArtifactIntact (refTo (hashOf "8aff1124b6a0beb61b4e5a5352c686f836848e280be8649a258339b563010677")) "s1")
+def bad : Flag := read Flag book (queryArtifactIntact (refTo (hashOf "8aff1124b6a0beb61b4e5a5352c686f836848e280be8649a258339b563010677")) "s2")
+def notArtifact : Flag := read Flag book (queryArtifactIntact (refTo (hashOf "db68ad1f9cd32ac761a4b3060ef06bd394efeebd3491b05859abd60e67bd699b")) "s1")

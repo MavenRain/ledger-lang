@@ -262,6 +262,13 @@ Encoding rules:
   this query". A form that the certificate does not cover gives the
   refusal "the certificate does not cover SUBJECT yet" (README.md,
   docs/STATUS.md `## M5`).
+- M6: the remaining queries of the read path. Part A answers
+  `queryEvidence` (the artifact of the entry whose hash is the fact: an
+  Event with `artifact = some a` gives `[a]`, an Artifact entry gives its
+  own ref, each other case gives `nil`) and `queryArtifactIntact` (`flagYes`
+  when the `sha256` of the Artifact record equals the digest, else `flagNo`)
+  from the records, in the compiler and in the certificate (docs/STATUS.md
+  `## M6`).
 
 ## 7. Milestones
 
@@ -273,3 +280,4 @@ Encoding rules:
 | M3 | Read path: the Commitment and the Membership queries |
 | M4 | Read path: the Rollups queries |
 | M5 | Speed and a kernel-checked certificate for the output |
+| M6 | Read path: the remaining queries and the pipeline keys |

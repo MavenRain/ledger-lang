@@ -3597,6 +3597,54 @@ static int read_review(Fuel hash_fuel, Nat budget, Nat position, const Values *i
   return 1;
 }
 
+/* M6 part A: the record whose hash is hash in the walk of records, or
+   NULL. The walk takes no step. */
+static const Value *record_named(const Located *walk, Text hash) {
+  if (walk == NULL) return NULL;
+  return same_text(write_field(text_of_cstring("ref"), walk->value)->text, hash) == 1 ? walk->value
+                                                                                        : record_named(walk->tail, hash);
+}
+
+/* M6 part A (design item 1, ruling Q-M6-5 (a)): the evidence of the record
+   whose hash is fact. An Event record gives its artifact as a list of one
+   item, or nil when the event has none (the field is null); an Artifact
+   record gives the ref of kind kindArtifact to fact; any other record, or
+   no record, gives nil. */
+static const Values *evidence_items(const Value *record, const Value *fact) {
+  if (record == NULL) return NULL;
+  if (record_is(record, "Artifact") == 1)
+    return values_item(object_two(kRefKind(), text_value(text_of_cstring("kindArtifact")), kRefHash(), fact), NULL);
+  const Value *artifact = commitment_field(record, "artifact");
+  return record_is(record, "Event") == 1 && artifact->kind != VALUE_NULL ? values_item(artifact, NULL) : NULL;
+}
+
+/* M6 part A (design items 1 and 2): queryEvidence (evidence = 1) and
+   queryArtifactIntact. The records are the projection of the full log
+   (project_entries), as read_review: each entry takes one work step, and
+   the walks take no step. queryEvidence gives evidence_items of the record
+   whose hash is fact. queryArtifactIntact names the record whose hash is
+   the hash of the ref: FLAG_YES when it is an Artifact record whose sha256
+   is digest, else FLAG_NO; no record gives FLAG_NO. */
+static int read_artifact(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat evidence,
+                         const Value **value, Nat *left, Failure *failure) {
+  Text none = {NULL, 0};
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, none, &records, &found, left, failure)) return 0;
+  if (evidence == 1) {
+    const Value *fact = write_field(text_of_cstring("fact"), query);
+    *value = items_value(evidence_items(record_named(records, fact->text), fact));
+    return 1;
+  }
+  const Value *artifact = write_field(text_of_cstring("artifact"), query);
+  const Value *record = record_named(records, write_field(kRefHash(), artifact)->text);
+  Nat intact = record != NULL && record_is(record, "Artifact") == 1 &&
+               same_text(commitment_field(record, "sha256")->text, write_field(text_of_cstring("digest"), query)->text) == 1;
+  *value = make_value((Value){.kind = VALUE_FLAG, .flag = intact == 1 ? FLAG_YES : FLAG_NO});
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -3606,9 +3654,10 @@ static int read_review(Fuel hash_fuel, Nat budget, Nat position, const Values *i
    of read_commitment (M3 part A), and the three Membership tags the answer
    of read_membership (M3 part B), the three Rollups tags of M4 part A the
    answer of read_pipeline, queryRenewals and queryAccount360 (M4 part B)
-   the answer of read_account, and queryReviewQueue (M4 part C) the answer
-   of read_review. Each other tag gives eRead at position (the read
-   application) with left budget - 1. */
+   the answer of read_account, queryReviewQueue (M4 part C) the answer of
+   read_review, and queryEvidence and queryArtifactIntact (M6 part A) the
+   answer of read_artifact. Each other tag gives eRead at position (the
+   read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
   if (budget == 0) {
@@ -3635,6 +3684,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat renewals = same_text(tag, text_of_cstring("queryRenewals"));
   Nat account = same_text(tag, text_of_cstring("queryAccount360"));
   Nat review = same_text(tag, text_of_cstring("queryReviewQueue"));
+  Nat evidence = same_text(tag, text_of_cstring("queryEvidence"));
+  Nat intact = same_text(tag, text_of_cstring("queryArtifactIntact"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (read_count(items) > LOG_LIMIT) return fail_at(failure, position, eReadLimit);
@@ -3649,6 +3700,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   if (renewals == 1 || account == 1)
     return read_account(hash_fuel, ready, position, items, query, renewals, value, left, failure);
   if (review == 1) return read_review(hash_fuel, ready, position, items, query, value, left, failure);
+  if (evidence == 1 || intact == 1)
+    return read_artifact(hash_fuel, ready, position, items, query, evidence, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   Index index;
