@@ -103,7 +103,7 @@ not complete the M0 milestone in `SPEC.md`.
   `StageStat`, `Renewal` and `Account360`. Construction, checking and JSON
   encoding follow the schema rules. `Log` is an alias of `List Entry`, so
   the output shows `List (Entry)`. The compiler runs the write path (see
-  `## M1`) and the read path of twelve queries (see `## M2` and `## M3`).
+  `## M1`) and the read path of eighteen queries (see `## M2` to `## M4`).
 - `Query T` is the indexed `Query` family of `core/ops.def` as a `Type 1`
   type. The compiler checks each of the 29 constructors against its answer
   type. A Query value is not an instance. A Query type is not an argument of
@@ -217,10 +217,11 @@ M2 is the read path (parts A, B and C).
 - The builtin `read : ReadPath`. `read T log q` gives the answer of the
   Query `q` on the log `log`. `q` has the type `Query T`. A definition
   that binds the name `read` hides the builtin. The read path answers
-  twelve Query constructors: `queryReplay`, `queryTail`,
-  `queryAuditByActor`, `queryCommercial` and `queryProjectionSound` (M2)
-  and, after M3, the four Commitment and the three Membership
-  constructors (see `## M3`). Each other constructor gives the refusal
+  eighteen Query constructors: `queryReplay`, `queryTail`,
+  `queryAuditByActor`, `queryCommercial` and `queryProjectionSound` (M2),
+  after M3 the four Commitment and the three Membership constructors (see
+  `## M3`), and after M4 the six Rollups constructors (see `## M4`). Each
+  other constructor gives the refusal
   "the read path does not answer this query" at the read application.
 - The log queries (part B). `queryReplay momentNow` gives the full log.
   `queryReplay (momentAsOf h)` gives the entries up to and including the
@@ -434,8 +435,39 @@ program with a Log of N entries with distinct texts, one `write`, and one
   bridge. The rows hash the bridge output and a final newline, because the
   `--stdin` output has no final newline and the digests are of the CLI
   output. The row "m5 source limit" checks the source limit of the bridge.
-- Out of M5 parts A and A2: the 16000 entry case under 1 s (a later part)
-  and the certificate of the output (parts B to E).
+- The certificate (parts B to E). `build/ledgerc --certificate` writes one
+  mechanism-lang module, and the mechanism-lang kernel (`MECH_BIN`) checks
+  it in a separate run. `--certificate-core` writes the rows of
+  `core/schema.def` and `core/ops.def` as one module. The module of a
+  program holds the instances, SHA-256 in mech (`core/certificate.def`),
+  the entry hashes, the write outcomes, the records and the `records` key
+  of the target. Its last def claims that the render of the instances is
+  the JSON document and its newline. Part E adds the eighteen queries of
+  the read path in the groups of M2 (5), M3 (7) and M4 (6), and removes
+  the subject `the read path` of the refusal "the certificate does not
+  cover SUBJECT yet". A `read` of one of the eleven other `Query`
+  constructors keeps the refusal "the read path does not answer this
+  query".
+- The certificate lines. `make certificate-check` runs the C certificate
+  tests (39 kernel checks). Then it checks the core module, the programs
+  of `CERT_PROGRAMS` and the programs of `CERT_EXTRA` (default empty). A
+  watchdog kills a check above `CERT_LIMIT` bytes (default 4294967296,
+  4 GB). The max RSS and the peak footprint of each check, in bytes, on
+  2026-10-18 (the bytes change from run to run):
+  - the core module: 21987328 and 20808328.
+  - `examples/crm.ledger`: 397410304 and 342229832.
+  - `test/certificate-small.ledger`: 403783680 and 325780296.
+  - `test/certificate-write1.ledger`: 668631040 and 432997288.
+  - `test/certificate-write3.ledger`: 1428422656 and 745194624.
+  - `test/certificate-read-m2.ledger`: 1213693952 and 636142600.
+  - `test/certificate-read-m3.ledger`: 1469612032 and 742573184.
+  - `test/certificate-read-m4.ledger`: 1428471808 and 871613664.
+
+  With `CERT_EXTRA`, the gate also checks three more programs with a
+  `read`. The largest check is a program with all the entry queries: max
+  RSS 2658140160 and peak footprint 3312077920, under the 4 GB limit.
+- Out of M5: the 16000 entry case under 1 s (a later part) and the forms
+  of the refusal "the certificate does not cover SUBJECT yet" (README.md).
 
 ## Remaining M0 work
 
@@ -449,8 +481,8 @@ program with a Log of N entries with distinct texts, one `write`, and one
    Sigma. D6 adds `cong` and `transport`. D7 adds `Query` parameters and
    `ReadPath`.
 2. `ReadPath` is done (step D7). It is a function type in `Type 1`. The
-   compiler runs the read path of M2 and M3 for twelve queries (see
-   `## M2` and `## M3`).
+   compiler runs the read path of M2, M3 and M4 for eighteen queries
+   (see `## M2` to `## M4`).
 3. Diagnostics with declaration context are done (D11 part C). In file
    mode, a checking or printing refusal in a declaration gives
    "byte N: message (in NAME)". UTF-8 and lexer failures happen before
@@ -513,8 +545,8 @@ program with a Log of N entries with distinct texts, one `write`, and one
   parameter is reported at the application.
 
 M1 adds the write path, the entry hashes and the record projection (see
-`## M1`). M2 and M3 add the read path of twelve queries from the log and
-from its record index (see `## M2` and `## M3`). The core files and full
+`## M1`). M2, M3 and M4 add the read path of eighteen queries from the
+log and from its record index (see `## M2` to `## M4`). The core files and full
 specification retain their original meaning.
 
 - Type parameters come before the value parameters. Only a named function

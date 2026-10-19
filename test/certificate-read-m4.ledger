@@ -1,0 +1,19 @@
+-- M5 part E (delta E-1 (f)): the 6 M4 read queries over one log of 4 entries (23 hash blocks).
+def org : Party := makeParty partyOrg "A" none nil attrsEnd none none
+def pa : Entry := makeEntry none (actorAgent "a") (createsParty org)
+def acme : Ref kindParty := refTo (hashOf "467b4433bc95df918bb5b10a1ede5252c0249a5d411878393689b2f44c9a50e9")
+def plan : Commercial := makeCommercial commercialDeal "D" acme "q" (some 1000) "U" none statusOpen attrsEnd none
+def ce : Entry := makeEntry none (actorAgent "a") (createsCommercial plan)
+def deal : Ref kindCommercial := refTo (hashOf "ce95a50c2fe02f5e6f4481cb9b1882ac5f88b71b80371fbe962c2da973af513b")
+def low : Provenance := makeProvenance none none (some 40)
+def date : Commitment := makeCommitment deal commitmentDate "T" (valueText "2027-01-31") none commitmentAgreed none low
+def ca : Entry := makeEntry none (actorAgent "a") (createsCommitment date)
+def move : Event := makeEvent eventStageChanged (subjectCommercial deal) none none (attrsField "before" (valueText "q") (attrsField "after" (valueText "p") attrsEnd)) none
+def me : Entry := makeEntry none (actorAgent "a") (createsEvent move)
+def book : Log := cons pa (cons ce (cons ca (cons me nil)))
+def byStage : List Bucket := read (List Bucket) book (queryPipeline pipelineByStage momentNow)
+def stats : List StageStat := read (List StageStat) book queryStageStats
+def stale : List (Ref kindCommercial) := read (List (Ref kindCommercial)) book (queryStaleDeals 0)
+def renewals : List Renewal := read (List Renewal) book queryRenewals
+def account : Account360 := read Account360 book (queryAccount360 acme momentNow)
+def queue : List Hash := read (List Hash) book (queryReviewQueue 50)

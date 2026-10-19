@@ -77,7 +77,20 @@ int main(int argc, char **argv) {
     "def T : Type 0 := Nat\ndef n : T := 5\n",
     "-- comment\rdef n : Text := \"hi\"\r",
     "def n : Nat := 1 -- trailing comment\rdef s : Text := \"hi\"\r",
-    "-- comment\r\ndef n : Text := \"hi\" -- final comment"
+    "-- comment\r\ndef n : Text := \"hi\" -- final comment",
+    /* Builtin read references follow lexical scope and nonrecursive defs. */
+    "def read : ReadPath := read\ndef full : Log := read Log nil (queryReplay momentNow)\n",
+    "def read : ReadPath := fun (A : Type 0) (log : Log) (q : Query A) => read A log q\n"
+    "def full : Log := read Log nil (queryReplay momentNow)\n",
+    "def f : (read : ReadPath) -> Log := fun (r : ReadPath) => read Log nil (queryReplay momentNow)\n"
+    "def full : Log := f read\n",
+    "def f : (read : ReadPath) -> Log := fun (read : ReadPath) => read Log nil (queryReplay momentNow)\n"
+    "def full : Log := f read\n",
+    "def f : (read : Type 0) -> (x : read) -> read := fun (read : Type 0) (x : read) => x\n"
+    "def n : Nat := f Nat 7\n",
+    "def f : (read : ReadPath) -> ReadPath := "
+    "fun (read : ReadPath) (A : Type 0) (log : Log) (q : Query A) => read A log q\n"
+    "def g : ReadPath := read\n"
   };
   unsigned count = sizeof programs / sizeof programs[0];
   for (unsigned row = 0; row < count; row++) {
@@ -86,6 +99,26 @@ int main(int argc, char **argv) {
     assert(compile_program(source, &output, &failure));
     assert(certificate_module(source, output, NULL, &module, &refusal));
     check_module(argv[1], module, row, 0);
+  }
+
+  /* Parentheses in a type comment must not select another log's hashes. */
+  {
+    Text source = text(
+        "def e : Entry := makeEntry none (actorAgent \"a\") "
+        "(createsEvent (makeEvent eventNoteAdded (subjectParty (refTo (hashOf \"p\"))) none none attrsEnd none))\n"
+        "def empty : Log := nil\ndef book : Log := cons e nil\n"
+        "def a : List (Ref kindEvent) := read (List (Ref kindEvent) -- ) ledgerUser_empty\n"
+        ") book (queryAuditByActor (actorAgent \"a\"))\n"
+        "def custom : ReadPath := fun (A : Type 0) (log : Log) (q : Query A) => read A nil q\n"
+        "def run : (read : ReadPath) -> Log := fun (read :-- ) ignored\n"
+        "ReadPath) => read Log book (queryReplay momentNow)\n"
+        "def answer : Log := run custom\n");
+    Text output, module, refusal;
+    Failure failure;
+    Hashed collected = {builder_new(), builder_new(), builder_new()};
+    assert(compile_collect(source, &output, &collected, &failure));
+    assert(certificate_module(source, output, &collected, &module, &refusal));
+    check_module(argv[1], module, count++, 0);
   }
 
   Text source = text("def n : Nat := 7\n"), output, other, module, refusal;
@@ -136,6 +169,11 @@ int main(int argc, char **argv) {
   builder_push(&many.ends, 760);
   builder_push(&many.ends, 1520);
   source = text("def n : Nat := 8\n");
+  assert(compile_program(source, &output, &failure));
+  assert(!certificate_module(source, output, &many, &module, &refusal));
+  assert(same_text(refusal, text("the certificate does not cover more than 24 hash blocks yet")));
+  /* The sum rule on a source with a read (the d3 cases 81 to 85 and 108). */
+  source = text("def book : Log := nil\ndef full : Log := read Log book (queryReplay momentNow)\n");
   assert(compile_program(source, &output, &failure));
   assert(!certificate_module(source, output, &many, &module, &refusal));
   assert(same_text(refusal, text("the certificate does not cover more than 24 hash blocks yet")));

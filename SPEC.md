@@ -18,6 +18,11 @@ The compiler works on `Text` byte lists: a lexer, a parser, a checker, an
 evaluator and a JSON printer. `bin/ledgerc` only runs `build/ledgerc` on a
 file.
 
+`build/ledgerc --certificate` writes the certificate of the document: one
+mechanism-lang module. Its last def claims that the render of the
+instances is the JSON document and its newline. The mechanism-lang kernel
+checks the module in a separate run (`make certificate-check`, README.md).
+
 ## 2. Programs
 
 A program is a sequence of definitions:
@@ -249,6 +254,14 @@ Encoding rules:
   from the Commercial, Commitment, Party, Membership, Assignment, Artifact
   and Event records of the log. `queryReviewQueue` comes from the
   `provenance` field of the records of the log (docs/STATUS.md `## M4`).
+- M5: the certificate of the final state. The module of
+  `build/ledgerc --certificate` holds the instances, SHA-256 and the entry
+  hashes, the write outcomes, the records and the `records` key of the
+  target, and the eighteen queries of the read path. A `read` of another
+  `Query` constructor keeps the refusal "the read path does not answer
+  this query". A form that the certificate does not cover gives the
+  refusal "the certificate does not cover SUBJECT yet" (README.md,
+  docs/STATUS.md `## M5`).
 
 ## 7. Milestones
 

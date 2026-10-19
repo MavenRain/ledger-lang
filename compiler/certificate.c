@@ -236,7 +236,6 @@ static int name_byte(Nat byte) {
 static int covered_name(Text source, Nat at, Nat size, Text *refusal) {
   for (size_t index = 0; index < sizeof unbound_names / sizeof unbound_names[0]; index++)
     if (same_word(source, at, size, unbound_names[index])) return refuse(refusal, unbound_names[index]);
-  if (same_word(source, at, size, "ReadPath")) return refuse(refusal, "the read path");
   return 1;
 }
 
@@ -255,8 +254,8 @@ static Nat literal_escape(Nat c) {
 
 /* The source with literals as textByte chains and user names prefixed.
    Normalize carriage returns to newlines so comments end as in lexer.c.
-   Gives 0 with a refusal for an unbound checker name, a write or read path
-   and a literal longer than CHUNK bytes. */
+   Gives 0 with a refusal for an unbound checker name and a literal
+   longer than CHUNK bytes. */
 static int lower_source(Text source, TextBuilder *lowered, Text *refusal) {
   Nat at = 0;
   while (at < source.size) {
@@ -271,6 +270,12 @@ static int lower_source(Text source, TextBuilder *lowered, Text *refusal) {
       while (at < source.size && name_byte(source.items[at])) at++;
       if (!covered_name(source, start, at - start, refusal)) return 0;
       Text name = {source.items + start, at - start};
+      /* Source binders carry no quantities. Keep user ReadPath lambdas
+         compatible with ordinary Type binders through the adapter. */
+      if (same_word(source, start, at - start, "ReadPath")) {
+        append_string(lowered, "ledgerReadPath");
+        continue;
+      }
       if (!(byte >= 48 && byte <= 57) && !reserved_name(name)) append_string(lowered, user_prefix);
       append_items(lowered, source.items + start, at - start);
       continue;
@@ -548,11 +553,12 @@ static void append_family(TextBuilder *builder, unsigned char *made, Nat row) {
 }
 
 /* One encoder for each schema.def FAMILY row whose field types all have one,
-   in row order, then the same for the ops.def families of delta D-1 (b) in
-   the order of ops_families (each one cites only earlier ones); made marks
-   them. */
+   in row order, then the same for the ops.def families of deltas D-1 (b) and
+   E-1 (e) in the order of ops_families (each one cites only earlier ones);
+   made marks them. */
 static void append_families(TextBuilder *builder, unsigned char *made) {
-  static const char *const ops_families[] = {"Missing", "Outcome", "Command", "Write", "Step"};
+  static const char *const ops_families[] = {"Missing", "Outcome", "Command", "Write", "Step",
+                                             "Bucket", "StageStat", "Renewal", "Account360"};
   for (Nat row = 0; row < SCHEMA_COUNT; row++)
     if (schema_rows[row].kind == ROW_FAMILY && fields_covered(made, row)) append_family(builder, made, row);
   for (size_t index = 0; index < sizeof ops_families / sizeof ops_families[0]; index++) {
@@ -563,9 +569,8 @@ static void append_families(TextBuilder *builder, unsigned char *made) {
 
 /* The encoder of the instance type json[at, at + size) in to, or 0 with a
    refusal that names the family with no encoder. Each schema.def family and
-   the ops.def families Missing, Outcome, Command, Write and Step have one, so
-   of the FAMILY rows the refusal can name only Moment, Verdict, PipelineKey,
-   Bucket, StageStat, Renewal, Account360 and Query. */
+   each ops.def family of ops_families has one, so of the FAMILY rows the
+   refusal can name only Moment, Verdict, PipelineKey and Query. */
 static int instance_encoder(const unsigned char *made, Text json, Nat at, Nat size, char *to, Text *refusal) {
   char type[TERM], missing[TERM];
   if (size >= TERM) return refuse(refusal, "a type text this long");
@@ -620,7 +625,7 @@ static void append_chunks(TextBuilder *builder, const char *name, Text bytes) {
 }
 
 /* M5 delta D-1 (b): the rows of the write path and the records. A Line is
-   a short name or claim side (O/m5/part-d/s10/probe.c). */
+   a short name or claim side. */
 typedef struct {
   char items[2048];
   size_t size;
@@ -823,6 +828,12 @@ static int append_write_rows(TextBuilder *builder, const Hashed *hashed, Text *r
   append_string(builder, "\n\ndef ledgerHs : Entry -> Text := fun (e : Entry) => ledgerHashOf (encodeEntry e textEnd)\n");
   append_string(builder, "\ndef ledgerUser_write : Log -> Write -> Step := writeWith ledgerHs\n");
   append_string(builder, last_event);
+  /* M5 delta E-1 (c), Ruling Q-M5-42 (a): the builtin read under its own
+     name. A user def of read lowers to ledgerUser_read, and the kernel
+     refuses a second def of a name. */
+  append_string(builder, "\ndef ledgerReadPath : Type 1 := (answer : Type 0) -> Log -> Query answer -> answer\n");
+  append_string(builder, "\ndef ledgerRead : ledgerReadPath := fun (answer : Type 0) (log : Log) (query : Query answer) => "
+                         "readWithH ledgerLastEvent (hsMap ledgerHs log) answer log query\n");
   append_string(builder, "\ndef ledgerPut : Text -> Body -> Text -> Text := fun (h : Text) (b : Body) (tail : Text) => ");
   open_bytes(builder, "{\"ref\":\"");
   append_string(builder, "(textThen h ");
@@ -868,9 +879,24 @@ static Nat skip_trivia(Text source, Nat at) {
   return at;
 }
 
-/* 1 when the lowered def of the instance NAME has the head ledgerUser_write.
-   lower_source replaces string literals, so only comments can hide tokens. */
-static int writes_head(Text lowered, Text name) {
+/* The end of the name token at at: at itself when no name byte is there. */
+static Nat name_end(Text text, Nat at) {
+  while (at < text.size && name_byte(text.items[at])) at++;
+  return at;
+}
+
+/* 1 when text holds the size items of other from from at at. */
+static int same_items(Text text, Nat at, Text other, Nat from, Nat size) {
+  if (at + size > text.size || from + size > other.size) return 0;
+  for (Nat index = 0; index < size; index++)
+    if (text.items[at + index] != other.items[from + index]) return 0;
+  return 1;
+}
+
+/* The start of the body after := of the lowered def of the instance NAME,
+   or lowered.size when there is none. lower_source replaces string
+   literals, so only comments can hide tokens. */
+static Nat def_body(Text lowered, Text name) {
   Nat prefix = strlen(user_prefix);
   for (Nat at = 0; at < lowered.size; at++) {
     at = skip_trivia(lowered, at);
@@ -888,11 +914,276 @@ static int writes_head(Text lowered, Text name) {
       if (text_has(lowered, body, ":=")) break;
       if (body < lowered.size) body++;
     }
-    if (body == lowered.size) return 0;
-    body = skip_trivia(lowered, body + 2);
-    return text_has(lowered, body, "ledgerUser_write") && (body + 16 >= lowered.size || !name_byte(lowered.items[body + 16]));
+    return body == lowered.size ? body : skip_trivia(lowered, body + 2);
+  }
+  return lowered.size;
+}
+
+/* 1 when the lowered def of the instance NAME has the head ledgerUser_write. */
+static int writes_head(Text lowered, Text name) {
+  Nat body = def_body(lowered, name);
+  return text_has(lowered, body, "ledgerUser_write") && (body + 16 >= lowered.size || !name_byte(lowered.items[body + 16]));
+}
+
+/* The start of the first def token at or after at, or text.size. */
+static Nat next_def(Text text, Nat at) {
+  for (at = skip_trivia(text, at); at < text.size; at = skip_trivia(text, at)) {
+    Nat stop = name_end(text, at);
+    if (stop > at && same_word(text, at, stop - at, "def")) return at;
+    at = stop > at ? stop : at + 1;
+  }
+  return text.size;
+}
+
+/* 1 when a name token in [at, end) of text is word. */
+static int has_token(Text text, Nat at, Nat end, const char *word) {
+  for (at = skip_trivia(text, at); at < end; at = skip_trivia(text, at)) {
+    Nat stop = name_end(text, at);
+    if (stop > at && same_word(text, at, stop - at, word)) return 1;
+    at = stop > at ? stop : at + 1;
   }
   return 0;
+}
+
+/* 1 when [from, end) of text holds a binder of word: a name token equal to
+   word, with a colon that is not := after it and no def before it. */
+static int binder_in(Text text, Nat from, Nat end, Text word) {
+  int head = 0;
+  for (Nat at = skip_trivia(text, from); at < end; at = skip_trivia(text, at)) {
+    Nat stop = name_end(text, at), next = skip_trivia(text, stop);
+    int colon = next < text.size && text.items[next] == 58 && (next + 1 == text.size || text.items[next + 1] != 61);
+    if (stop - at == word.size && !head && colon && same_items(text, at, word, 0, word.size)) return 1;
+    head = stop > at && same_word(text, at, stop - at, "def");
+    at = stop > at ? stop : at + 1;
+  }
+  return 0;
+}
+
+/* A local binder is in scope after its closing parenthesis, until the
+   enclosing group ends or the definition's type annotation ends at :=.
+   The binder's own name is a declaration, rather than a builtin site. */
+static int bound_at(Text text, Nat from, Nat at, Text word) {
+  Nat after = skip_trivia(text, at + word.size);
+  if (after < text.size && text.items[after] == 58 && !text_has(text, after, ":=")) return 1;
+  for (Nat start = skip_trivia(text, from); start < at; start = skip_trivia(text, start)) {
+    Nat stop = name_end(text, start), colon = skip_trivia(text, stop);
+    if (stop - start == word.size && text_has(text, colon, ":") && !text_has(text, colon, ":=") &&
+        same_items(text, start, word, 0, word.size)) {
+      Nat end = skip_trivia(text, colon + 1), depth = 0;
+      for (; end < text.size; end = skip_trivia(text, end + 1)) {
+        if (text.items[end] == 40) depth++;
+        if (text.items[end] == 41) {
+          if (depth == 0) break;
+          depth--;
+        }
+        if (text_has(text, end, ":=")) break;
+      }
+      if (end < at && text.items[end] == 41) {
+        depth = 0;
+        for (end = skip_trivia(text, end + 1); end < at; end = skip_trivia(text, end + 1)) {
+          if (text_has(text, end, ":=")) break;
+          if (text.items[end] == 40) depth++;
+          if (text.items[end] == 41) {
+            if (depth == 0) break;
+            depth--;
+          }
+        }
+        if (end == at) return 1;
+      }
+    }
+    start = stop > start ? stop : start + 1;
+  }
+  return 0;
+}
+
+/* The ledgerLogs kind of the instance at found[at] (program.c:1030 to
+   :1038): 1 for the type text List (Entry), 2 for a Step with the head
+   ledgerUser_write (its stepLog), else 0. */
+static Nat log_kind(Text output, Text found, Nat at, Text lowered) {
+  Text name = {0};
+  name.items = output.items + found.items[at];
+  name.size = found.items[at + 1];
+  Nat type = found.items[at + 2], size = found.items[at + 3];
+  if (size == 12 && text_has(output, type, "List (Entry)")) return 1;
+  return size == 4 && text_has(output, type, "Step") && writes_head(lowered, name) ? 2 : 0;
+}
+
+/* The ledgerLogs index K of the log argument of the read site that ends at
+   at: after one type argument (a parenthesized group or one name), a name
+   token before end that names a kind 1 log with no binder but its def.
+   found.size when there is none. */
+static Nat site_log(Text lowered, Nat at, Nat end, Text output, Text found) {
+  Nat type = skip_trivia(lowered, at), name = type < end ? name_end(lowered, type) : end;
+  if (type < end && lowered.items[type] == 40) {
+    Nat depth = 0;
+    for (name = type; name < end; name = skip_trivia(lowered, name + 1)) {
+      if (lowered.items[name] == 40) depth++;
+      if (lowered.items[name] == 41) depth--;
+      if (depth == 0) break;
+    }
+    name++;
+  }
+  name = skip_trivia(lowered, name);
+  Nat stop = name < end ? name_end(lowered, name) : name, prefix = strlen(user_prefix);
+  if (stop == name || !text_has(lowered, name, user_prefix)) return found.size;
+  Text word = {0};
+  word.items = lowered.items + name;
+  word.size = stop - name;
+  if (binder_in(lowered, 0, lowered.size, word)) return found.size;
+  for (Nat entry = 0, logs = 0; entry + 4 <= found.size; entry += 4) {
+    Nat kind = log_kind(output, found, entry, lowered);
+    if (kind == 1 && found.items[entry + 1] + prefix == word.size &&
+        same_items(lowered, name + prefix, output, found.items[entry], found.items[entry + 1])) return logs;
+    if (kind != 0) logs++;
+  }
+  return found.size;
+}
+
+/* The lowered source with its builtin read sites named (M5 delta E-1 (c),
+   Ruling Q-M5-42 (a)). A ledgerUser_read reference before the end of the
+   first def of ledgerUser_read, outside a local binder's scope, is the
+   builtin (definitions are nonrecursive). At an application whose log
+   argument names a kind 1 log of ledgerLogs with no binder but its def, the
+   site becomes readWithH ledgerLastEvent ledgerHsK (the bind row ties
+   ledgerHsK to that log); any other builtin site becomes ledgerRead. */
+static Text read_sites(Text lowered, Text output, Text found) {
+  TextBuilder sites = builder_new();
+  Nat user = lowered.size, from = 0, last = 0;
+  for (Nat at = next_def(lowered, 0); at < lowered.size && user == lowered.size; at = next_def(lowered, at + 3)) {
+    Nat head = skip_trivia(lowered, at + 3);
+    if (same_word(lowered, head, name_end(lowered, head) - head, "ledgerUser_read")) user = next_def(lowered, head);
+  }
+  for (Nat at = 0; at < lowered.size;) {
+    Nat start = skip_trivia(lowered, at), stop = name_end(lowered, start);
+    append_items(&sites, lowered.items + at, start - at);
+    if (start == lowered.size) break;
+    if (stop == start) {
+      last = lowered.items[start];
+      builder_push(&sites, last);
+      at = start + 1;
+      continue;
+    }
+    Text word = {0};
+    word.items = lowered.items + start;
+    word.size = stop - start;
+    if (same_word(lowered, start, word.size, "def")) from = start;
+    int site = start < user && same_word(lowered, start, word.size, "ledgerUser_read");
+    Nat end = site ? next_def(lowered, stop) : stop;
+    if (site && !bound_at(lowered, from, start, word)) {
+      int head = !name_byte(last) && last != 41;
+      Nat log = head ? site_log(lowered, stop, end, output, found) : found.size;
+      append_string(&sites, log < found.size ? "readWithH ledgerLastEvent ledgerHs" : "ledgerRead");
+      if (log < found.size) append_nat(&sites, log);
+    } else {
+      append_items(&sites, word.items, word.size);
+    }
+    last = lowered.items[stop - 1];
+    at = stop;
+  }
+  return builder_text(&sites);
+}
+
+/* The end of the JSON string whose first byte after the quote is at at. */
+static Nat string_end(Text json, Nat at) {
+  while (at < json.size && json.items[at] != 34) at += json.items[at] == 92 ? 2 : 1;
+  return at < json.size ? at + 1 : json.size;
+}
+
+/* The end of the JSON value at at: a string, a nested array or object, or a
+   scalar that runs to , } or ]. */
+static Nat value_end(Text json, Nat at) {
+  Nat depth = 0;
+  while (at < json.size) {
+    Nat byte = json.items[at++];
+    if (byte == 34) at = string_end(json, at);
+    if (byte == 91 || byte == 123) depth++;
+    if ((byte == 44 || byte == 93 || byte == 125) && depth == 0) return at - 1;
+    if (byte == 93 || byte == 125) depth--;
+    if (depth == 0 && (byte == 34 || byte == 93 || byte == 125)) return at;
+  }
+  return at;
+}
+
+/* The hashed text whose bytes output holds at at, with , or ] after them,
+   or ends.size when there is none. An entry text is not empty. */
+static Nat hashed_at(Text output, Nat at, Text bytes, Text ends) {
+  for (Nat text = 0, start = 0; text < ends.size; start = ends.items[text], text++) {
+    Nat size = ends.items[text] - start;
+    if (size > 0 && at + size < output.size && (output.items[at + size] == 44 || output.items[at + size] == 93) &&
+        same_items(output, at, bytes, start, size)) return text;
+  }
+  return ends.size;
+}
+
+/* def ledgerHsK for each log K of ledgerLogs (M5 delta E-1 (b)): the hashed
+   text of each item of its JSON array, in log order. Each item has the bytes
+   of one hashed text (json.c:153), and the texts are in first-hash order, so
+   the match is by bytes. No match ends the list: the bind row ledgerBindK
+   then fails in the kernel. */
+static void append_hash_lists(TextBuilder *builder, Text output, Text found, Text lowered, const Hashed *hashed) {
+  Text bytes = {0}, ends = {0};
+  if (hashed != NULL) {
+    bytes = builder_text(&hashed->bytes);
+    ends = builder_text(&hashed->ends);
+  }
+  for (Nat at = 0, logs = 0; at + 4 <= found.size; at += 4) {
+    Nat kind = log_kind(output, found, at, lowered), items = 0;
+    if (kind == 0) continue;
+    Nat item = found.items[at + 2] + found.items[at + 3] + strlen("\",\"value\":[") + (kind == 2 ? strlen("{\"log\":") : 0);
+    append_string(builder, "\ndef ledgerHs");
+    append_nat(builder, logs++);
+    append_string(builder, " : List Text := ");
+    for (Nat text = hashed_at(output, item, bytes, ends); text < ends.size; text = hashed_at(output, item, bytes, ends)) {
+      append_string(builder, "(cons qh");
+      append_nat(builder, text);
+      append_string(builder, " ");
+      item += ends.items[text] - (text > 0 ? ends.items[text - 1] : 0) + 1;
+      items++;
+      if (output.items[item - 1] == 93) break;
+    }
+    append_string(builder, "nil");
+    close_chain(builder, items);
+    append_string(builder, "\n");
+  }
+}
+
+/* The small read claim of the instance at found[at] (Ruling Q-M5-41 (a)):
+   ledgerText_N, the bytes of its JSON value, and ledgerRead_N, the claim
+   that its encoder TERM gives them. */
+static void append_read_claim(TextBuilder *claims, Text output, Text found, Nat at, const char *term) {
+  Nat from = found.items[at + 2] + found.items[at + 3] + strlen("\",\"value\":");
+  Nat size = value_end(output, from) - from;
+  const Nat *name = output.items + found.items[at];
+  Nat length = found.items[at + 1];
+  TextBuilder left = builder_new();
+  append_string(&left, "(");
+  append_string(&left, term);
+  append_string(&left, " ");
+  append_string(&left, user_prefix);
+  append_items(&left, name, length);
+  append_string(&left, " textEnd)");
+  append_string(claims, "\ndef ledgerText_");
+  append_items(claims, name, length);
+  append_string(claims, " : Text := ");
+  open_items(claims, output.items + from, size);
+  append_string(claims, "textEnd");
+  close_chain(claims, size);
+  append_string(claims, "\n\ndef ledgerRead_");
+  append_items(claims, name, length);
+  append_string(claims, " : MechEq Text ");
+  builder_append(claims, builder_text(&left));
+  append_string(claims, " ledgerText_");
+  append_items(claims, name, length);
+  append_string(claims, " := mechRefl Text ");
+  builder_append(claims, builder_text(&left));
+  append_string(claims, "\n");
+}
+
+/* 1 when the lowered def of the instance NAME reads (ledgerRead or
+   readWithH) before the next def: it gets a small read claim. */
+static int reads_in(Text sites, Text name) {
+  Nat body = def_body(sites, name), end = next_def(sites, body);
+  return has_token(sites, body, end, "ledgerRead") || has_token(sites, body, end, "readWithH");
 }
 
 /* 0 with a refusal when the instance at found[at] is a Step whose written
@@ -909,30 +1200,50 @@ static int step_covered(Text output, Text found, Nat at, Text lowered, Text mark
 
 /* def ledgerLogs, the feeding logs in definition order (program.c:1030 to
    :1038): an instance of type text List (Entry) gives itself; a Step
-   instance with the head ledgerUser_write gives its stepLog. Gives their
-   count. */
+   instance with the head ledgerUser_write gives its stepLog. Then (M5 delta
+   E-1 (b)) ledgerLogHs, the hash lists ledgerHsK in the same order, and for
+   each log the bind row ledgerBindK: hsMap ledgerHs of the log is
+   ledgerHsK. Gives the log count. */
 static Nat append_logs(TextBuilder *builder, Text output, Text found, Text lowered) {
   Nat logs = 0;
   TextBuilder list = builder_new();
+  TextBuilder hashes = builder_new();
+  TextBuilder binds = builder_new();
   for (Nat at = 0; at + 4 <= found.size; at += 4) {
-    Text name = {0};
-    name.items = output.items + found.items[at];
-    name.size = found.items[at + 1];
-    Nat type = found.items[at + 2], size = found.items[at + 3];
-    int log = size == 12 && text_has(output, type, "List (Entry)");
-    int step = size == 4 && text_has(output, type, "Step") && writes_head(lowered, name);
-    if (!log && !step) continue;
-    append_string(&list, step ? "(cons (stepLog " : "(cons ");
-    append_string(&list, user_prefix);
-    append_items(&list, name.items, name.size);
-    append_string(&list, step ? ") " : " ");
+    Nat kind = log_kind(output, found, at, lowered);
+    if (kind == 0) continue;
+    TextBuilder log = builder_new();
+    append_string(&log, kind == 2 ? "(stepLog " : "");
+    append_string(&log, user_prefix);
+    append_items(&log, output.items + found.items[at], found.items[at + 1]);
+    append_string(&log, kind == 2 ? ")" : "");
+    append_string(&list, "(cons ");
+    builder_append(&list, builder_text(&log));
+    append_string(&list, " ");
+    append_string(&hashes, "(cons ledgerHs");
+    append_nat(&hashes, logs);
+    append_string(&hashes, " ");
+    append_string(&binds, "\ndef ledgerBind");
+    append_nat(&binds, logs);
+    append_string(&binds, " : MechEq (List Text) (hsMap ledgerHs ");
+    builder_append(&binds, builder_text(&log));
+    append_string(&binds, ") ledgerHs");
+    append_nat(&binds, logs);
+    append_string(&binds, " := mechRefl (List Text) ledgerHs");
+    append_nat(&binds, logs);
+    append_string(&binds, "\n");
     logs++;
   }
   append_string(builder, "\ndef ledgerLogs : List Log := ");
   builder_append(builder, builder_text(&list));
   append_string(builder, "nil");
   close_chain(builder, logs);
+  append_string(builder, "\n\ndef ledgerLogHs : List (List Text) := ");
+  builder_append(builder, builder_text(&hashes));
+  append_string(builder, "nil");
+  close_chain(builder, logs);
   append_string(builder, "\n");
+  builder_append(builder, builder_text(&binds));
   return logs;
 }
 
@@ -947,15 +1258,17 @@ int certificate_module(Text source, Text output, const Hashed *hashed, Text *mod
   append_kinds(&encoders);
   append_families(&encoders, made);
   Text found = builder_text(&spans);
+  Text sites = read_sites(builder_text(&lowered), output, found);
   Text marks = {0};
   if (hashed != NULL) marks = builder_text(&hashed->written);
   for (Nat at = 0; at + 4 <= found.size; at += 4)
     if (!instance_encoder(made, output, found.items[at + 2], found.items[at + 3], term, refusal) ||
-        !step_covered(output, found, at, builder_text(&lowered), marks, refusal))
+        !step_covered(output, found, at, sites, marks, refusal))
       return 0;
 
   TextBuilder builder = builder_new();
   TextBuilder render = builder_new();
+  TextBuilder claims = builder_new();
   Table fixed = TABLE(fixed_rows);
   Nat eq = eq_rows(fixed), lits = 0, opens = 0;
   append_rows(&builder, fixed, 0, eq, 0);
@@ -964,9 +1277,10 @@ int certificate_module(Text source, Text output, const Hashed *hashed, Text *mod
   builder_append(&builder, builder_text(&encoders));
   append_string(&builder, "\n");
   if (!append_write_rows(&builder, hashed, refusal)) return 0;
-  builder_append(&builder, builder_text(&lowered));
+  append_hash_lists(&builder, output, found, sites, hashed);
+  builder_append(&builder, sites);
   append_string(&builder, "\n");
-  Nat logs = append_logs(&builder, output, found, builder_text(&lowered));
+  Nat logs = append_logs(&builder, output, found, sites);
   for (Nat at = 0; at + 4 <= found.size; at += 4) {
     TextBuilder piece = builder_new();
     append_string(&piece, at == 0 ? json_head : "},");
@@ -977,6 +1291,10 @@ int certificate_module(Text source, Text output, const Hashed *hashed, Text *mod
     append_string(&piece, "\",\"value\":");
     opens += append_lits(&builder, &render, builder_text(&piece), &lits);
     instance_encoder(made, output, found.items[at + 2], found.items[at + 3], term, refusal);
+    Text name = {0};
+    name.items = output.items + found.items[at];
+    name.size = found.items[at + 1];
+    if (reads_in(sites, name)) append_read_claim(&claims, output, found, at, term);
     append_string(&render, "(");
     append_string(&render, term);
     append_string(&render, " ");
@@ -990,14 +1308,16 @@ int certificate_module(Text source, Text output, const Hashed *hashed, Text *mod
   if (found.size == 0) append_string(&end, "]}\n");
   if (found.size > 0 && logs == 0) append_string(&end, "}\n");
   opens += append_lits(&builder, &render, builder_text(&end), &lits);
-  /* M5 delta D-1 (b): the records (program.c:1295), then the TAIL }LF. */
+  /* M5 delta D-1 (b): the records (program.c:1300), then the TAIL }LF. The
+     hash lists of delta E-1 (b) give the record hashes. */
   if (logs > 0) {
     TextBuilder tail = builder_new();
-    append_string(&render, "(recordsThen ledgerPut (recordsWith ledgerHs ledgerLastEvent ledgerLogs) ");
+    append_string(&render, "(recordsThen ledgerPut (recordsLogsH ledgerLogs ledgerLogHs ledgerLastEvent nil) ");
     opens++;
     append_string(&tail, "}\n");
     opens += append_lits(&builder, &render, builder_text(&tail), &lits);
   }
+  builder_append(&builder, builder_text(&claims));
   append_string(&builder, "\ndef certificateRender : Text := ");
   builder_append(&builder, builder_text(&render));
   append_string(&builder, "textEnd");

@@ -1,0 +1,20 @@
+-- M5 part E (delta E-1 (f)): the 7 M3 read queries over one log of 3 entries (18 hash blocks).
+-- The deal has no Commercial entry, thus queryAmountReconciled gives false.
+def p : Ref kindParty := refTo (hashOf "p")
+def o : Ref kindParty := refTo (hashOf "o")
+def prov : Provenance := makeProvenance none none none
+def deal : Ref kindCommercial := refTo (hashOf "d")
+def proposed : Commitment := makeCommitment deal commitmentPrice "P" (valueNat 1000) none commitmentProposed none prov
+def pe : Entry := makeEntry none (actorAgent "a") (createsCommitment proposed)
+def agreed : Commitment := makeCommitment deal commitmentPrice "P" (valueNat 900) none commitmentAgreed (some (refTo (hashOf "cf656e1a8f4b6e37c008cd1b4b7605c5587e39dd46b74638cdb1e394fba439e6"))) prov
+def ae : Entry := makeEntry none (actorAgent "a") (createsCommitment agreed)
+def job : Membership := makeMembership p o none flagYes none prov attrsEnd
+def je : Entry := makeEntry none (actorAgent "a") (createsMembership job)
+def book : Log := cons pe (cons ae (cons je nil))
+def inForce : List (Ref kindCommitment) := read (List (Ref kindCommitment)) book (queryTermsInForce deal momentNow)
+def history : List (Ref kindCommitment) := read (List (Ref kindCommitment)) book (queryTermHistory (refTo (hashOf "4a20e22cbcb46e86e5210fdc5cf549fd41afba5460d0120994b93949fd7af137")))
+def reconciled : Flag := read Flag book (queryAmountReconciled deal)
+def discount : Option Nat := read (Option Nat) book (queryDiscountPct deal)
+def members : List (Ref kindMembership) := read (List (Ref kindMembership)) book (queryMembersOf o momentNow)
+def employer : Option (Ref kindParty) := read (Option (Ref kindParty)) book (queryEmployer p momentNow)
+def changes : List (Ref kindParty) := read (List (Ref kindParty)) book (queryJobChanges (momentAsOf (hashOf "4a20e22cbcb46e86e5210fdc5cf549fd41afba5460d0120994b93949fd7af137")))

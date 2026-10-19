@@ -935,3 +935,23 @@ test('m5 core module checks in the kernel', async t => {
   assert.equal(checked.status, 0, checked.stderr);
   assert.equal(`${checked.stdout}${checked.stderr}`, '');
 });
+
+// M5 part E (E3, delta E-1 (f)): a read of a query out of the read path (the
+// d3 case 78) keeps its refusal under `ledgerc --certificate`: rc 1, no module.
+test('m5 certificate refuses an out query', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ledger-cert-'));
+  const file = join(dir, 'out.ledger');
+  await writeFile(file, [
+    'def deal : Ref kindCommercial := refTo (hashOf "deal-1")',
+    'def history : Log := nil',
+    'def ask : Query Flag := queryArtifactIntact (refTo (hashOf "art-1")) "d"',
+    'def a : Flag := read Flag history ask',
+    ''
+  ].join('\n'));
+  const refused = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', file],
+    { encoding: 'utf8' });
+  await rm(dir, { recursive: true, force: true });
+  assert.equal(refused.status, 1, refused.stderr);
+  assert.equal(refused.stdout, '');
+  assert.match(refused.stderr, /: byte \d+: the read path does not answer this query \(in a\)$/m);
+});

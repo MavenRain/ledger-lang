@@ -1,0 +1,15 @@
+-- M5 part E (delta E-1 (f)): the 5 M2 read queries over one log of 2 entries (11 hash blocks).
+def p : Ref kindParty := refTo (hashOf "p")
+def plan : Commercial := makeCommercial commercialDeal "A" p "s" none "U" none statusOpen attrsEnd none
+def ce : Entry := makeEntry none (actorAgent "a") (createsCommercial plan)
+def deal : Ref kindCommercial := refTo (hashOf "f499c5b84ef6de016fda9cd370091eab7d7d3d4d9d3ef69ed7208e9e6505706a")
+def note : Event := makeEvent eventNoteAdded (subjectCommercial deal) none none attrsEnd none
+def ne : Entry := makeEntry none (actorAgent "b") (createsEvent note)
+def book : Log := cons ce (cons ne nil)
+def full : Log := read Log book (queryReplay momentNow)
+def upto : Log := read Log book (queryReplay (momentAsOf (hashOf "f499c5b84ef6de016fda9cd370091eab7d7d3d4d9d3ef69ed7208e9e6505706a")))
+def later : Log := read Log book (queryTail (momentAsOf (hashOf "f499c5b84ef6de016fda9cd370091eab7d7d3d4d9d3ef69ed7208e9e6505706a")))
+def acts : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryAuditByActor (actorAgent "b"))
+def current : Option Commercial := read (Option Commercial) book (queryCommercial deal momentNow)
+def replayed : Commercial := makeCommercial commercialDeal "A" p "s" none "U" none statusOpen attrsEnd (some (refTo (hashOf "41e23bb96bade06725744425345487e1dc0804dba86955c5660fc26f44200caf")))
+def sound : Flag := read Flag book (queryProjectionSound deal replayed)

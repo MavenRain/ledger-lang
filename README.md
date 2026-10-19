@@ -42,14 +42,15 @@ No package installation is needed.
 its certificate to stdout. The certificate is one mechanism-lang module. Its
 last def claims that the render of the instances is the JSON document and
 its newline. A compile error gives the same line as
-`bin/ledgerc PROGRAM.ledger`. A form that the certificate does not cover
+`bin/ledgerc PROGRAM.ledger`. Thus a `read` of a query that the read path
+does not answer gives the refusal "the read path does not answer this
+query". A form that the certificate does not cover
 gives exit status 1 and the stderr line
 `PROGRAM.ledger: the certificate does not cover SUBJECT yet`. Examples of
 SUBJECT:
 
 - a checker name that the module does not bind, for example `Prod`, `Eq`
   or `fold`;
-- `the read path`;
 - `this step`, for a `Step` instance whose write the certificate does not
   cover;
 - `more than 24 hash blocks`, for a hashed entry text longer than 24
@@ -60,9 +61,13 @@ SUBJECT:
 `bin/ledgerc --certificate-core` writes the rows of `core/schema.def` and
 `core/ops.def` as one module. `make certificate-check` first runs the C
 certificate tests. Then it checks the core module and the certificates of
+the programs of `CERT_PROGRAMS` in the mechanism-lang kernel:
 `examples/crm.ledger`, `test/certificate-small.ledger`,
-`test/certificate-write1.ledger` and `test/certificate-write3.ledger` in the
-mechanism-lang kernel. Set `MECH_BIN` to the kernel executable. A watchdog
+`test/certificate-write1.ledger`, `test/certificate-write3.ledger` and the
+read programs `test/certificate-read-m2.ledger`,
+`test/certificate-read-m3.ledger` and `test/certificate-read-m4.ledger`.
+Set `CERT_EXTRA` to more programs to check (default empty). Set `MECH_BIN`
+to the kernel executable. A watchdog
 reads the RSS and the footprint of the kernel each 0.1 s and kills the
 check above `CERT_LIMIT` bytes (default 4294967296, 4 GB). The target fails
 if the kernel is absent, if `ledgerc` or the kernel refuses a module, if the
