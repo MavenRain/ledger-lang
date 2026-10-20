@@ -272,7 +272,14 @@ Encoding rules:
   order, as of the moment), `queryThread` (the root, then the Event records
   whose `parent` chain reaches the root, in log order) and
   `queryAuditByPolicy` (the Event records whose `policy` is `some policy`,
-  in log order) in the same way (docs/STATUS.md `## M6`).
+  in log order) in the same way. Part C answers `queryOwner` (`some` the
+  assignee of the last current `roleOwner` Assignment record of the
+  account, else `none`), `queryBook` (the distinct subjects of the current
+  Assignment records of the assignee, in the order of their first record)
+  and the pipeline keys `pipelineByOwner` and `pipelineByTerritory` (the
+  owner of a Commercial record is the owner of `accountCommercial c`, else
+  of `accountParty p`; no owner or no territory gives the empty key) in the
+  same way (docs/STATUS.md `## M6`).
 
 ## 7. Milestones
 

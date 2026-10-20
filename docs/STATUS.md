@@ -490,8 +490,8 @@ and the walks take no step (the D10 budget model).
   footprint 634340384 B (the kernel fc80b5d). The d3 case 109 holds the
   same program; its certificate case runs through CERT_EXTRA of the gate
   script.
-- The refusal "the read path does not answer this query" now names six
-  constructors: twenty-three of the 29 `Query` constructors have an answer.
+- The refusal "the read path does not answer this query" now names four
+  constructors: twenty-five of the 29 `Query` constructors have an answer.
 - Tests: `test_m6_evidence` and `test_m6_intact` in test/c-modules.c; the
   rows "m6 queryEvidence lists the artifact of an event", "m6
   queryArtifactIntact compares the sha256" and "m6 certificate of the
@@ -530,6 +530,43 @@ step and the walks take no step.
   subject as of a moment", "m6 queryThread lists the root then its
   descendants", "m6 queryAuditByPolicy lists the events of a policy" and
   "m6 certificate of the Event queries checks" in test/paths.test.mjs.
+
+Part C answers the two Assignment queries and the two remaining pipeline
+keys from the same records (`read_assignment` in compiler/checker.c, beside
+`read_event`; `pipeline_key` takes the key kind). An Assignment record is
+current when its `endedBy` is `none`. Two Accounts are equal when their
+constructor and their ref text are equal. Each entry takes one work step
+and the walks take no step.
+
+- `queryOwner account moment`: `some` the assignee of the last current
+  Assignment record whose `subject` equals `account` and whose `role` is
+  `roleOwner`, in log order, as of `moment`; `none` when there is no such
+  record.
+- `queryBook assignee moment`: the subjects of the current Assignment
+  records whose `assignee` is `assignee`, any role, distinct, in the order
+  of their first record, as of `moment` (ruling Q-M6-8 (a)).
+- `queryPipeline pipelineByOwner moment` and `queryPipeline
+  pipelineByTerritory moment`: the owner of a Commercial record is the
+  `queryOwner` answer of `accountCommercial c`, else of `accountParty p` for
+  its party (ruling Q-M6-10 (a)). The owner key is the ref text of the
+  assignee and the territory key is the `territory` of that Assignment
+  record; no owner or no territory gives the empty key. Every Commercial
+  record gets a key (ruling Q-M6-19 (a)). The refusal of the two keys goes.
+- The certificate. The core module answers the queries with the arms
+  `ownerRead` and `bookRead` of `readWithH` and the key function `pipeKey`
+  of the pipeline arms (core/certificate.def). The program
+  test/certificate-read-m6c.ledger (4 entries, 8 reads, 23 hash blocks) is
+  in CERT_PROGRAMS of `make certificate-check`: max RSS 1550663680 B,
+  footprint 2998930144 B (the kernel fc80b5d). The d3 case 111 holds the
+  same program; its certificate case runs through CERT_EXTRA of the gate
+  script.
+- Tests: `test_m6_owner`, `test_m6_book` and `test_m6_pipeline_keys` in
+  test/c-modules.c; the rows "m6 queryOwner gives the last current owner",
+  "m6 queryBook lists the distinct accounts of an assignee", "m6
+  queryPipeline by owner and by territory key on the owner assignment" and
+  "m6 certificate of the Assignment queries checks" in test/paths.test.mjs.
+  The row "queryPipeline by owner keeps the refusal" is now "queryPipeline
+  by owner gives the empty key with no assignments".
 
 ## Remaining M0 work
 

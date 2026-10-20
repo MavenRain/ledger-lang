@@ -3090,35 +3090,108 @@ static Nat record_is(const Value *record, const char *family) {
   return same_text(write_field(kType, record)->text, text_of_cstring(family));
 }
 
-/* Design item 5: the key text of the Commercial record: its stage, or with
-   close = 1 its expectedCloseOn. The value of some x is the value of x; none
+/* M6 part C (design item 10, rulings Q-M6-9 (a), Q-M6-10 (a), Q-M6-19 (a)):
+   the four keys of queryPipeline (the AccountList form). */
+typedef enum { KEY_STAGE, KEY_CLOSE, KEY_OWNER, KEY_TERRITORY } PipelineKeyKind;
+
+/* The kind of the PipelineKey tag key. */
+static PipelineKeyKind pipeline_key_kind(Text key) {
+  return same_text(key, text_of_cstring("pipelineByCloseDate")) == 1   ? KEY_CLOSE
+         : same_text(key, text_of_cstring("pipelineByOwner")) == 1     ? KEY_OWNER
+         : same_text(key, text_of_cstring("pipelineByTerritory")) == 1 ? KEY_TERRITORY
+                                                                       : KEY_STAGE;
+}
+
+/* M6 part C (design item 8): 1 when the Assignment record is current: its
+   endedBy field is none (the membership_current form). */
+static Nat assignment_current(const Value *record) { return commitment_field(record, "endedBy")->kind == VALUE_NULL; }
+
+/* The field name of the Ref of an Account value: party for accountParty,
+   commercial for accountCommercial. */
+static const char *account_key(const Value *account) {
+  return same_text(commitment_tag(account), text_of_cstring("accountParty")) == 1 ? "party" : "commercial";
+}
+
+/* The ref hash text of an Account value. */
+static Text account_hash(const Value *account) {
+  return write_field(kRefHash(), write_field(text_of_cstring(account_key(account)), account))->text;
+}
+
+/* Two Account values are the same when their constructors are the same and
+   their ref hashes are the same (the subject_same form). */
+static Nat account_same(const Value *a, const Value *b) {
+  return same_text(commitment_tag(a), commitment_tag(b)) == 1 && same_text(account_hash(a), account_hash(b)) == 1;
+}
+
+/* The Account value with the constructor tag whose field key is ref. */
+static const Value *account_of(const char *tag, const char *key, const Value *ref) {
+  return object_two(kSchemaTag(), text_value(text_of_cstring(tag)), text_of_cstring(key), ref);
+}
+
+/* Design item 8: the first record of walk (newest first, thus the last in
+   log order) that is a current Assignment record with role roleOwner whose
+   subject is the Account account; NULL when none. The walk takes no step. */
+static const Value *owner_assignment(const Located *walk, const Value *account) {
+  if (walk == NULL) return NULL;
+  const Value *record = walk->value;
+  Nat owner = record_is(record, "Assignment") == 1 && assignment_current(record) == 1 &&
+              same_text(commitment_tag(commitment_field(record, "role")), text_of_cstring("roleOwner")) == 1 &&
+              account_same(commitment_field(record, "subject"), account) == 1;
+  return owner == 1 ? record : owner_assignment(walk->tail, account);
+}
+
+/* Design item 10 (ruling Q-M6-10 (a)): the owner Assignment record of the
+   Commercial record: of accountCommercial with the record's ref, else of
+   accountParty with the record's party; NULL for neither, and for a record
+   of another family. records is the full walk. */
+static const Value *commercial_owner(const Value *record, const Located *records) {
+  if (record_is(record, "Commercial") != 1) return NULL;
+  const Value *ref = object_two(kRefKind(), text_value(text_of_cstring("kindCommercial")), kRefHash(),
+                                write_field(text_of_cstring("ref"), record));
+  const Value *direct = owner_assignment(records, account_of("accountCommercial", "commercial", ref));
+  return direct != NULL ? direct
+                        : owner_assignment(records, account_of("accountParty", "party", commitment_field(record, "party")));
+}
+
+/* Design items 5 and 10 (rulings Q-M6-9 (a) and Q-M6-19 (a)): the key text
+   of the Commercial record: its stage, its expectedCloseOn, the ref hash
+   text of the assignee of its owner Assignment, or the territory of that
+   Assignment. The value of some x is the value of x; none, or no owner,
    gives the empty Text. */
-static Text pipeline_key(const Value *record, Nat close) {
-  const Value *key = commitment_field(record, close == 1 ? "expectedCloseOn" : "stage");
+static Text pipeline_key(const Value *record, PipelineKeyKind kind, const Located *records) {
+  const Value *owner = kind == KEY_OWNER || kind == KEY_TERRITORY ? commercial_owner(record, records) : NULL;
+  const Value *key = kind == KEY_STAGE   ? commitment_field(record, "stage")
+                     : kind == KEY_CLOSE ? commitment_field(record, "expectedCloseOn")
+                     : owner == NULL     ? &null_value
+                     : kind == KEY_OWNER ? write_field(kRefHash(), commitment_field(owner, "assignee"))
+                                         : commitment_field(owner, "territory");
   return key->kind == VALUE_TEXT ? key->text : text_of_cstring("");
 }
 
 /* 1 when record is a Commercial record with the key text key. */
-static Nat pipeline_match(Text key, Nat close, const Value *record) {
-  return record_is(record, "Commercial") == 1 && same_text(pipeline_key(record, close), key) == 1;
+static Nat pipeline_match(Text key, PipelineKeyKind kind, const Located *records, const Value *record) {
+  return record_is(record, "Commercial") == 1 && same_text(pipeline_key(record, kind, records), key) == 1;
 }
 
-static Nat pipeline_seen(Text key, Nat close, const Located *walk) {
-  return walk == NULL ? 0 : pipeline_match(key, close, walk->value) == 1 ? 1 : pipeline_seen(key, close, walk->tail);
+static Nat pipeline_seen(Text key, PipelineKeyKind kind, const Located *records, const Located *walk) {
+  return walk == NULL                                       ? 0
+         : pipeline_match(key, kind, records, walk->value) == 1 ? 1
+                                                                : pipeline_seen(key, kind, records, walk->tail);
 }
 
-static Nat pipeline_count(Text key, Nat close, const Located *walk) {
+static Nat pipeline_count(Text key, PipelineKeyKind kind, const Located *records, const Located *walk) {
   return walk == NULL ? 0
-                      : nat_add_saturating(pipeline_match(key, close, walk->value), pipeline_count(key, close, walk->tail));
+                      : nat_add_saturating(pipeline_match(key, kind, records, walk->value),
+                                           pipeline_count(key, kind, records, walk->tail));
 }
 
 /* Design items 4 and 5: the saturating sum of amountCents = some n over the
    records of the key. A none adds 0. */
-static Nat pipeline_cents(Text key, Nat close, const Located *walk) {
+static Nat pipeline_cents(Text key, PipelineKeyKind kind, const Located *records, const Located *walk) {
   if (walk == NULL) return 0;
   const Value *amount = commitment_field(walk->value, "amountCents");
-  Nat cents = pipeline_match(key, close, walk->value) != 1 ? 0 : amount->kind == VALUE_NAT ? amount->number : 0;
-  return nat_add_saturating(cents, pipeline_cents(key, close, walk->tail));
+  Nat cents = pipeline_match(key, kind, records, walk->value) != 1 ? 0 : amount->kind == VALUE_NAT ? amount->number : 0;
+  return nat_add_saturating(cents, pipeline_cents(key, kind, records, walk->tail));
 }
 
 /* Design items 3 and 5: one Bucket for each distinct key text, in the order
@@ -3126,19 +3199,19 @@ static Nat pipeline_cents(Text key, Nat close, const Located *walk) {
    Commercial record whose key no older record has is the first record of
    its key, and its Bucket goes in front of the Buckets of the newer
    records. records is the full walk. */
-static int pipeline_buckets(Nat close, const Located *walk, const Located *records, const Values **items,
+static int pipeline_buckets(PipelineKeyKind kind, const Located *walk, const Located *records, const Values **items,
                             Failure *failure) {
   if (walk == NULL) return 1;
-  Text key = pipeline_key(walk->value, close);
-  if (record_is(walk->value, "Commercial") == 1 && pipeline_seen(key, close, walk->tail) != 1) {
+  Text key = pipeline_key(walk->value, kind, records);
+  if (record_is(walk->value, "Commercial") == 1 && pipeline_seen(key, kind, records, walk->tail) != 1) {
     const Value *bucket;
-    const Values *fields =
-        values_item(text_value(key), values_item(nat_value(pipeline_count(key, close, records)),
-                                                 values_item(nat_value(pipeline_cents(key, close, records)), NULL)));
+    const Values *fields = values_item(
+        text_value(key), values_item(nat_value(pipeline_count(key, kind, records, records)),
+                                     values_item(nat_value(pipeline_cents(key, kind, records, records)), NULL)));
     if (!write_value("Bucket", "makeBucket", fields, &bucket, failure)) return 0;
     *items = values_item(bucket, *items);
   }
-  return pipeline_buckets(close, walk->tail, records, items, failure);
+  return pipeline_buckets(kind, walk->tail, records, items, failure);
 }
 
 /* Design item 6 (delta A-2): 1 when record is a stage change: an Event
@@ -3169,7 +3242,7 @@ static Text stage_deal(const Value *record) {
 static Nat stage_seen(Text stage, const Located *walk) {
   if (walk == NULL) return 0;
   Nat names = record_is(walk->value, "Commercial") == 1
-                  ? pipeline_match(stage, 0, walk->value)
+                  ? pipeline_match(stage, KEY_STAGE, NULL, walk->value)
                   : stage_change(walk->value) == 1 && (stage_names(walk->value, "before", stage) == 1 ||
                                                        stage_names(walk->value, "after", stage) == 1);
   return names == 1 ? 1 : stage_seen(stage, walk->tail);
@@ -3246,7 +3319,7 @@ static Nat stage_exit(Text deal, Text stage, Nat enter, Index changes, Nat total
 static Nat stage_entries(Text stage, const Located *walk, Nat count, Index changes, Nat total) {
   if (walk == NULL) return 0;
   const Value *record = walk->value;
-  Nat created = pipeline_match(stage, 0, record);
+  Nat created = pipeline_match(stage, KEY_STAGE, NULL, record);
   Nat moved = stage_change(record) == 1 && stage_names(record, "after", stage) == 1;
   Text deal = created == 1 ? write_field(text_of_cstring("ref"), record)->text : stage_deal(record);
   Nat enter = count - 1;
@@ -3309,18 +3382,16 @@ static const Values *stale_deals(Nat quiet, const Located *walk, Nat count, Inde
    projection of the log (project_entries): each entry takes one work step,
    and the walks take no step. queryPipeline at momentAsOf h projects the
    entries up to and including the first entry whose hash is h; a hash that
-   names no entry gives nil. pipelineByOwner and pipelineByTerritory give
-   eRead at position with left budget. queryStageStats and queryStaleDeals
+   names no entry gives nil. pipelineByOwner and pipelineByTerritory (M6
+   part C, design item 10) key each Commercial record on its owner
+   Assignment: see pipeline_key. queryStageStats and queryStaleDeals
    read the full log. The position of a record is its index in log order,
    and L is the number of records (delta A-1). */
 static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat pipeline,
                          Nat stats, const Value **value, Nat *left, Failure *failure) {
   Text key = commitment_tag(write_field(text_of_cstring("key"), query));
-  Nat close = same_text(key, text_of_cstring("pipelineByCloseDate"));
-  Nat refused = pipeline == 1 && (same_text(key, text_of_cstring("pipelineByOwner")) == 1 ||
-                                  same_text(key, text_of_cstring("pipelineByTerritory")) == 1);
+  PipelineKeyKind kind = pipeline_key_kind(key);
   *left = budget;
-  if (refused == 1) return fail_at(failure, position, eRead);
   const Value *moment = write_field(text_of_cstring("moment"), query);
   Nat asof = pipeline == 1 && same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf")) == 1;
   Text none = {NULL, 0};
@@ -3333,7 +3404,7 @@ static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values 
   Nat total = index.count;
   const Value *quiet = write_field(text_of_cstring("quietEntries"), query);
   const Values *answer = NULL;
-  if (pipeline == 1 && !pipeline_buckets(close, known, known, &answer, failure)) return 0;
+  if (pipeline == 1 && !pipeline_buckets(kind, known, known, &answer, failure)) return 0;
   if (stats == 1 && !stage_stats(stage_list(known, NULL), known, total, stage_index(known, total), &answer, failure))
     return 0;
   *value = items_value(pipeline == 1 || stats == 1
@@ -3783,6 +3854,54 @@ static int read_event(Fuel hash_fuel, Nat budget, Nat position, const Values *it
   return 1;
 }
 
+/* 1 when an item of items is the same Account as account. */
+static Nat account_in(const Values *items, const Value *account) {
+  return items == NULL ? 0 : account_same(items->head, account) == 1 ? 1 : account_in(items->tail, account);
+}
+
+/* M6 part C (design item 9, ruling Q-M6-8 (a)): the distinct subject
+   Accounts of the current Assignment records of records (in log order)
+   whose assignee hash is hash, any role, in the order of their first
+   record. seen holds the Accounts given so far. The walk takes no step. */
+static const Values *book_items(const Values *records, Text hash, const Values *seen) {
+  if (records == NULL) return NULL;
+  const Value *subject = commitment_field(records->head, "subject");
+  Nat fresh = record_is(records->head, "Assignment") == 1 && assignment_current(records->head) == 1 &&
+              same_text(write_field(kRefHash(), commitment_field(records->head, "assignee"))->text, hash) == 1 &&
+              account_in(seen, subject) != 1;
+  return fresh == 1 ? values_item(subject, book_items(records->tail, hash, values_item(subject, seen)))
+                    : book_items(records->tail, hash, seen);
+}
+
+/* M6 part C (design items 8 and 9, rulings Q-M6-8 (a) and Q-M6-10 (a)):
+   queryOwner (owner = 1) and queryBook. The records are the projection of
+   the log (project_entries), as read_event: each entry takes one work step,
+   and the walks take no step. Both stop at the entry of momentAsOf (the
+   read_pipeline form: a hash that names no entry gives none or nil).
+   queryOwner gives the assignee of the last current Assignment record in
+   log order with role roleOwner whose subject is the Account, else none.
+   queryBook gives book_items of the known records. */
+static int read_assignment(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat owner,
+                           const Value **value, Nat *left, Failure *failure) {
+  const Value *moment = write_field(text_of_cstring("moment"), query);
+  Nat asof = same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf"));
+  Text none = {NULL, 0};
+  Text stop = asof == 1 ? write_field(text_of_cstring("entry"), moment)->text : none;
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  const Located *known = asof == 1 && found == 0 ? NULL : records;
+  if (owner == 1) {
+    const Value *record = owner_assignment(known, write_field(text_of_cstring("subject"), query));
+    *value = record == NULL ? &null_value : commitment_field(record, "assignee");
+    return 1;
+  }
+  Text hash = write_field(kRefHash(), write_field(text_of_cstring("assignee"), query))->text;
+  *value = items_value(book_items(log_order(known, NULL), hash, NULL));
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -3795,7 +3914,8 @@ static int read_event(Fuel hash_fuel, Nat budget, Nat position, const Values *it
    the answer of read_account, queryReviewQueue (M4 part C) the answer of
    read_review, queryEvidence and queryArtifactIntact (M6 part A) the
    answer of read_artifact, and queryTimeline, queryThread and
-   queryAuditByPolicy (M6 part B) the answer of read_event. Each other tag
+   queryAuditByPolicy (M6 part B) the answer of read_event, and queryOwner
+   and queryBook (M6 part C) the answer of read_assignment. Each other tag
    gives eRead at position (the read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
@@ -3828,6 +3948,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat timeline = same_text(tag, text_of_cstring("queryTimeline"));
   Nat thread = same_text(tag, text_of_cstring("queryThread"));
   Nat policy = same_text(tag, text_of_cstring("queryAuditByPolicy"));
+  Nat owner = same_text(tag, text_of_cstring("queryOwner"));
+  Nat book = same_text(tag, text_of_cstring("queryBook"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (read_count(items) > LOG_LIMIT) return fail_at(failure, position, eReadLimit);
@@ -3846,6 +3968,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
     return read_artifact(hash_fuel, ready, position, items, query, evidence, value, left, failure);
   if (timeline == 1 || thread == 1 || policy == 1)
     return read_event(hash_fuel, ready, position, items, query, timeline, thread, value, left, failure);
+  if (owner == 1 || book == 1)
+    return read_assignment(hash_fuel, ready, position, items, query, owner, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   Index index;

@@ -681,8 +681,8 @@ test('queryPipeline as of an entry stops at that entry', () => {
   assert.deepEqual(pipelineOf('pipelineByStage', asOf(named(pipeLog).e1)), [bucketOf('qualify', 1, 1000)]);
 });
 
-test('queryPipeline by owner keeps the refusal', () => {
-  reject(`${pipeLog}def r : List Bucket := read (List Bucket) book (queryPipeline pipelineByOwner momentNow)`, readError, 'read');
+test('queryPipeline by owner gives the empty key with no assignments', () => {
+  assert.deepEqual(pipelineOf('pipelineByOwner', 'momentNow'), [bucketOf('', 3, 1500)]);
 });
 
 test('queryStageStats counts entered, advanced and the entries in each stage', () => {
@@ -1062,4 +1062,74 @@ test('m6 certificate of the Event queries checks', () => {
   assert.match(certified.stdout, /timelineRead/);
   assert.match(certified.stdout, /threadRead/);
   assert.match(certified.stdout, /auditPolicyRead/);
+});
+
+// M6 part C (design items 8 to 10): the Assignment queries and the owner and
+// territory pipeline keys. The log: a Commercial of who (x1), al owner of
+// accountCommercial x1 with territory "w" (a1), bo owner of accountParty who
+// (a2), al owner of x1 again (a3, the duplicate account), dan owner of x1
+// ended by an Event (a4, not current) and a second Commercial of who (x6,
+// no Assignment of its own: the owner comes from a2, the territory key is
+// empty). The ref of x1 is a literal, so the log is built in two passes.
+const assignFirst = [
+  'def who : Ref kindParty := refTo (hashOf "p")',
+  'def al : Ref kindParty := refTo (hashOf "al")',
+  'def bo : Ref kindParty := refTo (hashOf "bo")',
+  'def dan : Ref kindParty := refTo (hashOf "dan")',
+  'def d1 : Commercial := makeCommercial commercialDeal "D" who "q" (some 100) "U" none statusOpen attrsEnd none',
+  'def x1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1)',
+  ''
+].join('\n');
+const assignHash = () => sha256(named(assignFirst).x1);
+const assignAccount = () => `(accountCommercial (refTo (hashOf "${assignHash()}")))`;
+const assignLog = () => {
+  const prov = '(makeProvenance none none none)';
+  return assignFirst + [
+    `def a1 : Assignment := makeAssignment ${assignAccount()} al roleOwner (some "w") none ${prov}`,
+    'def x2 : Entry := makeEntry none (actorAgent "a") (createsAssignment a1)',
+    `def a2 : Assignment := makeAssignment (accountParty who) bo roleOwner none none ${prov}`,
+    'def x3 : Entry := makeEntry none (actorAgent "a") (createsAssignment a2)',
+    `def a3 : Assignment := makeAssignment ${assignAccount()} al roleOwner (some "w") none ${prov}`,
+    'def x4 : Entry := makeEntry none (actorAgent "b") (createsAssignment a3)',
+    `def a4 : Assignment := makeAssignment ${assignAccount()} dan roleOwner none (some (refTo (hashOf "end"))) ${prov}`,
+    'def x5 : Entry := makeEntry none (actorAgent "a") (createsAssignment a4)',
+    'def d2 : Commercial := makeCommercial commercialDeal "E" who "q" (some 30) "U" none statusOpen attrsEnd none',
+    'def x6 : Entry := makeEntry none (actorAgent "a") (createsCommercial d2)',
+    'def book : Log := cons x1 (cons x2 (cons x3 (cons x4 (cons x5 (cons x6 nil)))))',
+    ''
+  ].join('\n');
+};
+const assigneeRef = hash => ({ kind: 'kindParty', hash });
+const assignAnswer = (type, query) => termAnswer(assignLog(), type, query);
+
+test('m6 queryOwner gives the last current owner', () => {
+  const owner = (account, moment) => assignAnswer('Option (Ref kindParty)', `queryOwner ${account} ${moment}`);
+  assert.deepEqual(owner(assignAccount(), 'momentNow'), assigneeRef('al'));
+  assert.deepEqual(owner('(accountParty who)', 'momentNow'), assigneeRef('bo'));
+  assert.equal(owner(assignAccount(), `(momentAsOf (hashOf "${assignHash()}"))`), null);
+});
+
+test('m6 queryBook lists the distinct accounts of an assignee', () => {
+  const book = assignee => assignAnswer('List Account', `queryBook ${assignee} momentNow`);
+  assert.deepEqual(book('al'), [{ tag: 'accountCommercial', commercial: { kind: 'kindCommercial', hash: assignHash() } }]);
+  assert.deepEqual(book('bo'), [{ tag: 'accountParty', party: assigneeRef('p') }]);
+  assert.deepEqual(book('dan'), []);
+  assert.deepEqual(book('(refTo (hashOf "zz"))'), []);
+});
+
+test('m6 queryPipeline by owner and by territory key on the owner assignment', () => {
+  const keyed = key => assignAnswer('List Bucket', `queryPipeline ${key} momentNow`);
+  assert.deepEqual(keyed('pipelineByOwner'), [bucketOf('al', 1, 100), bucketOf('bo', 1, 30)]);
+  assert.deepEqual(keyed('pipelineByTerritory'), [bucketOf('w', 1, 100), bucketOf('', 1, 30)]);
+});
+
+// The kernel check of the program stays in `make certificate-check`.
+test('m6 certificate of the Assignment queries checks', () => {
+  const program = fileURLToPath(new URL('../test/certificate-read-m6c.ledger', import.meta.url));
+  const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(certified.status, 0, certified.stderr);
+  assert.match(certified.stdout, /ownerRead/);
+  assert.match(certified.stdout, /bookRead/);
+  assert.match(certified.stdout, /pipeKey/);
 });

@@ -1,0 +1,22 @@
+-- M6 part C (design items 8 to 10): queryOwner, queryBook and the two pipeline keys over one log of 4 entries (23 hash blocks).
+-- d1 (Commercial of who; a1 = al owner of accountCommercial d1, territory w), a2 (bo owner of accountParty who, no territory), d2 (a second Commercial of who: the owner comes from a2, the empty territory key).
+def who : Ref kindParty := refTo (hashOf "p")
+def al : Ref kindParty := refTo (hashOf "al")
+def bo : Ref kindParty := refTo (hashOf "bo")
+def d1 : Commercial := makeCommercial commercialDeal "D" who "q" (some 100) "U" none statusOpen attrsEnd none
+def x1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1)
+def a1 : Assignment := makeAssignment (accountCommercial (refTo (hashOf "7e6631cb21c3f62ea9a8846408ce89a11a23fc2eff83dad5a05bf9451433c1fa"))) al roleOwner (some "w") none (makeProvenance none none none)
+def x2 : Entry := makeEntry none (actorAgent "a") (createsAssignment a1)
+def a2 : Assignment := makeAssignment (accountParty who) bo roleOwner none none (makeProvenance none none none)
+def x3 : Entry := makeEntry none (actorAgent "a") (createsAssignment a2)
+def d2 : Commercial := makeCommercial commercialDeal "E" who "q" (some 30) "U" none statusOpen attrsEnd none
+def x4 : Entry := makeEntry none (actorAgent "a") (createsCommercial d2)
+def book : Log := cons x1 (cons x2 (cons x3 (cons x4 nil)))
+def o1 : Option (Ref kindParty) := read (Option (Ref kindParty)) book (queryOwner (accountCommercial (refTo (hashOf "7e6631cb21c3f62ea9a8846408ce89a11a23fc2eff83dad5a05bf9451433c1fa"))) momentNow)
+def o2 : Option (Ref kindParty) := read (Option (Ref kindParty)) book (queryOwner (accountParty who) momentNow)
+def o0 : Option (Ref kindParty) := read (Option (Ref kindParty)) book (queryOwner (accountCommercial (refTo (hashOf "7e6631cb21c3f62ea9a8846408ce89a11a23fc2eff83dad5a05bf9451433c1fa"))) (momentAsOf (hashOf "7e6631cb21c3f62ea9a8846408ce89a11a23fc2eff83dad5a05bf9451433c1fa")))
+def b1 : List Account := read (List Account) book (queryBook al momentNow)
+def b2 : List Account := read (List Account) book (queryBook bo momentNow)
+def b0 : List Account := read (List Account) book (queryBook (refTo (hashOf "zz")) momentNow)
+def k1 : List Bucket := read (List Bucket) book (queryPipeline pipelineByOwner momentNow)
+def k2 : List Bucket := read (List Bucket) book (queryPipeline pipelineByTerritory momentNow)

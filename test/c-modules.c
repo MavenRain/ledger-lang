@@ -5014,11 +5014,11 @@ static void test_m4_pipeline_queries(void) {
                    paired(&query_storage[2], "queryPipeline", "key", &by_stage, "moment", as_of_d1), &value, &left,
                    &failure));
   assert(left == 6 && read_count(value->items) == 1 && bucket_is(pipeline_at(value, 0), "qualify", 1, 1000) == 1);
-  /* By owner keeps the refusal: eRead at the read application, left 8. */
-  Failure refused = {0, {NULL, 0}, {NULL, 0}};
-  assert(!read_step(1000, 9, 7, answer, a, paired(&query_storage[3], "queryPipeline", "key", &by_owner, "moment", now),
-                    &value, &left, &refused));
-  assert(left == 8 && refused.position == 7 && same_text(refused.message, eRead));
+  /* By owner (M6 part C): no Assignment record gives the one bucket of the
+     empty key (3, 1500); 1 + 4 steps. */
+  assert(read_step(1000, 9, 7, answer, a, paired(&query_storage[3], "queryPipeline", "key", &by_owner, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 4 && read_count(value->items) == 1 && bucket_is(pipeline_at(value, 0), "", 3, 1500) == 1);
   /* queryStaleDeals 0 lists d1, d2 and d3; 4 (= L) gives nil. */
   assert(read_step(1000, 9, 7, answer, a, tagged(&stale_storage[0], "queryStaleDeals", "quietEntries", &quiet[0]),
                    &value, &left, &failure));
@@ -6129,6 +6129,195 @@ static void test_m5_core_module(void) {
   assert(kept == 246 && lines == kept);
 }
 
+/* M6 part C: a log of 8 entries. c1 (Commercial of the party who, 1000
+   cents), a1 (alice owner of accountCommercial c1, territory west), a2 (bob
+   owner of accountParty who, no territory), a3 (carol roleSdr of c1), a5
+   (alice owner of c1 again, territory west), a4 (dan owner of c1, ended),
+   c2 (Commercial of the party other, 700 cents: no owner), c3 (Commercial
+   of who, 50 cents: the owner comes from a2). The AccountEntry cap is 5
+   fields: provenance is not given. */
+typedef struct {
+  Value kind_party, kind_commercial, kind_event, who_hash, other_hash, end_hash, west, cents[3], none, people_hash[5];
+  Attrs who_fields[2], other_fields[2], end_fields[2], c1_fields[2], assignee_fields[5][2];
+  Value who_ref, other_ref, end_ref, c1_ref, assignees[5];
+  Tagged accounts[2], roles[2];
+  AccountEntry entries[8];
+  Values cells[8];
+  Value log;
+  Text hashes[8];
+  Value hash_texts[8];
+} AssignLog;
+
+/* The Ref value {kind, hash} in the two fields. */
+static const Value *assign_ref(Attrs fields[2], Value *ref, const Value *kind, const Value *hash) {
+  fields[1] = (Attrs){text("hash"), hash, NULL};
+  fields[0] = (Attrs){text("kind"), kind, &fields[1]};
+  *ref = (Value){.kind = VALUE_ATTRS, .attrs = &fields[0]};
+  return ref;
+}
+
+static const Value *assign_log(AssignLog *s, Nat *left, Failure *failure) {
+  s->kind_party = account_text("kindParty");
+  s->kind_commercial = account_text("kindCommercial");
+  s->kind_event = account_text("kindEvent");
+  s->who_hash = account_text("who-1");
+  s->other_hash = account_text("other-1");
+  s->end_hash = account_text("end-1");
+  s->west = account_text("west");
+  s->none = (Value){.kind = VALUE_NULL};
+  s->cents[0] = (Value){.kind = VALUE_NAT, .number = 1000};
+  s->cents[1] = (Value){.kind = VALUE_NAT, .number = 700};
+  s->cents[2] = (Value){.kind = VALUE_NAT, .number = 50};
+  const char *const people[5] = {"alice", "bob", "carol", "alice", "dan"};
+  for (Nat at = 0; at < 5; at++) {
+    s->people_hash[at] = account_text(people[at]);
+    assign_ref(s->assignee_fields[at], &s->assignees[at], &s->kind_party, &s->people_hash[at]);
+  }
+  assign_ref(s->who_fields, &s->who_ref, &s->kind_party, &s->who_hash);
+  assign_ref(s->other_fields, &s->other_ref, &s->kind_party, &s->other_hash);
+  assign_ref(s->end_fields, &s->end_ref, &s->kind_event, &s->end_hash);
+  assign_ref(s->c1_fields, &s->c1_ref, &s->kind_commercial, &s->hash_texts[0]);
+  const Value *c1 = tagged(&s->accounts[0], "accountCommercial", "commercial", &s->c1_ref);
+  const Value *who = tagged(&s->accounts[1], "accountParty", "party", &s->who_ref);
+  const Value *owner = tagged(&s->roles[0], "roleOwner", NULL, NULL);
+  const Value *sdr = tagged(&s->roles[1], "roleSdr", NULL, NULL);
+  const char *const deal_keys[2] = {"party", "amountCents"};
+  const char *const keys[5] = {"subject", "assignee", "role", "territory", "endedBy"};
+  const Value *entries[8] = {
+      account_entry(&s->entries[0], "createsCommercial", "commercial", 2, deal_keys,
+                    (const Value *const[]){&s->who_ref, &s->cents[0]}),
+      account_entry(&s->entries[1], "createsAssignment", "assignment", 5, keys,
+                    (const Value *const[]){c1, &s->assignees[0], owner, &s->west, &s->none}),
+      account_entry(&s->entries[2], "createsAssignment", "assignment", 5, keys,
+                    (const Value *const[]){who, &s->assignees[1], owner, &s->none, &s->none}),
+      account_entry(&s->entries[3], "createsAssignment", "assignment", 5, keys,
+                    (const Value *const[]){c1, &s->assignees[2], sdr, &s->none, &s->none}),
+      account_entry(&s->entries[4], "createsAssignment", "assignment", 5, keys,
+                    (const Value *const[]){c1, &s->assignees[3], owner, &s->west, &s->none}),
+      account_entry(&s->entries[5], "createsAssignment", "assignment", 5, keys,
+                    (const Value *const[]){c1, &s->assignees[4], owner, &s->none, &s->end_ref}),
+      account_entry(&s->entries[6], "createsCommercial", "commercial", 2, deal_keys,
+                    (const Value *const[]){&s->other_ref, &s->cents[1]}),
+      account_entry(&s->entries[7], "createsCommercial", "commercial", 2, deal_keys,
+                    (const Value *const[]){&s->who_ref, &s->cents[2]})};
+  for (Nat at = 0; at < 8; at++) {
+    assert(entry_hash(1000, 1, 0, entries[at], &s->hashes[at], left, failure));
+    s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+    s->cells[at] = (Values){entries[at], at + 1 < 8 ? &s->cells[at + 1] : NULL};
+  }
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->cells[0]};
+  return &s->log;
+}
+
+/* 1 when value is the Ref kindParty whose hash is hash. */
+static Nat party_ref_is(const Value *value, const char *hash) {
+  return same_text(pipeline_field(value, "kind")->text, text("kindParty")) == 1 &&
+         same_text(pipeline_field(value, "hash")->text, text(hash)) == 1;
+}
+
+/* 1 when item is the Account with the constructor tag whose field key is a
+   Ref with the hash hash. */
+static Nat account_is(const Value *item, const char *tag, const char *key, Text hash) {
+  return same_text(pipeline_field(item, "tag")->text, text(tag)) == 1 &&
+         same_text(pipeline_field(pipeline_field(item, key), "hash")->text, hash) == 1;
+}
+
+/* M6 part C (design item 8): queryOwner on the AssignLog. 1 step and 1 step
+   for each of the 8 entries. */
+static void test_m6_owner(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  AssignLog storage;
+  const Value *log = assign_log(&storage, &left, &failure);
+  Tagged c1_storage, who_storage, now_storage, as_of_storage;
+  QueryTwo query_storage[3];
+  const Value *c1 = tagged(&c1_storage, "accountCommercial", "commercial", &storage.c1_ref);
+  const Value *who = tagged(&who_storage, "accountParty", "party", &storage.who_ref);
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *as_of_c1 = tagged(&as_of_storage, "momentAsOf", "entry", &storage.hash_texts[0]);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* c1: alice by a5, the last current owner; not dan (a4, ended) and not
+     carol (a3, roleSdr). */
+  assert(read_step(1000, 20, 7, answer, log, query_two(&query_storage[0], "queryOwner", "subject", c1, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 11 && party_ref_is(value, "alice") == 1);
+  /* who: bob by a2. */
+  assert(read_step(1000, 20, 7, answer, log, query_two(&query_storage[1], "queryOwner", "subject", who, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 11 && party_ref_is(value, "bob") == 1);
+  /* c1 as of the entry of c1: no Assignment record yet gives none; 1 + 1
+     steps. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[2], "queryOwner", "subject", c1, "moment", as_of_c1), &value, &left,
+                   &failure));
+  assert(left == 18 && value->kind == VALUE_NULL);
+}
+
+/* M6 part C (design item 9, ruling Q-M6-8 (a)): queryBook on the AssignLog. */
+static void test_m6_book(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  AssignLog storage;
+  const Value *log = assign_log(&storage, &left, &failure);
+  Tagged now_storage;
+  QueryTwo query_storage[4];
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* alice: a1 and a5 both name c1: one Account; 1 + 8 steps. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[0], "queryBook", "assignee", &storage.assignees[0], "moment", now), &value,
+                   &left, &failure));
+  assert(left == 11 && read_count(value->items) == 1 &&
+         account_is(pipeline_at(value, 0), "accountCommercial", "commercial", storage.hashes[0]) == 1);
+  /* carol (roleSdr): [c1]. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[1], "queryBook", "assignee", &storage.assignees[2], "moment", now), &value,
+                   &left, &failure));
+  assert(read_count(value->items) == 1 &&
+         account_is(pipeline_at(value, 0), "accountCommercial", "commercial", storage.hashes[0]) == 1);
+  /* bob: [accountParty who]. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[2], "queryBook", "assignee", &storage.assignees[1], "moment", now), &value,
+                   &left, &failure));
+  assert(read_count(value->items) == 1 && account_is(pipeline_at(value, 0), "accountParty", "party", text("who-1")) == 1);
+  /* dan: the one record (a4) is ended: nil. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[3], "queryBook", "assignee", &storage.assignees[4], "moment", now), &value,
+                   &left, &failure));
+  assert(read_count(value->items) == 0);
+}
+
+/* M6 part C (design item 10, rulings Q-M6-9 (a) and Q-M6-10 (a)):
+   queryPipeline by owner and by territory on the AssignLog. */
+static void test_m6_pipeline_keys(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  AssignLog storage;
+  const Value *log = assign_log(&storage, &left, &failure);
+  Value by_owner = {.kind = VALUE_TEXT, .text = text("pipelineByOwner")};
+  Value by_territory = {.kind = VALUE_TEXT, .text = text("pipelineByTerritory")};
+  Tagged now_storage;
+  Paired query_storage[2];
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* By owner: alice (1, 1000) for c1 by a5, "" (1, 700) for c2 (no
+     Assignment), bob (1, 50) for c3 by the party who (a2); 1 + 8 steps. */
+  assert(read_step(1000, 20, 7, answer, log, paired(&query_storage[0], "queryPipeline", "key", &by_owner, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 11 && read_count(value->items) == 3 && bucket_is(pipeline_at(value, 0), "alice", 1, 1000) == 1 &&
+         bucket_is(pipeline_at(value, 1), "", 1, 700) == 1 && bucket_is(pipeline_at(value, 2), "bob", 1, 50) == 1);
+  /* By territory: west (1, 1000), then "" (2, 750): c2 has no owner and the
+     owner of c3 (a2) has no territory. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   paired(&query_storage[1], "queryPipeline", "key", &by_territory, "moment", now), &value, &left,
+                   &failure));
+  assert(read_count(value->items) == 2 && bucket_is(pipeline_at(value, 0), "west", 1, 1000) == 1 &&
+         bucket_is(pipeline_at(value, 1), "", 2, 750) == 1);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -6217,6 +6406,9 @@ int main(void) {
   test_m6_timeline();
   test_m6_thread();
   test_m6_audit_policy();
+  test_m6_owner();
+  test_m6_book();
+  test_m6_pipeline_keys();
   puts("C module tests passed");
   return 0;
 }
