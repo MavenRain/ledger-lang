@@ -267,8 +267,12 @@ Encoding rules:
   Event with `artifact = some a` gives `[a]`, an Artifact entry gives its
   own ref, each other case gives `nil`) and `queryArtifactIntact` (`flagYes`
   when the `sha256` of the Artifact record equals the digest, else `flagNo`)
-  from the records, in the compiler and in the certificate (docs/STATUS.md
-  `## M6`).
+  from the records, in the compiler and in the certificate. Part B answers
+  `queryTimeline` (the refs of the Event records of the subject, in log
+  order, as of the moment), `queryThread` (the root, then the Event records
+  whose `parent` chain reaches the root, in log order) and
+  `queryAuditByPolicy` (the Event records whose `policy` is `some policy`,
+  in log order) in the same way (docs/STATUS.md `## M6`).
 
 ## 7. Milestones
 

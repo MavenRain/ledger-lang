@@ -4784,15 +4784,15 @@ static void test_m3_membership_queries(void) {
 static void test_m2_read_callback_check(void) {
   const char *prefix =
       "def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-      "def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow "
-      "def F : Type 0 := (n : Nat) -> List (Ref kindEvent) "
+      "def ask : Query (List Missing) := queryDryRun deal \"x\" "
+      "def F : Type 0 := (n : Nat) -> List Missing "
       "def ignore : (f : F) -> Nat := fun (f : F) => 3 ";
   char source[2048];
   const Bindings *environment = NULL;
   Failure failure = {0};
   snprintf(source, sizeof source,
            "%sdef wrap : (n : Nat) -> Nat := fun (n : Nat) => "
-           "ignore (fun (k : Nat) => read (List (Ref kindEvent)) nil ask) def out : Nat := wrap 0", prefix);
+           "ignore (fun (k : Nat) => read (List Missing) nil ask) def out : Nat := wrap 0", prefix);
   assert(check_definitions(text(source), &environment, &failure));
   const Binding *out;
   assert(lookup(text("out"), environment, &out));
@@ -4800,9 +4800,9 @@ static void test_m2_read_callback_check(void) {
 
   /* Checking a callback must not suppress refusal when it is invoked. */
   snprintf(source, sizeof source,
-           "%sdef call : (f : F) -> List (Ref kindEvent) := fun (f : F) => f 0 "
-           "def wrap : (n : Nat) -> List (Ref kindEvent) := fun (n : Nat) => "
-           "call (fun (k : Nat) => read (List (Ref kindEvent)) nil ask) def out : List (Ref kindEvent) := wrap 0", prefix);
+           "%sdef call : (f : F) -> List Missing := fun (f : F) => f 0 "
+           "def wrap : (n : Nat) -> List Missing := fun (n : Nat) => "
+           "call (fun (k : Nat) => read (List Missing) nil ask) def out : List Missing := wrap 0", prefix);
   environment = NULL;
   failure = (Failure){0};
   assert(!check_definitions(text(source), &environment, &failure));
@@ -4814,18 +4814,18 @@ static void test_m2_read_check_parity(void) {
   const Bindings *environment = NULL;
   Failure failure = {0};
   assert(check_definitions(text("def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-                                "def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow"),
+                                "def ask : Query (List Missing) := queryDryRun deal \"x\""),
                            &environment, &failure));
   const LType *flag;
   Tokens rest;
   Nat left;
-  assert(parse_type(1000, 1000, 0, environment, lexed("List (Ref kindEvent)"), &flag, &rest, &left, &failure));
+  assert(parse_type(1000, 1000, 0, environment, lexed("List Missing"), &flag, &rest, &left, &failure));
   Binding markers[] = {check_marker(), body_marker(0)};
   for (Nat i = 0; i < 2; i++) {
     Bindings scope = {.head = markers[i], .tail = environment};
     const Value *value;
     const Term *node = NULL;
-    assert(parse_term(1000, 1, 0, flag, &scope, lexed("read (List (Ref kindEvent)) nil ask"), &value, &rest, &left, &node, &failure));
+    assert(parse_term(1000, 1, 0, flag, &scope, lexed("read (List Missing) nil ask"), &value, &rest, &left, &node, &failure));
     assert(left == 1 && same_text(printed(value), text("null")));
     assert(eval_term(1000, 1, flag, &scope, node, &value, &left, &failure));
     assert(left == 1 && same_text(printed(value), text("null")));
@@ -4833,7 +4833,7 @@ static void test_m2_read_check_parity(void) {
     assert(!eval_term(1000, 1, flag, environment, node, &value, &left, &failure));
     assert(left == 0 && same_text(failure.message, eRead));
     failure = (Failure){0};
-    assert(!parse_term(1000, 1, 0, flag, &scope, lexed("read (List (Ref kindEvent)) nil 3"), &value, &rest, &left, NULL, &failure));
+    assert(!parse_term(1000, 1, 0, flag, &scope, lexed("read (List Missing) nil 3"), &value, &rest, &left, NULL, &failure));
     assert(same_text(failure.message, eTerm));
   }
 }
@@ -5618,6 +5618,192 @@ static void test_m6_intact(void) {
   assert(left == 0 && same_text(starved.message, eBudget));
 }
 
+typedef struct { Value name; Attrs second; Attrs first; Attrs tag; Value value; } QueryTwo;
+
+/* M6 part B: a query with the two fields first and second. */
+static const Value *query_two(QueryTwo *s, const char *tag, const char *first, const Value *a, const char *second,
+                              const Value *b) {
+  s->name = (Value){.kind = VALUE_TEXT, .text = text(tag)};
+  s->second = (Attrs){text(second), b, NULL};
+  s->first = (Attrs){text(first), a, &s->second};
+  s->tag = (Attrs){text("tag"), &s->name, &s->first};
+  s->value = (Value){.kind = VALUE_ATTRS, .attrs = &s->tag};
+  return &s->value;
+}
+
+/* M6 part B (test plan): the log of the Event rows: entry 0 an Event of
+   subjectParty who with parent none and policy some rule; entry 1 an
+   Event of subjectCommercial deal with parent some entry 0 and policy
+   none; entry 2 an Event of subjectParty who with parent some entry 1 and
+   policy some rule. hashes holds the entry hashes; parents the refs of
+   kind kindEvent to entries 0 and 1. */
+typedef struct {
+  Value kind_party, kind_commercial, kind_event, kind_policy, who_hash, deal_hash, rule_hash, none;
+  Attrs who_fields[2], deal_fields[2], rule_fields[2], parent_fields[2][2];
+  Value who_ref, deal_ref, rule_ref, parents[2];
+  Tagged subjects[2];
+  AccountEntry entries[3];
+  Values cells[3];
+  Value log;
+  Text hashes[3];
+  Value hash_texts[3];
+} EventLog;
+
+static const Value *event_log(EventLog *s, Nat *left, Failure *failure) {
+  s->kind_party = account_text("kindParty");
+  s->kind_commercial = account_text("kindCommercial");
+  s->kind_event = account_text("kindEvent");
+  s->kind_policy = account_text("kindPolicy");
+  s->who_hash = account_text("who-1");
+  s->deal_hash = account_text("deal-1");
+  s->rule_hash = account_text("rule-1");
+  s->none = (Value){.kind = VALUE_NULL};
+  s->who_fields[1] = (Attrs){text("hash"), &s->who_hash, NULL};
+  s->who_fields[0] = (Attrs){text("kind"), &s->kind_party, &s->who_fields[1]};
+  s->who_ref = (Value){.kind = VALUE_ATTRS, .attrs = &s->who_fields[0]};
+  s->deal_fields[1] = (Attrs){text("hash"), &s->deal_hash, NULL};
+  s->deal_fields[0] = (Attrs){text("kind"), &s->kind_commercial, &s->deal_fields[1]};
+  s->deal_ref = (Value){.kind = VALUE_ATTRS, .attrs = &s->deal_fields[0]};
+  s->rule_fields[1] = (Attrs){text("hash"), &s->rule_hash, NULL};
+  s->rule_fields[0] = (Attrs){text("kind"), &s->kind_policy, &s->rule_fields[1]};
+  s->rule_ref = (Value){.kind = VALUE_ATTRS, .attrs = &s->rule_fields[0]};
+  for (Nat at = 0; at < 2; at++) {
+    s->parent_fields[at][1] = (Attrs){text("hash"), &s->hash_texts[at], NULL};
+    s->parent_fields[at][0] = (Attrs){text("kind"), &s->kind_event, &s->parent_fields[at][1]};
+    s->parents[at] = (Value){.kind = VALUE_ATTRS, .attrs = &s->parent_fields[at][0]};
+  }
+  const Value *who = tagged(&s->subjects[0], "subjectParty", "party", &s->who_ref);
+  const Value *deal = tagged(&s->subjects[1], "subjectCommercial", "commercial", &s->deal_ref);
+  const char *const keys[3] = {"subject", "parent", "policy"};
+  const Value *entries[3] = {
+      account_entry(&s->entries[0], "createsEvent", "event", 3, keys, (const Value *const[]){who, &s->none, &s->rule_ref}),
+      account_entry(&s->entries[1], "createsEvent", "event", 3, keys,
+                    (const Value *const[]){deal, &s->parents[0], &s->none}),
+      account_entry(&s->entries[2], "createsEvent", "event", 3, keys,
+                    (const Value *const[]){who, &s->parents[1], &s->rule_ref})};
+  for (Nat at = 0; at < 3; at++) {
+    assert(entry_hash(1000, 1, 0, entries[at], &s->hashes[at], left, failure));
+    s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+    s->cells[at] = (Values){entries[at], NULL};
+  }
+  s->cells[0].tail = &s->cells[1];
+  s->cells[1].tail = &s->cells[2];
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->cells[0]};
+  return &s->log;
+}
+
+/* 1 when items is the count Ref kindEvent items whose hashes are hashes, in
+   order. */
+static Nat event_items(const Values *items, const Text *hashes, Nat count) {
+  if (items == NULL) return count == 0;
+  if (count == 0) return 0;
+  return same_text(attr_text(items->head, "kind"), text("kindEvent")) == 1 &&
+         same_text(attr_text(items->head, "hash"), hashes[0]) == 1 && event_items(items->tail, hashes + 1, count - 1);
+}
+
+/* The answer is the list of the count Ref kindEvent items whose hashes are
+   hashes, in order. */
+static Nat event_refs(const Value *value, const Text *hashes, Nat count) {
+  return value->kind == VALUE_ITEMS && event_items(value->items, hashes, count) == 1;
+}
+
+/* M6 part B (test plan, mutant B-M2): queryTimeline on the event log,
+   budget 20: 1 + 3 steps. who as of now gives [x1, x3]; deal as of now
+   gives [x2]; who as of x2 gives [x1] (the fold ends at the entry x2:
+   1 + 2 steps); who as of a hash that names no entry gives nil. */
+static void test_m6_timeline(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  EventLog storage;
+  const Value *log = event_log(&storage, &left, &failure);
+  Value unknown = account_text("zz");
+  Tagged who_storage, deal_storage, now_storage, second_storage, unknown_storage;
+  QueryTwo query_storage[4];
+  const Value *who = tagged(&who_storage, "subjectParty", "party", &storage.who_ref);
+  const Value *deal = tagged(&deal_storage, "subjectCommercial", "commercial", &storage.deal_ref);
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *as_of_second = tagged(&second_storage, "momentAsOf", "entry", &storage.hash_texts[1]);
+  const Value *as_of_unknown = tagged(&unknown_storage, "momentAsOf", "entry", &unknown);
+  const Text who_now[2] = {storage.hashes[0], storage.hashes[2]};
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  assert(read_step(1000, 20, 7, answer, log, query_two(&query_storage[0], "queryTimeline", "subject", who, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 16 && event_refs(value, who_now, 2) == 1);
+  assert(read_step(1000, 20, 7, answer, log, query_two(&query_storage[1], "queryTimeline", "subject", deal, "moment", now),
+                   &value, &left, &failure));
+  assert(left == 16 && event_refs(value, &storage.hashes[1], 1) == 1);
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[2], "queryTimeline", "subject", who, "moment", as_of_second), &value, &left,
+                   &failure));
+  assert(left == 17 && event_refs(value, &storage.hashes[0], 1) == 1);
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[3], "queryTimeline", "subject", who, "moment", as_of_unknown), &value, &left,
+                   &failure));
+  assert(left == 16 && event_refs(value, NULL, 0) == 1);
+}
+
+/* M6 part B (test plan, mutant B-M1): queryThread on the event log, budget
+   20: 1 + 3 steps. The root x1 gives [x1, x2, x3] (three levels); the root
+   x2 gives [x2, x3]; a root that names no entry gives nil. */
+static void test_m6_thread(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  EventLog storage;
+  const Value *log = event_log(&storage, &left, &failure);
+  Value unknown = account_text("zz");
+  Attrs hash = {text("hash"), &unknown, NULL};
+  Attrs kind = {text("kind"), &storage.kind_event, &hash};
+  Value other = {.kind = VALUE_ATTRS, .attrs = &kind};
+  Tagged query_storage[3];
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[0], "queryThread", "root", &storage.parents[0]), &value,
+                   &left, &failure));
+  assert(left == 16 && event_refs(value, storage.hashes, 3) == 1);
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[1], "queryThread", "root", &storage.parents[1]), &value,
+                   &left, &failure));
+  assert(left == 16 && event_refs(value, &storage.hashes[1], 2) == 1);
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[2], "queryThread", "root", &other), &value, &left,
+                   &failure));
+  assert(left == 16 && event_refs(value, NULL, 0) == 1);
+
+  /* A Log can list descendants before their parents. Keep descendant log
+     order after the root, even when the chain must be followed backwards. */
+  storage.cells[0].tail = NULL;
+  storage.cells[1].tail = &storage.cells[0];
+  storage.cells[2].tail = &storage.cells[1];
+  storage.log.items = &storage.cells[2];
+  const Text reversed[3] = {storage.hashes[0], storage.hashes[2], storage.hashes[1]};
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[0], "queryThread", "root", &storage.parents[0]), &value,
+                   &left, &failure));
+  assert(left == 16 && event_refs(value, reversed, 3) == 1);
+}
+
+/* M6 part B (test plan, mutant B-M3): queryAuditByPolicy on the event log,
+   budget 20: 1 + 3 steps. rule gives [x1, x3]; a policy that no event
+   names gives nil. */
+static void test_m6_audit_policy(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  EventLog storage;
+  const Value *log = event_log(&storage, &left, &failure);
+  Value unknown = account_text("pol-9");
+  Attrs hash = {text("hash"), &unknown, NULL};
+  Attrs kind = {text("kind"), &storage.kind_policy, &hash};
+  Value other = {.kind = VALUE_ATTRS, .attrs = &kind};
+  Tagged query_storage[2];
+  const Text rule[2] = {storage.hashes[0], storage.hashes[2]};
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[0], "queryAuditByPolicy", "policy", &storage.rule_ref),
+                   &value, &left, &failure));
+  assert(left == 16 && event_refs(value, rule, 2) == 1);
+  assert(read_step(1000, 20, 7, answer, log, tagged(&query_storage[1], "queryAuditByPolicy", "policy", &other), &value,
+                   &left, &failure));
+  assert(left == 16 && event_refs(value, NULL, 0) == 1);
+}
+
 /* The first place of hash in the walk of hashes in log order, or count. */
 static Nat walk_place(const char *const *hashes, Nat count, const char *hash) {
   Nat place = count;
@@ -6028,6 +6214,9 @@ int main(void) {
   test_m5_core_module();
   test_m6_evidence();
   test_m6_intact();
+  test_m6_timeline();
+  test_m6_thread();
+  test_m6_audit_policy();
   puts("C module tests passed");
   return 0;
 }

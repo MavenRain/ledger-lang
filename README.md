@@ -495,6 +495,6 @@ def sound : Flag := read Flag book (queryProjectionSound deal replayed)
 
 The compiler runs the write path of M1: the builtin `write` and the
 records of the logs (SPEC.md section 5). It runs the read path of M2 to
-M6: the builtin `read` and the twenty queries above. `compiler/schema.c` and
+M6: the builtin `read` and the twenty-three queries above. `compiler/schema.c` and
 `compiler/operations.c` take the constructor and field data from
 `core/schema.def` and `core/ops.def` when the compiler is built.

@@ -378,7 +378,7 @@ test('a type argument after a value argument is not read (D-B5)', () => {
 
 const readError = 'the read path does not answer this query';
 const readPre = 'def deal : Ref kindCommercial := refTo (hashOf "deal-1") def history : Log := nil ' +
-  'def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow ';
+  'def ask : Query (List Missing) := queryDryRun deal "x" ';
 
 test('read is a builtin ReadPath term', () => {
   assert.deepEqual(instances('def r : ReadPath := read'), []);
@@ -394,12 +394,12 @@ test('read with the answer type first checks in a function body', () => {
 });
 
 test('a read of a query out of the read path gives the new refusal', () => {
-  reject(`${readPre}def a : List (Ref kindEvent) := read (List (Ref kindEvent)) history ask`, readError, 'read');
+  reject(`${readPre}def a : List Missing := read (List Missing) history ask`, readError, 'read');
 });
 
 test('read as a ReadPath argument', () => {
-  const source = `${readPre}def lift : (r : ReadPath) -> (log : Log) -> (ask : Query (List (Ref kindEvent))) -> List (Ref kindEvent) := ` +
-    'fun (r : ReadPath) (log : Log) (ask : Query (List (Ref kindEvent))) => r (List (Ref kindEvent)) log ask def a : List (Ref kindEvent) := lift read history ask';
+  const source = `${readPre}def lift : (r : ReadPath) -> (log : Log) -> (ask : Query (List Missing)) -> List Missing := ` +
+    'fun (r : ReadPath) (log : Log) (ask : Query (List Missing)) => r (List Missing) log ask def a : List Missing := lift read history ask';
   assert.ok(Array.isArray(instances(source.slice(0, source.lastIndexOf(' def a')))));
   const result = run(source);
   assert.deepEqual(Object.keys(result), ['error'], JSON.stringify(result));
@@ -944,8 +944,8 @@ test('m5 certificate refuses an out query', async () => {
   await writeFile(file, [
     'def deal : Ref kindCommercial := refTo (hashOf "deal-1")',
     'def history : Log := nil',
-    'def ask : Query (List (Ref kindEvent)) := queryTimeline (subjectCommercial deal) momentNow',
-    'def a : List (Ref kindEvent) := read (List (Ref kindEvent)) history ask',
+    'def ask : Query (List Missing) := queryDryRun deal "x"',
+    'def a : List Missing := read (List Missing) history ask',
     ''
   ].join('\n'));
   const refused = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', file],
@@ -997,4 +997,69 @@ test('m6 certificate of the Artifact queries checks', () => {
   assert.equal(certified.status, 0, certified.stderr);
   assert.match(certified.stdout, /evidenceRead/);
   assert.match(certified.stdout, /intactRead/);
+});
+
+// M6 part B (design items 4 to 6): the Event queries. The log: an Event of
+// who with the policy rule (x1), an Event of deal whose parent is x1 (x2)
+// and an Event of who whose parent is x2 with the policy rule (x3). The
+// parent hashes are literals, so the log is built in three passes.
+const eventFirst = [
+  'def who : Ref kindParty := refTo (hashOf "p")',
+  'def deal : Ref kindCommercial := refTo (hashOf "d")',
+  'def rule : Ref kindPolicy := refTo (hashOf "r")',
+  'def e1 : Event := makeEvent eventStageChanged (subjectParty who) none none attrsEnd (some rule)',
+  'def x1 : Entry := makeEntry none (actorAgent "a") (createsEvent e1)',
+  ''
+].join('\n');
+const eventSecond = eventFirst + [
+  `def e2 : Event := makeEvent eventStageChanged (subjectCommercial deal) none (some (refTo (hashOf "${sha256(named(eventFirst).x1)}"))) attrsEnd none`,
+  'def x2 : Entry := makeEntry none (actorAgent "a") (createsEvent e2)',
+  ''
+].join('\n');
+const eventLog = eventSecond + [
+  `def e3 : Event := makeEvent eventStageChanged (subjectParty who) none (some (refTo (hashOf "${sha256(named(eventSecond).x2)}"))) attrsEnd (some rule)`,
+  'def x3 : Entry := makeEntry none (actorAgent "a") (createsEvent e3)',
+  'def book : Log := cons x1 (cons x2 (cons x3 nil))',
+  ''
+].join('\n');
+const events = 'List (Ref kindEvent)';
+const eventRef = hash => ({ kind: 'kindEvent', hash });
+const eventHashes = () => {
+  const entries = named(eventLog);
+  return [entries.x1, entries.x2, entries.x3].map(sha256);
+};
+
+test('m6 queryTimeline lists the events of a subject as of a moment', () => {
+  const [x1, x2, x3] = eventHashes();
+  const timeline = (subject, moment) => termAnswer(eventLog, events, `queryTimeline (${subject}) ${moment}`);
+  assert.deepEqual(timeline('subjectParty who', 'momentNow'), [x1, x3].map(eventRef));
+  assert.deepEqual(timeline('subjectParty who', `(momentAsOf (hashOf "${x2}"))`), [eventRef(x1)]);
+  assert.deepEqual(timeline('subjectCommercial deal', 'momentNow'), [eventRef(x2)]);
+  assert.deepEqual(timeline('subjectParty who', '(momentAsOf (hashOf "unknown"))'), []);
+});
+
+test('m6 queryThread lists the root then its descendants', () => {
+  const [x1, x2, x3] = eventHashes();
+  const thread = hash => termAnswer(eventLog, events, `queryThread (refTo (hashOf "${hash}"))`);
+  assert.deepEqual(thread(x1), [x1, x2, x3].map(eventRef));
+  assert.deepEqual(thread(x2), [x2, x3].map(eventRef));
+  assert.deepEqual(thread('unknown'), []);
+});
+
+test('m6 queryAuditByPolicy lists the events of a policy', () => {
+  const [x1, , x3] = eventHashes();
+  const audit = policy => termAnswer(eventLog, events, `queryAuditByPolicy (${policy})`);
+  assert.deepEqual(audit('rule'), [x1, x3].map(eventRef));
+  assert.deepEqual(audit('refTo (hashOf "pol-9")'), []);
+});
+
+// The kernel check of the program stays in `make certificate-check`.
+test('m6 certificate of the Event queries checks', () => {
+  const program = fileURLToPath(new URL('../test/certificate-read-m6b.ledger', import.meta.url));
+  const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(certified.status, 0, certified.stderr);
+  assert.match(certified.stdout, /timelineRead/);
+  assert.match(certified.stdout, /threadRead/);
+  assert.match(certified.stdout, /auditPolicyRead/);
 });

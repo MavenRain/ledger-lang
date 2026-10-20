@@ -490,13 +490,46 @@ and the walks take no step (the D10 budget model).
   footprint 634340384 B (the kernel fc80b5d). The d3 case 109 holds the
   same program; its certificate case runs through CERT_EXTRA of the gate
   script.
-- The refusal "the read path does not answer this query" now names nine
-  constructors: twenty of the 29 `Query` constructors have an answer.
+- The refusal "the read path does not answer this query" now names six
+  constructors: twenty-three of the 29 `Query` constructors have an answer.
 - Tests: `test_m6_evidence` and `test_m6_intact` in test/c-modules.c; the
   rows "m6 queryEvidence lists the artifact of an event", "m6
   queryArtifactIntact compares the sha256" and "m6 certificate of the
-  Artifact queries checks" in test/paths.test.mjs. The row "m5 certificate
-  refuses an out query" now reads `queryTimeline`, a part B constructor.
+  Artifact queries checks" in test/paths.test.mjs. The refusal rows (the
+  row "m5 certificate refuses an out query", the C rows
+  `test_m2_read_callback_check` and `test_m2_read_check_parity`, the d3
+  case 78) now read `queryDryRun`, a part D constructor.
+
+Part B answers the three Event queries from the same records (`read_event`
+in compiler/checker.c, beside `read_artifact`). Two refs are equal when
+their constructor and their ref text are equal. Each entry takes one work
+step and the walks take no step.
+
+- `queryTimeline subject moment`: the refs of the Event records whose
+  `subject` equals `subject`, in log order, as of `moment`. `momentNow`
+  reads the full log; `momentAsOf h` reads the entries up to and including
+  the entry whose hash is `h`; a hash that names no entry gives `nil`.
+  `subjectParty` does not widen to the commercials or the memberships of
+  the party.
+- `queryThread root`: `root` first, then the refs of the Event records
+  whose `parent` chain reaches `root`, in log order. A `root` that names no
+  Event entry gives `nil`. Parent lookup uses the full record set, so a
+  manually constructed log can list descendants before their parents.
+- `queryAuditByPolicy policy`: the refs of the Event records whose `policy`
+  is `some policy`, in log order, over the full log.
+- The certificate. The core module answers the three queries with the arms
+  `timelineRead`, `threadRead` and `auditPolicyRead` of `readWithH`
+  (core/certificate.def). The program test/certificate-read-m6b.ledger (3
+  entries, 10 reads, 17 hash blocks) is in CERT_PROGRAMS of `make
+  certificate-check`: max RSS 1004929024 B, footprint 742245456 B (the
+  kernel fc80b5d). It includes a reversed log for the thread regression.
+  The d3 case 110 holds the original nine-read program; its certificate
+  case runs through CERT_EXTRA of the gate script.
+- Tests: `test_m6_timeline`, `test_m6_thread` and `test_m6_audit_policy` in
+  test/c-modules.c; the rows "m6 queryTimeline lists the events of a
+  subject as of a moment", "m6 queryThread lists the root then its
+  descendants", "m6 queryAuditByPolicy lists the events of a policy" and
+  "m6 certificate of the Event queries checks" in test/paths.test.mjs.
 
 ## Remaining M0 work
 

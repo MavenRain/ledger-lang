@@ -1,0 +1,24 @@
+-- M6 part B (design items 4 to 6): the 3 Event read queries over one log of 3 entries (17 hash blocks).
+-- e1 (subjectParty who, no parent, policy rule), e2 (subjectCommercial deal, parent x1, no policy), e3 (subjectParty who, parent x2, policy rule).
+def who : Ref kindParty := refTo (hashOf "p")
+def deal : Ref kindCommercial := refTo (hashOf "d")
+def rule : Ref kindPolicy := refTo (hashOf "r")
+def e1 : Event := makeEvent eventStageChanged (subjectParty who) none none attrsEnd (some rule)
+def x1 : Entry := makeEntry none (actorAgent "a") (createsEvent e1)
+def e2 : Event := makeEvent eventStageChanged (subjectCommercial deal) none (some (refTo (hashOf "ee2457bbc12b661192f8c4d813d4a7be1a215d2a16f7086fa5646a0ca0f8510c"))) attrsEnd none
+def x2 : Entry := makeEntry none (actorAgent "a") (createsEvent e2)
+def e3 : Event := makeEvent eventStageChanged (subjectParty who) none (some (refTo (hashOf "8bc847e2fecae8a4a7c761e48a652b4512be6f7dbb784341bda669c9fe0d7d67"))) attrsEnd (some rule)
+def x3 : Entry := makeEntry none (actorAgent "a") (createsEvent e3)
+def book : Log := cons x1 (cons x2 (cons x3 nil))
+def t1 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryTimeline (subjectParty who) momentNow)
+def t2 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryTimeline (subjectParty who) (momentAsOf (hashOf "8bc847e2fecae8a4a7c761e48a652b4512be6f7dbb784341bda669c9fe0d7d67")))
+def t3 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryTimeline (subjectCommercial deal) momentNow)
+def t0 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryTimeline (subjectParty who) (momentAsOf (hashOf "unknown")))
+def th1 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryThread (refTo (hashOf "ee2457bbc12b661192f8c4d813d4a7be1a215d2a16f7086fa5646a0ca0f8510c")))
+def th2 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryThread (refTo (hashOf "8bc847e2fecae8a4a7c761e48a652b4512be6f7dbb784341bda669c9fe0d7d67")))
+def th0 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryThread (refTo (hashOf "unknown")))
+def ap1 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryAuditByPolicy rule)
+def ap0 : List (Ref kindEvent) := read (List (Ref kindEvent)) book (queryAuditByPolicy (refTo (hashOf "pol-9")))
+-- Descendants can precede their parents in a manually constructed Log.
+def reversed : Log := cons x3 (cons x2 (cons x1 nil))
+def thReversed : List (Ref kindEvent) := read (List (Ref kindEvent)) reversed (queryThread (refTo (hashOf "ee2457bbc12b661192f8c4d813d4a7be1a215d2a16f7086fa5646a0ca0f8510c")))

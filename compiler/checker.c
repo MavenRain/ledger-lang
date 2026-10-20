@@ -3645,6 +3645,144 @@ static int read_artifact(Fuel hash_fuel, Nat budget, Nat position, const Values 
   return 1;
 }
 
+/* M6 part B (design item 4, ruling Q-M6-6 (a)): the field of a Subject
+   value that holds its ref, by the constructor (core/schema.def:74-78). */
+typedef struct {
+  const char *tag;
+  const char *field;
+} SubjectField;
+
+static const SubjectField subject_fields[5] = {{"subjectParty", "party"},
+                                                {"subjectMembership", "membership"},
+                                                {"subjectCommercial", "commercial"},
+                                                {"subjectCommitment", "commitment"},
+                                                {"subjectAssignment", "assignment"}};
+
+/* The ref hash text of a Subject value whose constructor is tag: the hash
+   of the field of the pair at at of subject_fields that names tag; the
+   empty text when no pair names it. */
+static Text subject_ref_at(const Value *subject, Text tag, Nat at) {
+  Text none = {NULL, 0};
+  if (at >= 5) return none;
+  if (same_text(tag, text_of_cstring(subject_fields[at].tag)) == 1)
+    return write_field(kRefHash(), write_field(text_of_cstring(subject_fields[at].field), subject))->text;
+  return subject_ref_at(subject, tag, at + 1);
+}
+
+static Text subject_ref(const Value *subject) {
+  return subject_ref_at(subject, write_field(kSchemaTag(), subject)->text, 0);
+}
+
+/* Ruling Q-M6-6 (a): two Subject values are the same when their
+   constructors are the same and their ref hashes are the same (the
+   stage_change form). subjectParty does not widen to the commercials or
+   the memberships of the party. */
+static Nat subject_same(const Value *a, const Value *b) {
+  return same_text(write_field(kSchemaTag(), a)->text, write_field(kSchemaTag(), b)->text) == 1 &&
+         same_text(subject_ref(a), subject_ref(b)) == 1;
+}
+
+/* The ref of kind kindEvent to the record (the stale_deals form). */
+static const Value *event_ref(const Value *record) {
+  return object_two(kRefKind(), text_value(text_of_cstring("kindEvent")), kRefHash(),
+                    write_field(text_of_cstring("ref"), record));
+}
+
+/* The records of the walk (newest first, the project_entries form) in log
+   order, before acc. The walk takes no step. */
+static const Values *log_order(const Located *walk, const Values *acc) {
+  if (walk == NULL) return acc;
+  return log_order(walk->tail, values_item(walk->value, acc));
+}
+
+/* M6 part B (design item 4): the refs of the Event records of records (in
+   log order) whose subject is subject. The walk takes no step. */
+static const Values *timeline_items(const Values *records, const Value *subject) {
+  if (records == NULL) return NULL;
+  const Values *rest = timeline_items(records->tail, subject);
+  return record_is(records->head, "Event") == 1 && subject_same(commitment_field(records->head, "subject"), subject) == 1
+             ? values_item(event_ref(records->head), rest)
+             : rest;
+}
+
+/* Follow at most count parent links through the full record set. A Log
+   need not list parents before their descendants. */
+static Nat thread_reaches(const Located *records, Nat count, Text hash, Text root) {
+  for (Nat depth = 0; depth < count; depth++) {
+    if (same_text(hash, root) == 1) return 1;
+    const Value *record = record_named(records, hash);
+    if (record == NULL || record_is(record, "Event") != 1) return 0;
+    const Value *parent = commitment_field(record, "parent");
+    if (parent->kind == VALUE_NULL) return 0;
+    hash = write_field(kRefHash(), parent)->text;
+  }
+  return 0;
+}
+
+/* M6 part B (design item 5, ruling Q-M6-7 (a)): the refs of the Event
+   records of records (in log order) whose parent chain reaches root. The
+   root is emitted separately. The walk takes no step. */
+static const Values *thread_items(const Values *records, const Located *all, Nat count, Text root) {
+  if (records == NULL) return NULL;
+  const Value *parent = record_is(records->head, "Event") == 1 ? commitment_field(records->head, "parent") : NULL;
+  Text own = write_field(text_of_cstring("ref"), records->head)->text;
+  Nat child = parent != NULL && parent->kind != VALUE_NULL && same_text(own, root) != 1 &&
+              thread_reaches(all, count, write_field(kRefHash(), parent)->text, root) == 1;
+  const Values *rest = thread_items(records->tail, all, count, root);
+  return child == 1 ? values_item(event_ref(records->head), rest) : rest;
+}
+
+/* M6 part B (design item 6): the refs of the Event records of records (in
+   log order) whose policy is some policy with the hash hash (a record
+   walk, not the entry walk of read_visit). The walk takes no step. */
+static const Values *policy_items(const Values *records, Text hash) {
+  if (records == NULL) return NULL;
+  const Values *rest = policy_items(records->tail, hash);
+  const Value *policy = record_is(records->head, "Event") == 1 ? commitment_field(records->head, "policy") : NULL;
+  return policy != NULL && policy->kind != VALUE_NULL && same_text(write_field(kRefHash(), policy)->text, hash) == 1
+             ? values_item(event_ref(records->head), rest)
+             : rest;
+}
+
+/* M6 part B (design items 4 to 6, rulings Q-M6-6 (a) and Q-M6-7 (a)):
+   queryTimeline (timeline = 1), queryThread (thread = 1) and
+   queryAuditByPolicy. The records are the projection of the log
+   (project_entries), as read_artifact: each entry takes one work step, and
+   the walks take no step. queryTimeline stops at the entry of momentAsOf
+   (the read_pipeline form: a hash that names no entry gives nil) and gives
+   timeline_items of the known records. queryThread names the record whose
+   hash is the hash of root: an Event record gives root, then thread_items
+   of the full log; any other record, or no record, gives nil.
+   queryAuditByPolicy gives policy_items of the full log. */
+static int read_event(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat timeline,
+                      Nat thread, const Value **value, Nat *left, Failure *failure) {
+  const Value *moment = timeline == 1 ? write_field(text_of_cstring("moment"), query) : NULL;
+  Nat asof = moment != NULL && same_text(write_field(kSchemaTag(), moment)->text, text_of_cstring("momentAsOf")) == 1;
+  Text none = {NULL, 0};
+  Text stop = asof == 1 ? write_field(text_of_cstring("entry"), moment)->text : none;
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, stop, &records, &found, left, failure)) return 0;
+  if (timeline == 1) {
+    const Located *known = asof == 1 && found == 0 ? NULL : records;
+    *value = items_value(timeline_items(log_order(known, NULL), write_field(text_of_cstring("subject"), query)));
+    return 1;
+  }
+  const Values *ordered = log_order(records, NULL);
+  if (thread == 1) {
+    const Value *root = write_field(text_of_cstring("root"), query);
+    const Value *record = record_named(records, write_field(kRefHash(), root)->text);
+    Nat event = record != NULL && record_is(record, "Event") == 1;
+    *value = items_value(event == 1 ? values_item(root, thread_items(ordered, records, read_count(ordered),
+                                                                  write_field(kRefHash(), root)->text)) : NULL);
+    return 1;
+  }
+  Text policy = write_field(kRefHash(), write_field(text_of_cstring("policy"), query))->text;
+  *value = items_value(policy_items(ordered, policy));
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -3655,9 +3793,10 @@ static int read_artifact(Fuel hash_fuel, Nat budget, Nat position, const Values 
    of read_membership (M3 part B), the three Rollups tags of M4 part A the
    answer of read_pipeline, queryRenewals and queryAccount360 (M4 part B)
    the answer of read_account, queryReviewQueue (M4 part C) the answer of
-   read_review, and queryEvidence and queryArtifactIntact (M6 part A) the
-   answer of read_artifact. Each other tag gives eRead at position (the
-   read application) with left budget - 1. */
+   read_review, queryEvidence and queryArtifactIntact (M6 part A) the
+   answer of read_artifact, and queryTimeline, queryThread and
+   queryAuditByPolicy (M6 part B) the answer of read_event. Each other tag
+   gives eRead at position (the read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
   if (budget == 0) {
@@ -3686,6 +3825,9 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat review = same_text(tag, text_of_cstring("queryReviewQueue"));
   Nat evidence = same_text(tag, text_of_cstring("queryEvidence"));
   Nat intact = same_text(tag, text_of_cstring("queryArtifactIntact"));
+  Nat timeline = same_text(tag, text_of_cstring("queryTimeline"));
+  Nat thread = same_text(tag, text_of_cstring("queryThread"));
+  Nat policy = same_text(tag, text_of_cstring("queryAuditByPolicy"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (read_count(items) > LOG_LIMIT) return fail_at(failure, position, eReadLimit);
@@ -3702,6 +3844,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   if (review == 1) return read_review(hash_fuel, ready, position, items, query, value, left, failure);
   if (evidence == 1 || intact == 1)
     return read_artifact(hash_fuel, ready, position, items, query, evidence, value, left, failure);
+  if (timeline == 1 || thread == 1 || policy == 1)
+    return read_event(hash_fuel, ready, position, items, query, timeline, thread, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   Index index;
