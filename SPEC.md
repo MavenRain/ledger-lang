@@ -283,7 +283,12 @@ Encoding rules:
   Policy record that applies to the subject and has a rule that allows the
   request, else `verdictDeny` with the first active applying Policy record,
   or with `none`) and `queryRedacted` (the attrs of the subject that an
-  active applying Policy record lets the principal read) in the same way
+  active applying Policy record lets the principal read) in the same way.
+  Part D2 answers `queryDryRun` (the missing fields, commitment kinds and
+  approval roles of each active applying Policy record whose `toStage` is
+  the stage) and `querySimulatePolicy` (the Event entries whose verdict
+  changes when the given Policy takes the place of the Policy records of
+  its name) in the same way. Each `Query` constructor has an answer
   (docs/STATUS.md `## M6`).
 
 ## 7. Milestones

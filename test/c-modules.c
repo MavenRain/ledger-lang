@@ -4130,24 +4130,6 @@ static void test_m1_write_hash_budget(void) {
   }
 }
 
-/* M2 part A: read_step on nil refuses a Query of each tag with eRead at the
-   position, and budget 0 gives eBudget with left 0. */
-static void read_refused(const char *tag) {
-  Value name = {.kind = VALUE_TEXT, .text = text(tag)};
-  Attrs field = {text("tag"), &name, NULL};
-  Value query = {.kind = VALUE_ATTRS, .attrs = &field};
-  Value empty_log = {.kind = VALUE_ITEMS, .items = NULL};
-  const LType *answer = arrow_result(read_path_type());
-  const Value *value = NULL;
-  Nat left = 0;
-  Failure failure = {0, {NULL, 0}, {NULL, 0}};
-  assert(!read_step(1000, 5, 7, answer, &empty_log, &query, &value, &left, &failure));
-  assert(left == 4 && failure.position == 7 && same_text(failure.message, eRead));
-  left = 9;
-  assert(!read_step(1000, 0, 7, answer, &empty_log, &query, &value, &left, &failure));
-  assert(left == 0 && failure.position == 7 && same_text(failure.message, eBudget));
-}
-
 /* M2 part A: read_path_type has the three ReadPath binders answer, log and
    query; read_step refuses one S4 tag (M2 part C delta C-1). */
 static void test_m2_read_path(void) {
@@ -4783,16 +4765,16 @@ static void test_m3_membership_queries(void) {
 
 static void test_m2_read_callback_check(void) {
   const char *prefix =
-      "def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-      "def ask : Query (List Missing) := queryDryRun deal \"x\" "
-      "def F : Type 0 := (n : Nat) -> List Missing "
+      "def who : Ref kindParty := refTo (hashOf \"party-1\") "
+      "def ask : Query Account360 := queryAccount360 who momentNow "
+      "def F : Type 0 := (n : Nat) -> Account360 "
       "def ignore : (f : F) -> Nat := fun (f : F) => 3 ";
   char source[2048];
   const Bindings *environment = NULL;
   Failure failure = {0};
   snprintf(source, sizeof source,
            "%sdef wrap : (n : Nat) -> Nat := fun (n : Nat) => "
-           "ignore (fun (k : Nat) => read (List Missing) nil ask) def out : Nat := wrap 0", prefix);
+           "ignore (fun (k : Nat) => read Account360 nil ask) def out : Nat := wrap 0", prefix);
   assert(check_definitions(text(source), &environment, &failure));
   const Binding *out;
   assert(lookup(text("out"), environment, &out));
@@ -4800,32 +4782,32 @@ static void test_m2_read_callback_check(void) {
 
   /* Checking a callback must not suppress refusal when it is invoked. */
   snprintf(source, sizeof source,
-           "%sdef call : (f : F) -> List Missing := fun (f : F) => f 0 "
-           "def wrap : (n : Nat) -> List Missing := fun (n : Nat) => "
-           "call (fun (k : Nat) => read (List Missing) nil ask) def out : List Missing := wrap 0", prefix);
+           "%sdef call : (f : F) -> Account360 := fun (f : F) => f 0 "
+           "def wrap : (n : Nat) -> Account360 := fun (n : Nat) => "
+           "call (fun (k : Nat) => read Account360 nil ask) def out : Account360 := wrap 0", prefix);
   environment = NULL;
   failure = (Failure){0};
   assert(!check_definitions(text(source), &environment, &failure));
   assert(same_text(failure.message, eRead));
-  assert(failure.position == (Nat)(strstr(source, "read (List") - source));
+  assert(failure.position == (Nat)(strstr(source, "read Account360") - source));
 }
 
 static void test_m2_read_check_parity(void) {
   const Bindings *environment = NULL;
   Failure failure = {0};
-  assert(check_definitions(text("def deal : Ref kindCommercial := refTo (hashOf \"deal-1\") "
-                                "def ask : Query (List Missing) := queryDryRun deal \"x\""),
+  assert(check_definitions(text("def who : Ref kindParty := refTo (hashOf \"party-1\") "
+                                "def ask : Query Account360 := queryAccount360 who momentNow"),
                            &environment, &failure));
   const LType *flag;
   Tokens rest;
   Nat left;
-  assert(parse_type(1000, 1000, 0, environment, lexed("List Missing"), &flag, &rest, &left, &failure));
+  assert(parse_type(1000, 1000, 0, environment, lexed("Account360"), &flag, &rest, &left, &failure));
   Binding markers[] = {check_marker(), body_marker(0)};
   for (Nat i = 0; i < 2; i++) {
     Bindings scope = {.head = markers[i], .tail = environment};
     const Value *value;
     const Term *node = NULL;
-    assert(parse_term(1000, 1, 0, flag, &scope, lexed("read (List Missing) nil ask"), &value, &rest, &left, &node, &failure));
+    assert(parse_term(1000, 1, 0, flag, &scope, lexed("read Account360 nil ask"), &value, &rest, &left, &node, &failure));
     assert(left == 1 && same_text(printed(value), text("null")));
     assert(eval_term(1000, 1, flag, &scope, node, &value, &left, &failure));
     assert(left == 1 && same_text(printed(value), text("null")));
@@ -4833,7 +4815,7 @@ static void test_m2_read_check_parity(void) {
     assert(!eval_term(1000, 1, flag, environment, node, &value, &left, &failure));
     assert(left == 0 && same_text(failure.message, eRead));
     failure = (Failure){0};
-    assert(!parse_term(1000, 1, 0, flag, &scope, lexed("read (List Missing) nil 3"), &value, &rest, &left, NULL, &failure));
+    assert(!parse_term(1000, 1, 0, flag, &scope, lexed("read Account360 nil 3"), &value, &rest, &left, NULL, &failure));
     assert(same_text(failure.message, eTerm));
   }
 }
@@ -6468,6 +6450,176 @@ static void test_m6_redacted(void) {
   assert(value->kind == VALUE_ATTRS && value->attrs == NULL);
 }
 
+/* M6 part D2 (design items 14 and 16): the RuleLog. Entry 0 a Commercial
+   deal with the attrs a and b (c1); entry 1 an active scopeAll Policy (no
+   name, no rule) to the stage w that wants the fields a and z, the kind
+   commitmentPrice and the role o; entry 2 the active scopeAll Policy n whose
+   rule lets an write; entry 3 an Event (actorAgent an) of type
+   eventNoteAdded on c1 with the policy entry 2. entries[4].state is the
+   Policy n with no rule (not in the log). */
+typedef struct {
+  Value kind_commercial, kind_policy, deal, numbers[2], attrs, stage, flag_yes, none, name_n, name_a, name_z, price,
+      role_o, an, write, note, wanted[3], require, can, rule, acl, acl_nil, c1_ref, policy_ref, entry, log,
+      hash_texts[4];
+  Attrs attr_fields[2], require_fields[3], rule_fields[3], c1_fields[2], policy_fields[2], actor_field;
+  Tagged scope, subject, actor;
+  Values field_cells[2], kind_cells[1], role_cells[1], can_cells[1], rule_cells[1], cells[4];
+  AccountEntry entries[5];
+  Text hashes[4];
+} RuleLog;
+
+static const Value *rule_test_log(RuleLog *s, Nat *left, Failure *failure) {
+  s->kind_commercial = account_text("kindCommercial");
+  s->kind_policy = account_text("kindPolicy");
+  s->deal = account_text("commercialDeal");
+  s->numbers[0] = (Value){.kind = VALUE_NAT, .number = 1};
+  s->numbers[1] = (Value){.kind = VALUE_NAT, .number = 2};
+  s->stage = account_text("w");
+  s->flag_yes = (Value){.kind = VALUE_FLAG, .flag = FLAG_YES};
+  s->none = (Value){.kind = VALUE_NULL};
+  s->name_n = account_text("n");
+  s->name_a = account_text("a");
+  s->name_z = account_text("z");
+  s->price = account_text("commitmentPrice");
+  s->role_o = account_text("o");
+  s->an = account_text("an");
+  s->write = account_text("permissionWrite");
+  s->note = account_text("eventNoteAdded");
+  assign_ref(s->c1_fields, &s->c1_ref, &s->kind_commercial, &s->hash_texts[0]);
+  assign_ref(s->policy_fields, &s->policy_ref, &s->kind_policy, &s->hash_texts[2]);
+  s->attr_fields[1] = (Attrs){text("b"), &s->numbers[1], NULL};
+  s->attr_fields[0] = (Attrs){text("a"), &s->numbers[0], &s->attr_fields[1]};
+  s->attrs = (Value){.kind = VALUE_ATTRS, .attrs = &s->attr_fields[0]};
+  s->field_cells[1] = (Values){&s->name_z, NULL};
+  s->field_cells[0] = (Values){&s->name_a, &s->field_cells[1]};
+  s->kind_cells[0] = (Values){&s->price, NULL};
+  s->role_cells[0] = (Values){&s->role_o, NULL};
+  s->wanted[0] = (Value){.kind = VALUE_ITEMS, .items = &s->field_cells[0]};
+  s->wanted[1] = (Value){.kind = VALUE_ITEMS, .items = &s->kind_cells[0]};
+  s->wanted[2] = (Value){.kind = VALUE_ITEMS, .items = &s->role_cells[0]};
+  s->require_fields[2] = (Attrs){text("approvalFrom"), &s->wanted[2], NULL};
+  s->require_fields[1] = (Attrs){text("commitmentKinds"), &s->wanted[1], &s->require_fields[2]};
+  s->require_fields[0] = (Attrs){text("fields"), &s->wanted[0], &s->require_fields[1]};
+  s->require = (Value){.kind = VALUE_ATTRS, .attrs = &s->require_fields[0]};
+  s->can_cells[0] = (Values){&s->write, NULL};
+  s->can = (Value){.kind = VALUE_ITEMS, .items = &s->can_cells[0]};
+  s->rule_fields[2] = (Attrs){text("fields"), &s->none, NULL};
+  s->rule_fields[1] = (Attrs){text("can"), &s->can, &s->rule_fields[2]};
+  s->rule_fields[0] = (Attrs){text("principal"), &s->an, &s->rule_fields[1]};
+  s->rule = (Value){.kind = VALUE_ATTRS, .attrs = &s->rule_fields[0]};
+  s->rule_cells[0] = (Values){&s->rule, NULL};
+  s->acl = (Value){.kind = VALUE_ITEMS, .items = &s->rule_cells[0]};
+  s->acl_nil = (Value){.kind = VALUE_ITEMS, .items = NULL};
+  const Value *scope_all = tagged(&s->scope, "scopeAll", NULL, NULL);
+  const char *const deal_keys[2] = {"kind", "attrs"};
+  const char *const dry_keys[4] = {"appliesTo", "toStage", "require", "active"};
+  const char *const named_keys[4] = {"name", "appliesTo", "acl", "active"};
+  const char *const event_keys[3] = {"type", "subject", "policy"};
+  account_entry(&s->entries[4], "createsPolicy", "policy", 4, named_keys,
+                (const Value *const[]){&s->name_n, scope_all, &s->acl_nil, &s->flag_yes});
+  account_entry(&s->entries[3], "createsEvent", "event", 3, event_keys,
+                (const Value *const[]){&s->note, tagged(&s->subject, "subjectCommercial", "commercial", &s->c1_ref),
+                                       &s->policy_ref});
+  s->actor_field = (Attrs){text("actor"), tagged(&s->actor, "actorAgent", "name", &s->an), &s->entries[3].body};
+  s->entry = (Value){.kind = VALUE_ATTRS, .attrs = &s->actor_field};
+  const Value *entries[4] = {
+      account_entry(&s->entries[0], "createsCommercial", "commercial", 2, deal_keys,
+                    (const Value *const[]){&s->deal, &s->attrs}),
+      account_entry(&s->entries[1], "createsPolicy", "policy", 4, dry_keys,
+                    (const Value *const[]){scope_all, &s->stage, &s->require, &s->flag_yes}),
+      account_entry(&s->entries[2], "createsPolicy", "policy", 4, named_keys,
+                    (const Value *const[]){&s->name_n, scope_all, &s->acl, &s->flag_yes}),
+      &s->entry};
+  for (Nat at = 0; at < 4; at++) {
+    assert(entry_hash(1000, 1, 0, entries[at], &s->hashes[at], left, failure));
+    s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+    s->cells[at] = (Values){entries[at], at + 1 < 4 ? &s->cells[at + 1] : NULL};
+  }
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->cells[0]};
+  return &s->log;
+}
+
+/* 1 when value is the Missing tag whose field key holds the text want. */
+static Nat missing_is(const Value *value, const char *tag, const char *key, const char *want) {
+  return same_text(pipeline_field(value, "tag")->text, text(tag)) == 1 &&
+         same_text(pipeline_field(value, key)->text, text(want)) == 1;
+}
+
+/* M6 part D2 (design item 14): queryDryRun on the RuleLog. 1 step and 1 step
+   for each of the 4 entries (delta D-2). */
+static void test_m6_dry(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  RuleLog storage;
+  const Value *log = rule_test_log(&storage, &left, &failure);
+  QueryTwo query_storage[3];
+  Value other = account_text("v");
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* d1: to w the policy wants the field z, an agreed commitmentPrice and the
+     role o (the field a is there). */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[0], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &value, &left, &failure));
+  assert(left == 15 && value->kind == VALUE_ITEMS && read_count(value->items) == 3);
+  assert(missing_is(value->items->head, "missingField", "field", "z") == 1);
+  assert(missing_is(value->items->tail->head, "missingCommitment", "kind", "commitmentPrice") == 1);
+  assert(missing_is(value->items->tail->tail->head, "missingApproval", "role", "o") == 1);
+  /* d2: no policy goes to the stage v: nil. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[1], "queryDryRun", "commercial", &storage.c1_ref, "stage", &other), &value,
+                   &left, &failure));
+  assert(left == 15 && value->kind == VALUE_ITEMS && value->items == NULL);
+  /* d3: a proposed commitmentPrice of c1 (entry 4) is not an agreed one, and
+     the Policy from the stage x to w (entry 5) does not apply (c1 has no stage
+     x): the same three items, 1 step and 1 step for each of the 6 entries. */
+  AccountEntry extra[2];
+  Tagged scope;
+  Value proposed = account_text("commitmentProposed");
+  Value from = account_text("x");
+  const char *const commitment_keys[3] = {"commercial", "kind", "status"};
+  const char *const from_keys[5] = {"appliesTo", "fromStage", "toStage", "require", "active"};
+  Values cells[2];
+  cells[1] = (Values){account_entry(&extra[1], "createsPolicy", "policy", 5, from_keys,
+                                    (const Value *const[]){tagged(&scope, "scopeAll", NULL, NULL), &from,
+                                                           &storage.stage, &storage.require, &storage.flag_yes}),
+                      NULL};
+  cells[0] = (Values){account_entry(&extra[0], "createsCommitment", "commitment", 3, commitment_keys,
+                                    (const Value *const[]){&storage.c1_ref, &storage.price, &proposed}),
+                      &cells[1]};
+  storage.cells[3].tail = &cells[0];
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[2], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &value, &left, &failure));
+  assert(left == 13 && value->kind == VALUE_ITEMS && read_count(value->items) == 3);
+  assert(missing_is(value->items->tail->head, "missingCommitment", "kind", "commitmentPrice") == 1);
+}
+
+/* M6 part D2 (design item 16, ruling Q-M6-23 (4)): querySimulatePolicy on
+   the RuleLog. 1 step and 2 steps for each of the 4 entries (delta D-2). */
+static void test_m6_simulate(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  RuleLog storage;
+  const Value *log = rule_test_log(&storage, &left, &failure);
+  Tagged query_storage[2];
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* s1: n with no rule takes the place of n: the write of an on c1 is a
+     deny now, thus the allow of entry 3 changes. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   tagged(&query_storage[0], "querySimulatePolicy", "policy", &storage.entries[4].state), &value,
+                   &left, &failure));
+  assert(left == 11 && value->kind == VALUE_ITEMS && read_count(value->items) == 1);
+  assert(same_text(pipeline_field(value->items->head, "kind")->text, text("kindEvent")) == 1 &&
+         same_text(pipeline_field(value->items->head, "hash")->text, storage.hashes[3]) == 1);
+  /* s2: n in place of n changes no verdict: nil. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   tagged(&query_storage[1], "querySimulatePolicy", "policy", &storage.entries[2].state), &value,
+                   &left, &failure));
+  assert(left == 11 && value->kind == VALUE_ITEMS && value->items == NULL);
+}
+
 /* M6 part C (design item 10, rulings Q-M6-9 (a) and Q-M6-10 (a)):
    queryPipeline by owner and by territory on the AssignLog. */
 static void test_m6_pipeline_keys(void) {
@@ -6589,6 +6741,8 @@ int main(void) {
   test_m6_book();
   test_m6_can();
   test_m6_redacted();
+  test_m6_dry();
+  test_m6_simulate();
   test_m6_pipeline_keys();
   puts("C module tests passed");
   return 0;

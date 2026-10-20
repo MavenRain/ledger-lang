@@ -377,8 +377,8 @@ test('a type argument after a value argument is not read (D-B5)', () => {
 });
 
 const readError = 'the read path does not answer this query';
-const readPre = 'def deal : Ref kindCommercial := refTo (hashOf "deal-1") def history : Log := nil ' +
-  'def ask : Query (List Missing) := queryDryRun deal "x" ';
+const readPre = 'def who : Ref kindParty := refTo (hashOf "party-1") def history : Log := nil ' +
+  'def ask : Query Account360 := queryAccount360 who momentNow ';
 
 test('read is a builtin ReadPath term', () => {
   assert.deepEqual(instances('def r : ReadPath := read'), []);
@@ -393,13 +393,13 @@ test('read with the answer type first checks in a function body', () => {
     'fun (log : Log) (q : Query Flag) => read Flag log q'), []);
 });
 
-test('a read of a query out of the read path gives the new refusal', () => {
-  reject(`${readPre}def a : List Missing := read (List Missing) history ask`, readError, 'read');
+test('a read of the Account360 of an unknown party gives the refusal', () => {
+  reject(`${readPre}def a : Account360 := read Account360 history ask`, readError, 'read');
 });
 
 test('read as a ReadPath argument', () => {
-  const source = `${readPre}def lift : (r : ReadPath) -> (log : Log) -> (ask : Query (List Missing)) -> List Missing := ` +
-    'fun (r : ReadPath) (log : Log) (ask : Query (List Missing)) => r (List Missing) log ask def a : List Missing := lift read history ask';
+  const source = `${readPre}def lift : (r : ReadPath) -> (log : Log) -> (ask : Query Account360) -> Account360 := ` +
+    'fun (r : ReadPath) (log : Log) (ask : Query Account360) => r Account360 log ask def a : Account360 := lift read history ask';
   assert.ok(Array.isArray(instances(source.slice(0, source.lastIndexOf(' def a')))));
   const result = run(source);
   assert.deepEqual(Object.keys(result), ['error'], JSON.stringify(result));
@@ -936,16 +936,17 @@ test('m5 core module checks in the kernel', async t => {
   assert.equal(`${checked.stdout}${checked.stderr}`, '');
 });
 
-// M5 part E (E3, delta E-1 (f)): a read of a query out of the read path (the
-// d3 case 78) keeps its refusal under `ledgerc --certificate`: rc 1, no module.
-test('m5 certificate refuses an out query', async () => {
+// M5 part E (E3, delta E-1 (f)): a read of the Account360 of an unknown party
+// (the d3 case 78, ruling Q-M6-22 (a)) keeps its refusal under
+// `ledgerc --certificate`: rc 1, no module.
+test('m5 certificate refuses an unknown party', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ledger-cert-'));
   const file = join(dir, 'out.ledger');
   await writeFile(file, [
-    'def deal : Ref kindCommercial := refTo (hashOf "deal-1")',
+    'def who : Ref kindParty := refTo (hashOf "party-1")',
     'def history : Log := nil',
-    'def ask : Query (List Missing) := queryDryRun deal "x"',
-    'def a : List Missing := read (List Missing) history ask',
+    'def ask : Query Account360 := queryAccount360 who momentNow',
+    'def a : Account360 := read Account360 history ask',
     ''
   ].join('\n'));
   const refused = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', file],
@@ -1185,4 +1186,26 @@ test('m6 certificate of the Policy queries checks', () => {
   assert.equal(certified.status, 0, certified.stderr);
   assert.match(certified.stdout, /canRead/);
   assert.match(certified.stdout, /redactRead/);
+});
+
+test('m6 queryDryRun and querySimulatePolicy answer over the m6e program', () => {
+  const program = fileURLToPath(new URL('../test/certificate-read-m6e.ledger', import.meta.url));
+  const answered = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), [program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(answered.status, 0, answered.stderr);
+  const value = name => JSON.parse(answered.stdout).instances.find(instance => instance.name === name).value;
+  assert.deepEqual(value('m1'), [{ tag: 'missingField', field: 'a' }, { tag: 'missingField', field: 'z' },
+    { tag: 'missingCommitment', kind: 'commitmentPrice' }, { tag: 'missingApproval', role: 'o' }]);
+  assert.deepEqual(value('m0'), []);
+  assert.deepEqual(value('s1'), [{ kind: 'kindEvent', hash: '645990c59a64213e60b118cc3a96d6e5bc12992e9b6a0c4984a2130d0fde6115' }]);
+  assert.deepEqual(value('s0'), []);
+});
+
+test('m6 certificate of the dry run and simulate queries checks', () => {
+  const program = fileURLToPath(new URL('../test/certificate-read-m6e.ledger', import.meta.url));
+  const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(certified.status, 0, certified.stderr);
+  assert.match(certified.stdout, /dryRead/);
+  assert.match(certified.stdout, /simWalk/);
 });

@@ -605,6 +605,51 @@ or the requested fields are `none`, or each requested field is in its
   queryRedacted keeps the fields that a rule lets the principal read" and
   "m6 certificate of the Policy queries checks" in test/paths.test.mjs.
 
+Part D2 answers the two remaining queries from the entries and the records
+(`read_rule` in compiler/checker.c, beside `read_policy`), over the full
+log (no moment). A Policy record takes part and applies to a subject as in
+part D1.
+
+- `queryDryRun commercial stage`: the `Missing` values of each active
+  Policy record (in log order) that applies to `subjectCommercial
+  commercial`, whose `toStage` is `some stage` and whose `fromStage` is
+  `none` or the `stage` of the Commercial record. For each such record:
+  `missingField` for each key of the `require` fields that is not a key of
+  the attrs of the Commercial record; then `missingCommitment` for each
+  kind of `commitmentKinds` with no Commitment record of the commercial
+  with that kind and the status `commitmentAgreed`, superseded or not
+  (ruling Q-M6-23 (3) (a)); then `missingApproval` for each role of
+  `approvalFrom` with no `eventApproval` Event record on the commercial
+  whose payload has the role as a key (ruling Q-M6-23 (1) (a)).
+  `maxDiscountPct` gives no `Missing` value. Each entry takes one work
+  step.
+- `querySimulatePolicy policy`: the refs of the entries (in log order)
+  that create an Event with a `policy`, when the verdict changes with
+  `policy` in place of each Policy record of the same `name` (ruling
+  Q-M6-23 (4) (a)). An `eventPolicyDenied` event was a deny, each other
+  event an allow. The request is the actor of the entry (the party ref
+  text of `actorHuman`, else the name; ruling Q-M6-23 (2) (a)), the action
+  of the event type (ruling Q-M6-13 (a)), the event subject and the fields
+  `none`. Each entry takes two work steps: its hash, then its record
+  (delta D-2).
+- The certificate. The core module answers the two queries with the arms
+  `dryRead` and `simWalk` of `readWithH` (core/certificate.def). The
+  program test/certificate-read-m6e.ledger (3 entries, 4 reads, 19 hash
+  blocks) is in CERT_PROGRAMS of `make certificate-check`: max RSS
+  1022394368 B, footprint 836945480 B (the kernel fc80b5d). The d3 case
+  113 holds the same program; its certificate case runs through
+  CERT_EXTRA of the gate script.
+- Each of the 29 `Query` constructors has an answer (ruling Q-M6-20 (a)).
+  The refusal "the read path does not answer this query" stays only for
+  `queryAccount360` of a party with no Party record (ruling Q-M6-22 (a)).
+  The refusal rows (the row "m5 certificate refuses an unknown party", the
+  C rows `test_m2_read_callback_check` and `test_m2_read_check_parity`,
+  the d3 case 78) now read that query.
+- Tests: `test_m6_dry` and `test_m6_simulate` in test/c-modules.c; the
+  rows "m6 queryDryRun and querySimulatePolicy answer over the m6e
+  program" and "m6 certificate of the dry run and simulate queries checks"
+  in test/paths.test.mjs.
+
 ## Remaining M0 work
 
 1. Add dependent function types and support computed function

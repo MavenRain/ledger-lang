@@ -1,0 +1,17 @@
+-- M6 part D2: queryDryRun and querySimulatePolicy over one log of 3 entries (19 hash blocks).
+-- The deal d has no Commercial record (no attrs; the block budget, delta D-7). k1 (an agreed term on d), p1 (active, scopeAll, to the stage w: fields a and z, kinds term and price, approvals f and o; an writes), x3 (an approval of d by f, actor an, policy p1). p2 is p1 with no rule.
+def deal : Ref kindCommercial := refTo (hashOf "d")
+def k1 : Commitment := makeCommitment deal commitmentTerm "t" (valueNat 1) none commitmentAgreed none (makeProvenance none none none)
+def x1 : Entry := makeEntry none (actorAgent "a") (createsCommitment k1)
+def r1 : AclRule := makeAclRule "an" (cons permissionWrite nil) none
+def q1 : Requirement := makeRequirement (some (cons "a" (cons "z" nil))) (some (cons commitmentTerm (cons commitmentPrice nil))) (some (cons "f" (cons "o" nil))) none
+def p1 : Policy := makePolicy "n" scopeAll none (some "w") q1 (cons r1 nil) flagYes
+def x2 : Entry := makeEntry none (actorAgent "a") (createsPolicy p1)
+def v1 : Event := makeEvent eventApproval (subjectCommercial deal) none none (attrsField "f" (valueNat 1) attrsEnd) (some (refTo (hashOf "a16db9501da6fe96a83ccc5e4c58f4d3050ccf64c5aa3ee357885d44b7c5ec92")))
+def x3 : Entry := makeEntry none (actorAgent "an") (createsEvent v1)
+def log : Log := cons x1 (cons x2 (cons x3 nil))
+def m1 : List Missing := read (List Missing) log (queryDryRun deal "w")
+def m0 : List Missing := read (List Missing) log (queryDryRun deal "v")
+def p2 : Policy := makePolicy "n" scopeAll none (some "w") q1 nil flagYes
+def s1 : List (Ref kindEvent) := read (List (Ref kindEvent)) log (querySimulatePolicy p2)
+def s0 : List (Ref kindEvent) := read (List (Ref kindEvent)) log (querySimulatePolicy p1)

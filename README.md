@@ -42,10 +42,10 @@ No package installation is needed.
 its certificate to stdout. The certificate is one mechanism-lang module. Its
 last def claims that the render of the instances is the JSON document and
 its newline. A compile error gives the same line as
-`bin/ledgerc PROGRAM.ledger`. Thus a `read` of a query that the read path
-does not answer gives the refusal "the read path does not answer this
-query". A form that the certificate does not cover
-gives exit status 1 and the stderr line
+`bin/ledgerc PROGRAM.ledger`. Thus a `read` that the read path refuses (a
+`queryAccount360` of a party with no Party record) gives the refusal "the
+read path does not answer this query". A form that the certificate
+does not cover gives exit status 1 and the stderr line
 `PROGRAM.ledger: the certificate does not cover SUBJECT yet`. Examples of
 SUBJECT:
 
@@ -485,10 +485,10 @@ from the records (docs/STATUS.md `## M3`). It answers `queryPipeline`,
 `queryReviewQueue` from the records (docs/STATUS.md `## M4`). It answers
 `queryEvidence`, `queryArtifactIntact`, `queryTimeline`, `queryThread`,
 `queryAuditByPolicy`, `queryOwner`, `queryBook`, `queryCan` and
-`queryRedacted` from the records, and `queryPipeline` with the keys
-`pipelineByOwner` and `pipelineByTerritory` (docs/STATUS.md `## M6`). The
-two other Query constructors, `queryDryRun` and `querySimulatePolicy`, give
-the refusal "the read path does not answer this query".
+`queryRedacted` from the records, `queryPipeline` with the keys
+`pipelineByOwner` and `pipelineByTerritory`, and `queryDryRun` and
+`querySimulatePolicy` from the entries and the records (docs/STATUS.md
+`## M6`). Each of the 29 Query constructors has an answer.
 A definition that binds the name `read` hides the builtin.
 
 ```
@@ -498,6 +498,6 @@ def sound : Flag := read Flag book (queryProjectionSound deal replayed)
 
 The compiler runs the write path of M1: the builtin `write` and the
 records of the logs (SPEC.md section 5). It runs the read path of M2 to
-M6: the builtin `read` and the twenty-five queries above. `compiler/schema.c` and
+M6: the builtin `read` and the twenty-nine queries above. `compiler/schema.c` and
 `compiler/operations.c` take the constructor and field data from
 `core/schema.def` and `core/ops.def` when the compiler is built.

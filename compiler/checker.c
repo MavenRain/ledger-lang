@@ -4034,6 +4034,203 @@ static int read_policy(Fuel hash_fuel, Nat budget, Nat position, const Values *i
   return 1;
 }
 
+/* M6 part D2 (design item 14, rulings Q-M6-12 (a), Q-M6-23 (1) and (3)):
+   what a dry run asks. attrs is the Attrs list of the commercial's record
+   (NULL for none); records are in log order; commercial is the ref hash;
+   subject is subjectCommercial of the ref. */
+typedef struct {
+  const Attrs *attrs;
+  const Values *records;
+  Text commercial;
+  const Value *subject;
+} DryAsk;
+
+/* 1 when the Attrs list holds the key (a null value counts). */
+static Nat attrs_has(const Attrs *attrs, Text key) {
+  return attrs != NULL && (same_text(attrs->key, key) == 1 || attrs_has(attrs->rest, key) == 1);
+}
+
+/* Ruling Q-M6-23 (3): 1 when records hold a Commitment record of the
+   commercial with the kind and the status commitmentAgreed, superseded or
+   not. */
+static Nat dry_agreed(const Values *records, Text commercial, Text kind) {
+  if (records == NULL) return 0;
+  const Value *record = records->head;
+  Nat agreed = record_is(record, "Commitment") == 1 &&
+               same_text(write_field(kRefHash(), commitment_field(record, "commercial"))->text, commercial) == 1 &&
+               same_text(commitment_tag(commitment_field(record, "kind")), kind) == 1 &&
+               same_text(commitment_tag(commitment_field(record, "status")), text_of_cstring("commitmentAgreed")) == 1;
+  return agreed == 1 || dry_agreed(records->tail, commercial, kind) == 1;
+}
+
+/* Ruling Q-M6-23 (1): 1 when records hold an eventApproval Event record on
+   subject whose payload has the key role. */
+static Nat dry_approved(const Values *records, const Value *subject, Text role) {
+  if (records == NULL) return 0;
+  const Value *record = records->head;
+  const Value *payload = commitment_field(record, "payload");
+  Nat approved = record_is(record, "Event") == 1 &&
+                 same_text(commitment_tag(commitment_field(record, "type")), text_of_cstring("eventApproval")) == 1 &&
+                 subject_same(commitment_field(record, "subject"), subject) == 1 &&
+                 attrs_has(payload->kind == VALUE_ATTRS ? payload->attrs : NULL, role) == 1;
+  return approved == 1 || dry_approved(records->tail, subject, role) == 1;
+}
+
+/* Design item 14: the Missing values of the wanted items (in order) before
+   tail: which 0 gives missingField for a field absent from the attrs, which
+   1 missingCommitment for a kind with no agreed commitment, which 2
+   missingApproval for a role with no approval. The field of a Missing value
+   is the wanted item itself (a Text, or a CommitmentKind in the evaluator
+   form). */
+static int dry_needs(const Values *wanted, Nat which, const DryAsk *ask, const Values *tail, const Values **out,
+                     Failure *failure) {
+  if (wanted == NULL) {
+    *out = tail;
+    return 1;
+  }
+  const Values *rest;
+  if (!dry_needs(wanted->tail, which, ask, tail, &rest, failure)) return 0;
+  Text item = commitment_tag(wanted->head);
+  Nat have = which == 0   ? attrs_has(ask->attrs, item)
+             : which == 1 ? dry_agreed(ask->records, ask->commercial, item)
+                          : dry_approved(ask->records, ask->subject, item);
+  const Value *missing;
+  if (have == 1) {
+    *out = rest;
+    return 1;
+  }
+  if (!write_value("Missing", which == 0 ? "missingField" : which == 1 ? "missingCommitment" : "missingApproval",
+                   values_item(wanted->head, NULL), &missing, failure))
+    return 0;
+  *out = values_item(missing, rest);
+  return 1;
+}
+
+/* Design item 14: the Missing values of the active Policy records of
+   policies (log order) that apply to the subject, with toStage the stage
+   and fromStage none or the stage of current (the Commercial record, NULL
+   for none). For each policy: the fields, then the kinds, then the roles.
+   maxDiscountPct gives no Missing (Q-M6-12 (a)). */
+static int dry_missing(const Values *policies, const Located *all, const DryAsk *ask, Text stage,
+                       const Value *current, const Values **out, Failure *failure) {
+  if (policies == NULL) {
+    *out = NULL;
+    return 1;
+  }
+  const Values *rest;
+  if (!dry_missing(policies->tail, all, ask, stage, current, &rest, failure)) return 0;
+  const Value *policy = policies->head;
+  const Value *to = commitment_field(policy, "toStage");
+  const Value *from = commitment_field(policy, "fromStage");
+  Nat applies = record_is(policy, "Policy") == 1 && is_yes(commitment_field(policy, "active")) &&
+                policy_applies(policy, ask->subject, all) == 1 && to->kind == VALUE_TEXT &&
+                same_text(to->text, stage) == 1 &&
+                (from->kind == VALUE_NULL ||
+                 (current != NULL && same_text(from->text, commitment_field(current, "stage")->text) == 1));
+  const Value *require = commitment_field(policy, "require");
+  const Values *approvals;
+  const Values *kinds;
+  if (applies != 1) {
+    *out = rest;
+    return 1;
+  }
+  return dry_needs(items_of(write_field(text_of_cstring("approvalFrom"), require)), 2, ask, rest, &approvals, failure) &&
+         dry_needs(items_of(write_field(text_of_cstring("commitmentKinds"), require)), 1, ask, approvals, &kinds, failure) &&
+         dry_needs(items_of(write_field(text_of_cstring("fields"), require)), 0, ask, kinds, out, failure);
+}
+
+/* Ruling Q-M6-23 (2): the principal text of an Actor value: actorHuman the
+   party ref hash, actorAgent and actorSystem the name. */
+static Text actor_text(const Value *actor) {
+  return same_text(write_field(kSchemaTag(), actor)->text, text_of_cstring("actorHuman")) == 1
+             ? write_field(kRefHash(), write_field(text_of_cstring("party"), actor))->text
+             : write_field(text_of_cstring("name"), actor)->text;
+}
+
+/* Design item 16 (ruling Q-M6-13 (a)): the Permission tag of an event
+   type. */
+static Text simulate_action(Text type) {
+  return same_text(type, text_of_cstring("eventStageChanged")) == 1        ? text_of_cstring("permissionTransition")
+         : same_text(type, text_of_cstring("eventAssignmentChanged")) == 1 ? text_of_cstring("permissionAssign")
+                                                                           : text_of_cstring("permissionWrite");
+}
+
+/* Ruling Q-M6-23 (4): records (log order) without the Policy records named
+   name, then given (a record of type Policy). The order does not change
+   allow or deny. */
+static const Values *simulate_policies(const Values *records, const Value *given, Text name) {
+  if (records == NULL) return values_item(given, NULL);
+  const Values *rest = simulate_policies(records->tail, given, name);
+  Nat same = record_is(records->head, "Policy") == 1 &&
+             same_text(commitment_field(records->head, "name")->text, name) == 1;
+  return same == 1 ? rest : values_item(records->head, rest);
+}
+
+/* Design item 16: for each entry in log order with a createsEvent body
+   whose Event has a policy, one Ref kindEvent with the hash of that entry
+   when the verdict of policies changes: an eventPolicyDenied event was a
+   deny, each other event an allow. The ask is the actor of the entry (not
+   of the record), the action of the event type and the event subject,
+   fields none. The walk takes no step. */
+static const Values *simulate_events(const Values *items, const Values *hashes, const Values *policies,
+                                     const Located *all) {
+  if (items == NULL || hashes == NULL) return NULL;
+  const Values *rest = simulate_events(items->tail, hashes->tail, policies, all);
+  const Value *body = write_field(text_of_cstring("body"), items->head);
+  const Value *event = write_field(text_of_cstring("event"), body);
+  Text type = commitment_tag(write_field(text_of_cstring("type"), event));
+  PolicyAsk ask = {actor_text(write_field(text_of_cstring("actor"), items->head)), simulate_action(type),
+                   write_field(text_of_cstring("subject"), event), &null_value};
+  Nat checked = same_text(write_field(kSchemaTag(), body)->text, text_of_cstring("createsEvent")) == 1 &&
+                write_field(text_of_cstring("policy"), event)->kind != VALUE_NULL;
+  Nat allow = checked == 1 && policy_first(policies, all, &ask, 1) != NULL;
+  Nat denied = same_text(type, text_of_cstring("eventPolicyDenied"));
+  return checked == 1 && allow == denied
+             ? values_item(object_two(kRefKind(), text_value(text_of_cstring("kindEvent")), kRefHash(), hashes->head), rest)
+             : rest;
+}
+
+/* M6 part D2 (design items 14 and 16): queryDryRun (dry 1) and
+   querySimulatePolicy over the full log (no moment field). queryDryRun
+   gives dry_missing of the records for the commercial and the stage.
+   querySimulatePolicy first hashes each entry (read_visit, as
+   queryAuditByActor), then projects the log (delta D-2: two steps for each
+   entry), and gives simulate_events with simulate_policies of the given
+   policy. */
+static int read_rule(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat dry,
+                     const Value **value, Nat *left, Failure *failure) {
+  Text none = {NULL, 0};
+  const Values *hashes = NULL;
+  Index index;
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (dry != 1 && !read_visit(hash_fuel, budget, position, items, &hashes, &index, left, failure)) return 0;
+  if (!project_entries(hash_fuel, position, sread, items, none, &records, &found, left, failure)) return 0;
+  const Values *ordered = log_order(records, NULL);
+  if (dry != 1) {
+    const Value *given = write_field(text_of_cstring("policy"), query);
+    const Value *record = object_two(kType, text_value(text_of_cstring("Policy")), kValue, given);
+    const Values *policies = simulate_policies(ordered, record, write_field(text_of_cstring("name"), given)->text);
+    *value = items_value(simulate_events(items, hashes, policies, records));
+    return 1;
+  }
+  const Value *commercial = write_field(text_of_cstring("commercial"), query);
+  Text hash = write_field(kRefHash(), commercial)->text;
+  const Value *named = record_named(records, hash);
+  const Value *current = named != NULL && record_is(named, "Commercial") == 1 ? named : NULL;
+  const Value *attrs = current != NULL ? commitment_field(current, "attrs") : &null_value;
+  const Value *subject;
+  const Values *missing;
+  if (!write_value("Subject", "subjectCommercial", values_item(commercial, NULL), &subject, failure)) return 0;
+  DryAsk ask = {attrs->kind == VALUE_ATTRS ? attrs->attrs : NULL, ordered, hash, subject};
+  if (!dry_missing(ordered, records, &ask, write_field(text_of_cstring("stage"), query)->text, current, &missing,
+                   failure))
+    return 0;
+  *value = items_value(missing);
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -4047,9 +4244,11 @@ static int read_policy(Fuel hash_fuel, Nat budget, Nat position, const Values *i
    read_review, queryEvidence and queryArtifactIntact (M6 part A) the
    answer of read_artifact, and queryTimeline, queryThread and
    queryAuditByPolicy (M6 part B) the answer of read_event, queryOwner and
-   queryBook (M6 part C) the answer of read_assignment, and queryCan and
-   queryRedacted (M6 part D1) the answer of read_policy. Each other tag
-   gives eRead at position (the read application) with left budget - 1. */
+   queryBook (M6 part C) the answer of read_assignment, queryCan and
+   queryRedacted (M6 part D1) the answer of read_policy, and queryDryRun
+   and querySimulatePolicy (M6 part D2) the answer of read_rule. Each tag
+   has an answer (ruling Q-M6-20 (a)): the last branch serves queryReplay,
+   queryTail and queryAuditByActor. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
   if (budget == 0) {
@@ -4059,7 +4258,6 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat ready = budget - 1;
   Text tag = write_field(kSchemaTag(), query)->text;
   Nat replay = same_text(tag, text_of_cstring("queryReplay"));
-  Nat tail = same_text(tag, text_of_cstring("queryTail"));
   Nat audit = same_text(tag, text_of_cstring("queryAuditByActor"));
   Nat commercial = same_text(tag, text_of_cstring("queryCommercial"));
   Nat sound = same_text(tag, text_of_cstring("queryProjectionSound"));
@@ -4085,6 +4283,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat book = same_text(tag, text_of_cstring("queryBook"));
   Nat can = same_text(tag, text_of_cstring("queryCan"));
   Nat redacted = same_text(tag, text_of_cstring("queryRedacted"));
+  Nat dry = same_text(tag, text_of_cstring("queryDryRun"));
+  Nat simulate = same_text(tag, text_of_cstring("querySimulatePolicy"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (read_count(items) > LOG_LIMIT) return fail_at(failure, position, eReadLimit);
@@ -4107,7 +4307,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
     return read_assignment(hash_fuel, ready, position, items, query, owner, value, left, failure);
   if (can == 1 || redacted == 1)
     return read_policy(hash_fuel, ready, position, items, query, can, value, left, failure);
-  if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
+  if (dry == 1 || simulate == 1)
+    return read_rule(hash_fuel, ready, position, items, query, dry, value, left, failure);
   const Values *hashes;
   Index index;
   if (!read_visit(hash_fuel, ready, position, items, &hashes, &index, left, failure)) return 0;
