@@ -1,0 +1,19 @@
+-- M6 part D1 (design items 12, 13 and 15): queryCan and queryRedacted over one log of 3 entries (18 hash blocks).
+-- d1 (a Commercial deal with the attrs a and b), p0 (inactive, scopeAll, no rule), p1 (active, scopeCommercial commercialDeal: an reads the field a, cy reads and writes each field).
+def who : Ref kindParty := refTo (hashOf "p")
+def d1 : Commercial := makeCommercial commercialDeal "D" who "q" none "U" none statusOpen (attrsField "a" (valueNat 1) (attrsField "b" (valueNat 2) attrsEnd)) none
+def x1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1)
+def p0 : Policy := makePolicy "o" scopeAll none none (makeRequirement none none none none) nil flagNo
+def x2 : Entry := makeEntry none (actorAgent "a") (createsPolicy p0)
+def r1 : AclRule := makeAclRule "an" (cons permissionRead nil) (some (cons "a" nil))
+def r2 : AclRule := makeAclRule "cy" (cons permissionRead (cons permissionWrite nil)) none
+def p1 : Policy := makePolicy "n" (scopeCommercial commercialDeal) none none (makeRequirement none none none none) (cons r1 (cons r2 nil)) flagYes
+def x3 : Entry := makeEntry none (actorAgent "a") (createsPolicy p1)
+def log : Log := cons x1 (cons x2 (cons x3 nil))
+def c1 : Verdict := read Verdict log (queryCan "an" permissionRead (subjectCommercial (refTo (hashOf "31ae2428035c7b3669aa4268e9effd5173787f93030bb2648cd29a654bb6ab88"))) none)
+def c2 : Verdict := read Verdict log (queryCan "an" permissionRead (subjectCommercial (refTo (hashOf "31ae2428035c7b3669aa4268e9effd5173787f93030bb2648cd29a654bb6ab88"))) (some (cons "a" (cons "b" nil))))
+def c3 : Verdict := read Verdict log (queryCan "cy" permissionWrite (subjectCommercial (refTo (hashOf "31ae2428035c7b3669aa4268e9effd5173787f93030bb2648cd29a654bb6ab88"))) (some (cons "b" nil)))
+def c0 : Verdict := read Verdict log (queryCan "an" permissionRead (subjectParty who) none)
+def e1 : Attrs := read Attrs log (queryRedacted "an" (subjectCommercial (refTo (hashOf "31ae2428035c7b3669aa4268e9effd5173787f93030bb2648cd29a654bb6ab88"))))
+def e2 : Attrs := read Attrs log (queryRedacted "cy" (subjectCommercial (refTo (hashOf "31ae2428035c7b3669aa4268e9effd5173787f93030bb2648cd29a654bb6ab88"))))
+def e0 : Attrs := read Attrs log (queryRedacted "bo" (subjectCommercial (refTo (hashOf "31ae2428035c7b3669aa4268e9effd5173787f93030bb2648cd29a654bb6ab88"))))

@@ -484,10 +484,11 @@ from the records (docs/STATUS.md `## M3`). It answers `queryPipeline`,
 `queryStageStats`, `queryStaleDeals`, `queryRenewals`, `queryAccount360` and
 `queryReviewQueue` from the records (docs/STATUS.md `## M4`). It answers
 `queryEvidence`, `queryArtifactIntact`, `queryTimeline`, `queryThread`,
-`queryAuditByPolicy`, `queryOwner` and `queryBook` from the records, and
-`queryPipeline` with the keys `pipelineByOwner` and `pipelineByTerritory`
-(docs/STATUS.md `## M6`). Each other Query
-constructor gives the refusal "the read path does not answer this query".
+`queryAuditByPolicy`, `queryOwner`, `queryBook`, `queryCan` and
+`queryRedacted` from the records, and `queryPipeline` with the keys
+`pipelineByOwner` and `pipelineByTerritory` (docs/STATUS.md `## M6`). The
+two other Query constructors, `queryDryRun` and `querySimulatePolicy`, give
+the refusal "the read path does not answer this query".
 A definition that binds the name `read` hides the builtin.
 
 ```

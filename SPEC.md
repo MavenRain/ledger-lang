@@ -279,7 +279,12 @@ Encoding rules:
   and the pipeline keys `pipelineByOwner` and `pipelineByTerritory` (the
   owner of a Commercial record is the owner of `accountCommercial c`, else
   of `accountParty p`; no owner or no territory gives the empty key) in the
-  same way (docs/STATUS.md `## M6`).
+  same way. Part D1 answers `queryCan` (`verdictAllow` with the first active
+  Policy record that applies to the subject and has a rule that allows the
+  request, else `verdictDeny` with the first active applying Policy record,
+  or with `none`) and `queryRedacted` (the attrs of the subject that an
+  active applying Policy record lets the principal read) in the same way
+  (docs/STATUS.md `## M6`).
 
 ## 7. Milestones
 

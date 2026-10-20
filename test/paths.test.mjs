@@ -1133,3 +1133,56 @@ test('m6 certificate of the Assignment queries checks', () => {
   assert.match(certified.stdout, /bookRead/);
   assert.match(certified.stdout, /pipeKey/);
 });
+
+// M6 part D1 (design items 12, 13 and 15): queryCan and queryRedacted. The
+// log: a Commercial deal of who with the attrs a and b (x1), p0 (inactive,
+// scopeAll, no rule; x2) and p1 (active, scopeCommercial commercialDeal; x3)
+// with the rules r1 (an reads the field a) and r2 (cy reads and writes each
+// field).
+const policyFirst = [
+  'def who : Ref kindParty := refTo (hashOf "p")',
+  'def d1 : Commercial := makeCommercial commercialDeal "D" who "q" none "U" none statusOpen (attrsField "a" (valueNat 1) (attrsField "b" (valueNat 2) attrsEnd)) none',
+  'def x1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1)',
+  ''
+].join('\n');
+const policyLog = policyFirst + [
+  'def p0 : Policy := makePolicy "o" scopeAll none none (makeRequirement none none none none) nil flagNo',
+  'def x2 : Entry := makeEntry none (actorAgent "a") (createsPolicy p0)',
+  'def r1 : AclRule := makeAclRule "an" (cons permissionRead nil) (some (cons "a" nil))',
+  'def r2 : AclRule := makeAclRule "cy" (cons permissionRead (cons permissionWrite nil)) none',
+  'def p1 : Policy := makePolicy "n" (scopeCommercial commercialDeal) none none (makeRequirement none none none none) (cons r1 (cons r2 nil)) flagYes',
+  'def x3 : Entry := makeEntry none (actorAgent "a") (createsPolicy p1)',
+  'def book : Log := cons x1 (cons x2 (cons x3 nil))',
+  ''
+].join('\n');
+const policySubject = () => `(subjectCommercial (refTo (hashOf "${sha256(named(policyFirst).x1)}")))`;
+const policyRef = () => ({ kind: 'kindPolicy', hash: sha256(named(policyLog).x3) });
+const policyAnswer = (type, query) => termAnswer(policyLog, type, query);
+
+test('m6 queryCan gives the verdict of the first applying policy', () => {
+  const can = (principal, action, subject, fields) =>
+    policyAnswer('Verdict', `queryCan "${principal}" ${action} ${subject} ${fields}`);
+  assert.deepEqual(can('an', 'permissionRead', policySubject(), 'none'), { tag: 'verdictAllow', policy: policyRef() });
+  assert.deepEqual(can('an', 'permissionRead', policySubject(), '(some (cons "a" (cons "b" nil)))'),
+    { tag: 'verdictDeny', policy: policyRef() });
+  assert.deepEqual(can('cy', 'permissionWrite', policySubject(), '(some (cons "b" nil))'),
+    { tag: 'verdictAllow', policy: policyRef() });
+  assert.deepEqual(can('an', 'permissionRead', '(subjectParty who)', 'none'), { tag: 'verdictDeny', policy: null });
+});
+
+test('m6 queryRedacted keeps the fields that a rule lets the principal read', () => {
+  const redacted = principal => policyAnswer('Attrs', `queryRedacted "${principal}" ${policySubject()}`);
+  assert.deepEqual(redacted('an'), { a: 1 });
+  assert.deepEqual(redacted('cy'), { a: 1, b: 2 });
+  assert.deepEqual(redacted('bo'), {});
+});
+
+// The kernel check of the program stays in `make certificate-check`.
+test('m6 certificate of the Policy queries checks', () => {
+  const program = fileURLToPath(new URL('../test/certificate-read-m6d.ledger', import.meta.url));
+  const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(certified.status, 0, certified.stderr);
+  assert.match(certified.stdout, /canRead/);
+  assert.match(certified.stdout, /redactRead/);
+});

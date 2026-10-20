@@ -568,6 +568,43 @@ and the walks take no step.
   The row "queryPipeline by owner keeps the refusal" is now "queryPipeline
   by owner gives the empty key with no assignments".
 
+Part D1 answers the two Policy check queries from the same records
+(`read_policy` in compiler/checker.c, beside `read_assignment`), over the
+full log (no moment). A Policy record takes part when its `active` is
+`true`. It applies to a subject when its `appliesTo` is `scopeAll`,
+`scopeParty` with `subjectParty`, or `scopeCommercial k` with
+`subjectCommercial c` whose Commercial record has the kind `k` (ruling
+Q-M6-11 (a)). An AclRule allows a request when its `principal` is the
+principal, the action is in its `can` list, and its `fields` are `none`,
+or the requested fields are `none`, or each requested field is in its
+`fields`. Each entry takes one work step and the walks take no step.
+
+- `queryCan principal action subject fields`: `verdictAllow` with the ref
+  of the first active applying Policy record (in log order) that has an
+  allowing rule; else `verdictDeny` with `some` the ref of the first active
+  applying Policy record; else `verdictDeny none`.
+- `queryRedacted principal subject`: the attrs of the Party record of
+  `subjectParty` or of the Commercial record of `subjectCommercial`, in
+  order, with only the keys `k` that an active applying Policy record lets
+  the principal read (`permissionRead` on the fields `some [k]`; a rule
+  with the fields `none` keeps each key). Each other subject, and a ref with
+  no record of that family, gives `attrsEnd`.
+- The certificate. The core module answers the two queries with the arms
+  `canRead` and `redactRead` of `readWithH` (core/certificate.def). The
+  answer type `Verdict` is in the ops families of compiler/certificate.c
+  (ruling Q-M6-21 (a)). The program test/certificate-read-m6d.ledger (3
+  entries, 7 reads, 18 hash blocks) is in CERT_PROGRAMS of `make
+  certificate-check`: max RSS 728612864 B, footprint 950207928 B (the kernel
+  fc80b5d). The d3 case 112 holds the same program; its certificate case
+  runs through CERT_EXTRA of the gate script.
+- The refusal "the read path does not answer this query" now names two
+  constructors, `queryDryRun` and `querySimulatePolicy`: twenty-seven of
+  the 29 `Query` constructors have an answer.
+- Tests: `test_m6_can` and `test_m6_redacted` in test/c-modules.c; the rows
+  "m6 queryCan gives the verdict of the first applying policy", "m6
+  queryRedacted keeps the fields that a rule lets the principal read" and
+  "m6 certificate of the Policy queries checks" in test/paths.test.mjs.
+
 ## Remaining M0 work
 
 1. Add dependent function types and support computed function

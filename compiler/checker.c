@@ -3902,6 +3902,138 @@ static int read_assignment(Fuel hash_fuel, Nat budget, Nat position, const Value
   return 1;
 }
 
+/* M6 part D1 (design items 12, 13 and 15, rulings Q-M6-11 (a) and Q-M6-21
+   (a)): what a policy check asks. action is a Permission tag; fields is an
+   Option (List Text) value (null = none). */
+typedef struct {
+  Text principal;
+  Text action;
+  const Value *subject;
+  const Value *fields;
+} PolicyAsk;
+
+/* 1 when the List Permission items hold the tag action. */
+static Nat permission_in(const Values *can, Text action) {
+  return can != NULL && (same_text(commitment_tag(can->head), action) == 1 || permission_in(can->tail, action) == 1);
+}
+
+/* 1 when the List Text items hold text. */
+static Nat text_in(const Values *items, Text text) {
+  return items != NULL && (same_text(items->head->text, text) == 1 || text_in(items->tail, text) == 1);
+}
+
+/* 1 when each text of wanted is in allowed. */
+static Nat texts_all(const Values *wanted, const Values *allowed) {
+  return wanted == NULL || (text_in(allowed, wanted->head->text) == 1 && texts_all(wanted->tail, allowed) == 1);
+}
+
+/* Design item 12: an AclRule allows ask when its principal is the principal,
+   the action is in its can list, and its fields are none, or the requested
+   fields are none, or each requested field is in its fields. */
+static Nat rule_allows(const Value *rule, const PolicyAsk *ask) {
+  const Value *fields = write_field(text_of_cstring("fields"), rule);
+  return same_text(write_field(text_of_cstring("principal"), rule)->text, ask->principal) == 1 &&
+         permission_in(write_field(text_of_cstring("can"), rule)->items, ask->action) == 1 &&
+         (fields->kind == VALUE_NULL || ask->fields->kind == VALUE_NULL ||
+          texts_all(ask->fields->items, fields->items) == 1);
+}
+
+/* 1 when a rule of the List AclRule items allows ask. */
+static Nat rules_allow(const Values *rules, const PolicyAsk *ask) {
+  return rules != NULL && (rule_allows(rules->head, ask) == 1 || rules_allow(rules->tail, ask) == 1);
+}
+
+/* Design item 12 (ruling Q-M6-11 (a)): 1 when the Policy record applies to
+   subject: scopeAll; scopeParty and subjectParty; scopeCommercial k and
+   subjectCommercial c whose Commercial record (of all) has the kind k. */
+static Nat policy_applies(const Value *policy, const Value *subject, const Located *all) {
+  const Value *scope = commitment_field(policy, "appliesTo");
+  Text tag = commitment_tag(scope);
+  Text on = write_field(kSchemaTag(), subject)->text;
+  const Value *record = record_named(all, subject_ref(subject));
+  return same_text(tag, text_of_cstring("scopeAll")) == 1 ||
+         (same_text(tag, text_of_cstring("scopeParty")) == 1 && same_text(on, text_of_cstring("subjectParty")) == 1) ||
+         (same_text(tag, text_of_cstring("scopeCommercial")) == 1 &&
+          same_text(on, text_of_cstring("subjectCommercial")) == 1 && record != NULL &&
+          record_is(record, "Commercial") == 1 &&
+          same_text(commitment_tag(commitment_field(record, "kind")),
+                    commitment_tag(write_field(text_of_cstring("kind"), scope))) == 1);
+}
+
+/* The ref of kind kindPolicy to the record (the event_ref form). */
+static const Value *policy_ref(const Value *record) {
+  return object_two(kRefKind(), text_value(text_of_cstring("kindPolicy")), kRefHash(),
+                    write_field(text_of_cstring("ref"), record));
+}
+
+/* The first Policy record of records (in log order) whose active field is
+   yes and that applies to the subject of ask; with allow 1, also with a
+   rule that allows ask. NULL for none. The walk takes no step. */
+static const Value *policy_first(const Values *records, const Located *all, const PolicyAsk *ask, Nat allow) {
+  if (records == NULL) return NULL;
+  const Value *record = records->head;
+  Nat found = record_is(record, "Policy") == 1 && is_yes(commitment_field(record, "active")) &&
+              policy_applies(record, ask->subject, all) == 1 &&
+              (allow != 1 || rules_allow(commitment_field(record, "acl")->items, ask) == 1);
+  return found == 1 ? record : policy_first(records->tail, all, ask, allow);
+}
+
+/* Design items 12 and 13: verdictAllow with the ref of the first applying
+   policy with an allowing rule; else verdictDeny with the ref of the first
+   applying policy; else verdictDeny none. */
+static int policy_verdict(const Values *records, const Located *all, const PolicyAsk *ask, const Value **value,
+                          Failure *failure) {
+  const Value *allowing = policy_first(records, all, ask, 1);
+  const Value *applying = policy_first(records, all, ask, 0);
+  const Value *ref = allowing != NULL ? policy_ref(allowing) : applying != NULL ? policy_ref(applying) : &null_value;
+  return write_value("Verdict", allowing != NULL ? "verdictAllow" : "verdictDeny", values_item(ref, NULL), value,
+                     failure);
+}
+
+/* Design item 15: the fields of attrs (in order) that an applying policy
+   lets the principal of ask read: a rule allows permissionRead on the one
+   field (a rule with fields none keeps each field). */
+static const Attrs *redact_attrs(const Attrs *attrs, const Values *records, const Located *all, const PolicyAsk *ask) {
+  if (attrs == NULL) return NULL;
+  const Attrs *rest = redact_attrs(attrs->rest, records, all, ask);
+  PolicyAsk keyed = {ask->principal, ask->action, ask->subject,
+                     items_value(values_item(text_value(attrs->key), NULL))};
+  if (policy_first(records, all, &keyed, 1) == NULL) return rest;
+  Attrs *field = arena_alloc(sizeof *field);
+  *field = (Attrs){attrs->key, attrs->value, rest};
+  return field;
+}
+
+/* M6 part D1 (design items 12, 13 and 15): queryCan (can 1) and
+   queryRedacted over the full log (no moment field). queryRedacted gives
+   the attrs of the Party record of subjectParty or the Commercial record of
+   subjectCommercial, kept by redact_attrs; each other subject, and a ref
+   with no record of that family, gives attrsEnd. */
+static int read_policy(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat can,
+                       const Value **value, Nat *left, Failure *failure) {
+  Text none = {NULL, 0};
+  const Located *records = NULL;
+  Nat found;
+  *left = budget;
+  if (!project_entries(hash_fuel, position, sread, items, none, &records, &found, left, failure)) return 0;
+  const Value *subject = write_field(text_of_cstring("subject"), query);
+  PolicyAsk ask = {write_field(text_of_cstring("principal"), query)->text,
+                   can == 1 ? commitment_tag(write_field(text_of_cstring("action"), query))
+                            : text_of_cstring("permissionRead"),
+                   subject, write_field(text_of_cstring("fields"), query)};
+  const Values *ordered = log_order(records, NULL);
+  if (can == 1) return policy_verdict(ordered, records, &ask, value, failure);
+  const Value *record = record_named(records, subject_ref(subject));
+  Text on = write_field(kSchemaTag(), subject)->text;
+  Nat has = record != NULL && ((same_text(on, text_of_cstring("subjectParty")) == 1 && record_is(record, "Party") == 1) ||
+                               (same_text(on, text_of_cstring("subjectCommercial")) == 1 &&
+                                record_is(record, "Commercial") == 1));
+  const Value *attrs = has == 1 ? commitment_field(record, "attrs") : &null_value;
+  *value = make_value(
+      (Value){.kind = VALUE_ATTRS, .attrs = redact_attrs(attrs->kind == VALUE_ATTRS ? attrs->attrs : NULL, ordered, records, &ask)});
+  return 1;
+}
+
 /* M2 parts A, B and C (design items 5 to 16): read log query on the answer
    type. The read application takes one work step; budget 0 gives eBudget
    with left 0. The tag of the Query value selects the answer. queryReplay,
@@ -3914,8 +4046,9 @@ static int read_assignment(Fuel hash_fuel, Nat budget, Nat position, const Value
    the answer of read_account, queryReviewQueue (M4 part C) the answer of
    read_review, queryEvidence and queryArtifactIntact (M6 part A) the
    answer of read_artifact, and queryTimeline, queryThread and
-   queryAuditByPolicy (M6 part B) the answer of read_event, and queryOwner
-   and queryBook (M6 part C) the answer of read_assignment. Each other tag
+   queryAuditByPolicy (M6 part B) the answer of read_event, queryOwner and
+   queryBook (M6 part C) the answer of read_assignment, and queryCan and
+   queryRedacted (M6 part D1) the answer of read_policy. Each other tag
    gives eRead at position (the read application) with left budget - 1. */
 int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, const Value *log, const Value *query,
               const Value **value, Nat *left, Failure *failure) {
@@ -3950,6 +4083,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
   Nat policy = same_text(tag, text_of_cstring("queryAuditByPolicy"));
   Nat owner = same_text(tag, text_of_cstring("queryOwner"));
   Nat book = same_text(tag, text_of_cstring("queryBook"));
+  Nat can = same_text(tag, text_of_cstring("queryCan"));
+  Nat redacted = same_text(tag, text_of_cstring("queryRedacted"));
   const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
   *left = ready;
   if (read_count(items) > LOG_LIMIT) return fail_at(failure, position, eReadLimit);
@@ -3970,6 +4105,8 @@ int read_step(Fuel hash_fuel, Nat budget, Nat position, const LType *answer, con
     return read_event(hash_fuel, ready, position, items, query, timeline, thread, value, left, failure);
   if (owner == 1 || book == 1)
     return read_assignment(hash_fuel, ready, position, items, query, owner, value, left, failure);
+  if (can == 1 || redacted == 1)
+    return read_policy(hash_fuel, ready, position, items, query, can, value, left, failure);
   if (replay != 1 && tail != 1 && audit != 1) return fail_at(failure, position, eRead);
   const Values *hashes;
   Index index;

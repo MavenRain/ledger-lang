@@ -6289,6 +6289,185 @@ static void test_m6_book(void) {
   assert(read_count(value->items) == 0);
 }
 
+/* M6 part D1: a log of 3 entries. c1 (Commercial commercialDeal with the
+   attrs a 1 and b 2), p0 (Policy scopeAll with no rule, active false) and
+   p1 (Policy scopeCommercial commercialDeal, active true, with the rules
+   r1 (an reads the field a) and r2 (cy reads and writes each field)). The
+   AccountEntry cap is 5 fields: each record gives only the fields that the
+   policy check reads, in the form of the record projection (active a Bool,
+   the kind and the permissions texts). */
+typedef struct {
+  Value kind_party, kind_commercial, who_hash, an, cy, name_a, name_b, numbers[2], none, attrs, can[2], fields_a,
+      rules[2], acl_nil, acl, who_ref, c1_ref, log, hash_texts[3], deal, flags[2], permissions[2];
+  Attrs who_fields[2], c1_fields[2], attr_fields[2], rule_fields[2][3];
+  Tagged scopes[2];
+  Values read_only[1], read_write[2], only_a[1], rule_cells[2], cells[3];
+  AccountEntry entries[3];
+  Text hashes[3];
+} PolicyLog;
+
+static const Value *policy_test_log(PolicyLog *s, Nat *left, Failure *failure) {
+  s->kind_party = account_text("kindParty");
+  s->kind_commercial = account_text("kindCommercial");
+  s->who_hash = account_text("who-1");
+  s->an = account_text("an");
+  s->cy = account_text("cy");
+  s->name_a = account_text("a");
+  s->name_b = account_text("b");
+  s->numbers[0] = (Value){.kind = VALUE_NAT, .number = 1};
+  s->numbers[1] = (Value){.kind = VALUE_NAT, .number = 2};
+  s->none = (Value){.kind = VALUE_NULL};
+  assign_ref(s->who_fields, &s->who_ref, &s->kind_party, &s->who_hash);
+  assign_ref(s->c1_fields, &s->c1_ref, &s->kind_commercial, &s->hash_texts[0]);
+  s->attr_fields[1] = (Attrs){text("b"), &s->numbers[1], NULL};
+  s->attr_fields[0] = (Attrs){text("a"), &s->numbers[0], &s->attr_fields[1]};
+  s->attrs = (Value){.kind = VALUE_ATTRS, .attrs = &s->attr_fields[0]};
+  s->deal = account_text("commercialDeal");
+  s->flags[0] = (Value){.kind = VALUE_FLAG, .flag = FLAG_NO};
+  s->flags[1] = (Value){.kind = VALUE_FLAG, .flag = FLAG_YES};
+  s->permissions[0] = account_text("permissionRead");
+  s->permissions[1] = account_text("permissionWrite");
+  const Value *deal_kind = &s->deal;
+  const Value *scope_all = tagged(&s->scopes[0], "scopeAll", NULL, NULL);
+  const Value *scope_deals = tagged(&s->scopes[1], "scopeCommercial", "kind", deal_kind);
+  const Value *flag_no = &s->flags[0];
+  const Value *flag_yes = &s->flags[1];
+  const Value *can_read = &s->permissions[0];
+  const Value *can_write = &s->permissions[1];
+  s->read_only[0] = (Values){can_read, NULL};
+  s->read_write[1] = (Values){can_write, NULL};
+  s->read_write[0] = (Values){can_read, &s->read_write[1]};
+  s->only_a[0] = (Values){&s->name_a, NULL};
+  s->can[0] = (Value){.kind = VALUE_ITEMS, .items = &s->read_only[0]};
+  s->can[1] = (Value){.kind = VALUE_ITEMS, .items = &s->read_write[0]};
+  s->fields_a = (Value){.kind = VALUE_ITEMS, .items = &s->only_a[0]};
+  const Value *const principals[2] = {&s->an, &s->cy};
+  const Value *const allowed[2] = {&s->fields_a, &s->none};
+  for (Nat at = 0; at < 2; at++) {
+    s->rule_fields[at][2] = (Attrs){text("fields"), allowed[at], NULL};
+    s->rule_fields[at][1] = (Attrs){text("can"), &s->can[at], &s->rule_fields[at][2]};
+    s->rule_fields[at][0] = (Attrs){text("principal"), principals[at], &s->rule_fields[at][1]};
+    s->rules[at] = (Value){.kind = VALUE_ATTRS, .attrs = &s->rule_fields[at][0]};
+  }
+  s->rule_cells[1] = (Values){&s->rules[1], NULL};
+  s->rule_cells[0] = (Values){&s->rules[0], &s->rule_cells[1]};
+  s->acl_nil = (Value){.kind = VALUE_ITEMS, .items = NULL};
+  s->acl = (Value){.kind = VALUE_ITEMS, .items = &s->rule_cells[0]};
+  const char *const deal_keys[2] = {"kind", "attrs"};
+  const char *const policy_keys[3] = {"appliesTo", "acl", "active"};
+  const Value *entries[3] = {
+      account_entry(&s->entries[0], "createsCommercial", "commercial", 2, deal_keys,
+                    (const Value *const[]){deal_kind, &s->attrs}),
+      account_entry(&s->entries[1], "createsPolicy", "policy", 3, policy_keys,
+                    (const Value *const[]){scope_all, &s->acl_nil, flag_no}),
+      account_entry(&s->entries[2], "createsPolicy", "policy", 3, policy_keys,
+                    (const Value *const[]){scope_deals, &s->acl, flag_yes})};
+  for (Nat at = 0; at < 3; at++) {
+    assert(entry_hash(1000, 1, 0, entries[at], &s->hashes[at], left, failure));
+    s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+    s->cells[at] = (Values){entries[at], at + 1 < 3 ? &s->cells[at + 1] : NULL};
+  }
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->cells[0]};
+  return &s->log;
+}
+
+typedef struct { Value name; Attrs fields[4]; Attrs tag; Value value; } QueryFour;
+
+/* M6 part D1: the queryCan value with the fields principal, action, subject
+   and fields. */
+static const Value *can_query(QueryFour *s, const Value *principal, const Value *action, const Value *subject,
+                              const Value *fields) {
+  s->name = (Value){.kind = VALUE_TEXT, .text = text("queryCan")};
+  s->fields[3] = (Attrs){text("fields"), fields, NULL};
+  s->fields[2] = (Attrs){text("subject"), subject, &s->fields[3]};
+  s->fields[1] = (Attrs){text("action"), action, &s->fields[2]};
+  s->fields[0] = (Attrs){text("principal"), principal, &s->fields[1]};
+  s->tag = (Attrs){text("tag"), &s->name, &s->fields[0]};
+  s->value = (Value){.kind = VALUE_ATTRS, .attrs = &s->tag};
+  return &s->value;
+}
+
+/* 1 when value is the Verdict tag whose policy field is the Ref kindPolicy
+   with the hash (hash NULL: the field is none). */
+static Nat verdict_is(const Value *value, const char *tag, const Text *hash) {
+  const Value *policy = pipeline_field(value, "policy");
+  return same_text(pipeline_field(value, "tag")->text, text(tag)) == 1 &&
+         (hash == NULL ? policy->kind == VALUE_NULL
+                       : (same_text(pipeline_field(policy, "kind")->text, text("kindPolicy")) == 1 &&
+                          same_text(pipeline_field(policy, "hash")->text, *hash) == 1));
+}
+
+/* M6 part D1 (design items 12 and 13, ruling Q-M6-11 (a)): queryCan on the
+   PolicyLog. 1 step and 1 step for each of the 3 entries. */
+static void test_m6_can(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PolicyLog storage;
+  const Value *log = policy_test_log(&storage, &left, &failure);
+  Tagged permission_storage[2], subject_storage[2];
+  Values asked[3];
+  QueryFour query_storage[4];
+  const Value *reads = tagged(&permission_storage[0], "permissionRead", NULL, NULL);
+  const Value *writes = tagged(&permission_storage[1], "permissionWrite", NULL, NULL);
+  const Value *c1 = tagged(&subject_storage[0], "subjectCommercial", "commercial", &storage.c1_ref);
+  const Value *who = tagged(&subject_storage[1], "subjectParty", "party", &storage.who_ref);
+  asked[1] = (Values){&storage.name_b, NULL};
+  asked[0] = (Values){&storage.name_a, &asked[1]};
+  asked[2] = (Values){&storage.name_b, NULL};
+  Value a_b = {.kind = VALUE_ITEMS, .items = &asked[0]};
+  Value only_b = {.kind = VALUE_ITEMS, .items = &asked[2]};
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* c1: r1 lets an read c1 (fields none): verdictAllow p1. */
+  assert(read_step(1000, 20, 7, answer, log, can_query(&query_storage[0], &storage.an, reads, c1, &storage.none),
+                   &value, &left, &failure));
+  assert(left == 16 && verdict_is(value, "verdictAllow", &storage.hashes[2]) == 1);
+  /* c2: r1 does not hold the field b and r2 is of cy: verdictDeny (some p1). */
+  assert(read_step(1000, 20, 7, answer, log, can_query(&query_storage[1], &storage.an, reads, c1, &a_b), &value,
+                   &left, &failure));
+  assert(verdict_is(value, "verdictDeny", &storage.hashes[2]) == 1);
+  /* c3: r2 lets cy write each field: verdictAllow p1. */
+  assert(read_step(1000, 20, 7, answer, log, can_query(&query_storage[2], &storage.cy, writes, c1, &only_b), &value,
+                   &left, &failure));
+  assert(verdict_is(value, "verdictAllow", &storage.hashes[2]) == 1);
+  /* c0: p0 (scopeAll) is not active and p1 does not apply to a party:
+     verdictDeny none. */
+  assert(read_step(1000, 20, 7, answer, log, can_query(&query_storage[3], &storage.an, reads, who, &storage.none),
+                   &value, &left, &failure));
+  assert(verdict_is(value, "verdictDeny", NULL) == 1);
+}
+
+/* M6 part D1 (design item 15): queryRedacted on the PolicyLog. */
+static void test_m6_redacted(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PolicyLog storage;
+  const Value *log = policy_test_log(&storage, &left, &failure);
+  Tagged subject_storage;
+  QueryTwo query_storage[3];
+  Value bo = account_text("bo");
+  const Value *c1 = tagged(&subject_storage, "subjectCommercial", "commercial", &storage.c1_ref);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* e1: r1 lets an read the field a only: {a: 1}. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[0], "queryRedacted", "principal", &storage.an, "subject", c1), &value,
+                   &left, &failure));
+  assert(left == 16 && value->kind == VALUE_ATTRS && value->attrs != NULL &&
+         same_text(value->attrs->key, text("a")) == 1 && value->attrs->rest == NULL);
+  /* e2: r2 (fields none) lets cy read each field: {a: 1, b: 2}. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[1], "queryRedacted", "principal", &storage.cy, "subject", c1), &value,
+                   &left, &failure));
+  assert(value->attrs != NULL && same_text(value->attrs->key, text("a")) == 1 && value->attrs->rest != NULL &&
+         same_text(value->attrs->rest->key, text("b")) == 1 && value->attrs->rest->rest == NULL);
+  /* e0: no rule of bo: attrsEnd. */
+  assert(read_step(1000, 20, 7, answer, log,
+                   query_two(&query_storage[2], "queryRedacted", "principal", &bo, "subject", c1), &value, &left,
+                   &failure));
+  assert(value->kind == VALUE_ATTRS && value->attrs == NULL);
+}
+
 /* M6 part C (design item 10, rulings Q-M6-9 (a) and Q-M6-10 (a)):
    queryPipeline by owner and by territory on the AssignLog. */
 static void test_m6_pipeline_keys(void) {
@@ -6408,6 +6587,8 @@ int main(void) {
   test_m6_audit_policy();
   test_m6_owner();
   test_m6_book();
+  test_m6_can();
+  test_m6_redacted();
   test_m6_pipeline_keys();
   puts("C module tests passed");
   return 0;

@@ -558,7 +558,7 @@ static void append_family(TextBuilder *builder, unsigned char *made, Nat row) {
    made marks them. */
 static void append_families(TextBuilder *builder, unsigned char *made) {
   static const char *const ops_families[] = {"Missing", "Outcome", "Command", "Write", "Step",
-                                             "Bucket", "StageStat", "Renewal", "Account360"};
+                                             "Bucket", "StageStat", "Renewal", "Account360", "Verdict"};
   for (Nat row = 0; row < SCHEMA_COUNT; row++)
     if (schema_rows[row].kind == ROW_FAMILY && fields_covered(made, row)) append_family(builder, made, row);
   for (size_t index = 0; index < sizeof ops_families / sizeof ops_families[0]; index++) {
@@ -570,7 +570,7 @@ static void append_families(TextBuilder *builder, unsigned char *made) {
 /* The encoder of the instance type json[at, at + size) in to, or 0 with a
    refusal that names the family with no encoder. Each schema.def family and
    each ops.def family of ops_families has one, so of the FAMILY rows the
-   refusal can name only Moment, Verdict, PipelineKey and Query. */
+   refusal can name only Moment, PipelineKey and Query. */
 static int instance_encoder(const unsigned char *made, Text json, Nat at, Nat size, char *to, Text *refusal) {
   char type[TERM], missing[TERM];
   if (size >= TERM) return refuse(refusal, "a type text this long");
