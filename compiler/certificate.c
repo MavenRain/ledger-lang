@@ -775,9 +775,11 @@ static const char *const bodies[] = {"Party", "Membership", "Commercial", "Commi
                                      "Artifact", "Event", "Assignment", "Policy"};
 
 /* The lastEvent setter (schema.def:123 and :153: field 6 of 7 of makeParty,
-   field 10 of 10 of makeCommercial). */
+   field 10 of 10 of makeCommercial). M7 design item 5 (delta A-4): on a
+   Commercial, first the stage from the after payload of the event Body e
+   (stageAfter, as program.c projection_moved). */
 static const char last_event[] =
-    "\ndef ledgerLastEvent : Text -> Body -> Body := fun (h : Text) (b : Body) => case b as s1 in Body return Body with"
+    "\ndef ledgerLastEvent : Text -> Body -> Body -> Body := fun (h : Text) (e : Body) (b : Body) => case b as s1 in Body return Body with"
     " | createsParty (m : Party) => createsParty (case m as s2 in Party return Party with | makeParty (x0 : KindParty)"
     " (x1 : Text) (x2 : Option Text) (x3 : List Identifier) (x4 : Attrs) (x5 : Option (Ref kindEvent))"
     " (x6 : Option (Ref kindEvent)) => makeParty x0 x1 x2 x3 x4 (some (refTo (hashOf h))) x6)"
@@ -785,7 +787,7 @@ static const char last_event[] =
     " | createsCommercial (m : Commercial) => createsCommercial (case m as s2 in Commercial return Commercial with"
     " | makeCommercial (x0 : KindCommercial) (x1 : Text) (x2 : Ref kindParty) (x3 : Text) (x4 : Option Nat) (x5 : Text)"
     " (x6 : Option Text) (x7 : CommercialStatus) (x8 : Attrs) (x9 : Option (Ref kindEvent))"
-    " => makeCommercial x0 x1 x2 x3 x4 x5 x6 x7 x8 (some (refTo (hashOf h))))"
+    " => makeCommercial x0 x1 x2 (stageAfter e x3) x4 x5 x6 x7 x8 (some (refTo (hashOf h))))"
     " | createsCommitment (m : Commitment) => createsCommitment m | createsArtifact (m : Artifact) => createsArtifact m"
     " | createsEvent (m : Event) => createsEvent m | createsAssignment (m : Assignment) => createsAssignment m"
     " | createsPolicy (m : Policy) => createsPolicy m\n";
@@ -826,8 +828,8 @@ static int append_write_rows(TextBuilder *builder, const Hashed *hashed, Text *r
     append_string(builder, ")");
   }
   append_string(builder, "\n\ndef ledgerHs : Entry -> Text := fun (e : Entry) => ledgerHashOf (encodeEntry e textEnd)\n");
-  append_string(builder, "\ndef ledgerUser_write : Log -> Write -> Step := writeWith ledgerHs\n");
   append_string(builder, last_event);
+  append_string(builder, "\ndef ledgerUser_write : Log -> Write -> Step := writeWith ledgerLastEvent ledgerHs\n");
   /* M5 delta E-1 (c), Ruling Q-M5-42 (a): the builtin read under its own
      name. A user def of read lowers to ledgerUser_read, and the kernel
      refuses a second def of a name. */

@@ -101,6 +101,26 @@ int main(int argc, char **argv) {
     check_module(argv[1], module, row, 0);
   }
 
+  /* A non-text stage payload leaves the projected Commercial stage intact
+     in both the evaluator and the certificate. */
+  {
+    Text source = text(
+        "def acme : Ref kindParty := refTo (hashOf \"p\")\n"
+        "def deal0 : Commercial := makeCommercial commercialDeal \"D\" acme \"q\" none \"U\" none statusOpen attrsEnd none\n"
+        "def e1 : Entry := makeEntry none (actorAgent \"a\") (createsCommercial deal0)\n"
+        "def deal : Ref kindCommercial := refTo (hashOf \"5cc8d104daa8f9c0746007c2a86128b3a8b2b84a42a8da69fde1f23aa72920dc\")\n"
+        "def event : Event := makeEvent eventStageChanged (subjectCommercial deal) none none "
+        "(attrsField \"after\" (valueNat 7) attrsEnd) none\n"
+        "def e2 : Entry := makeEntry none (actorAgent \"a\") (createsEvent event)\n"
+        "def book : Log := cons e1 (cons e2 nil)\n");
+    Text output, module, refusal;
+    Failure failure;
+    Hashed collected = {builder_new(), builder_new(), builder_new()};
+    assert(compile_collect(source, &output, &collected, &failure));
+    assert(certificate_module(source, output, &collected, &module, &refusal));
+    check_module(argv[1], module, count++, 0);
+  }
+
   /* Parentheses in a type comment must not select another log's hashes. */
   {
     Text source = text(

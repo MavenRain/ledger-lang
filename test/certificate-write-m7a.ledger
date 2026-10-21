@@ -1,0 +1,14 @@
+-- M7 part A (design item 6): the write path with a Policy. Its
+-- certificate checks in the kernel (make certificate-check).
+def acme : Ref kindParty := refTo (hashOf "p")
+def deal0 : Commercial := makeCommercial commercialDeal "D" acme "q" none "U" none statusOpen attrsEnd none
+def rule : AclRule := makeAclRule "a" (cons permissionTransition nil) none
+def need : Requirement := makeRequirement (some (cons "po" nil)) none none none
+def guard : Policy := makePolicy "o" (scopeCommercial commercialDeal) none (some "won") need (cons rule nil) flagYes
+def e1 : Entry := makeEntry none (actorAgent "a") (createsCommercial deal0)
+def e2 : Entry := makeEntry none (actorAgent "a") (createsPolicy guard)
+def log2 : Log := cons e1 (cons e2 nil)
+def deal : Ref kindCommercial := refTo (hashOf "5cc8d104daa8f9c0746007c2a86128b3a8b2b84a42a8da69fde1f23aa72920dc")
+def s1 : Step := write log2 (makeWrite (actorAgent "a") none (commandTransition deal "r"))
+def s2 : Step := write log2 (makeWrite (actorAgent "a") none (commandTransition deal "won"))
+def s3 : Step := write log2 (makeWrite (actorAgent "b") none (commandTransition deal "r"))

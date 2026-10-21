@@ -2590,47 +2590,15 @@ static int write_answer(const Value *log, const char *outcome, const Values *fie
   return 1;
 }
 
-static int write_denied(const Value *log, const Value **value, Failure *failure) {
-  return write_answer(log, "outcomeDenied", values_item(&null_value, values_item(items_value(NULL), NULL)), value,
+/* M7 design item 3: outcomeDenied policy missing (policy null for none). */
+static int write_refused(const Value *log, const Value *policy, const Values *missing, const Value **value,
+                         Failure *failure) {
+  return write_answer(log, "outcomeDenied", values_item(policy, values_item(items_value(missing), NULL)), value,
                       failure);
 }
 
-/* write log w (design items 7 and 8). The apply takes one work step. No
-   Body, or an expect on an empty log: outcomeDenied none nil. An expect
-   that is not the hash of the last entry: outcomeConflict with that hash.
-   Else the new Entry goes at the end of the log, and its hash takes one
-   more work step. The hash of the last entry takes no work step (delta
-   B-5). */
-int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const Value *write, const Value **value,
-               Nat *left, Failure *failure) {
-  if (budget == 0) {
-    *left = 0;
-    return fail_at(failure, position, eBudget);
-  }
-  Nat ready = budget - 1;
-  const Value *command = write_field(text_of_cstring("command"), write);
-  const Value *expect = write_field(text_of_cstring("expect"), write);
-  const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
-  const Value *last = write_last(items);
-  const Value *body;
-  if (!write_command_body(command, write_field(kSchemaTag(), command)->text, 0, &body, failure)) return 0;
-  *left = ready;
-  if (body == NULL) return write_denied(log, value, failure);
-  if (last == NULL && expect->kind == VALUE_TEXT) return write_denied(log, value, failure);
-  Text head = {NULL, 0};
-  Nat unused;
-  if (last != NULL && !entry_hash(hash_fuel, 1, position, last, &head, &unused, failure)) return 0;
-  if (expect->kind == VALUE_TEXT && same_text(expect->text, head) != 1)
-    return write_answer(log, "outcomeConflict", values_item(text_value(head), NULL), value, failure);
-  const Value *entry;
-  const Values *fields = values_item(last != NULL ? text_value(head) : &null_value,
-                                     values_item(write_field(text_of_cstring("actor"), write), values_item(body, NULL)));
-  if (!write_value("Entry", "makeEntry", fields, &entry, failure)) return 0;
-  Text hash;
-  if (!entry_hash(hash_fuel, ready, position, entry, &hash, left, failure)) return 0;
-  return write_answer(items_value(append_values(items, values_item(entry, NULL))), "outcomeAppended",
-                      values_item(items_value(values_item(text_value(hash), NULL)), values_item(&null_value, NULL)),
-                      value, failure);
+static int write_denied(const Value *log, const Value **value, Failure *failure) {
+  return write_refused(log, &null_value, NULL, value, failure);
 }
 
 /* M5 item 5: the number of log entries, counted up to LOG_LIMIT + 1. */
@@ -3313,7 +3281,8 @@ static Nat stage_exit(Text deal, Text stage, Nat enter, Index changes, Nat total
 
 /* Design item 6: the sum of exit - enter over the stays in stage that start
    in walk (count records). A stay starts at a Commercial record whose stage
-   is stage (its creation entry: the fold does not change stage) or at a
+   is stage (its creation entry: the records are as created, M7 delta
+   A-8) or at a
    stage change with after = stage. changes is the stage_index of the full
    walk with total records. */
 static Nat stage_entries(Text stage, const Located *walk, Nat count, Index changes, Nat total) {
@@ -3377,6 +3346,56 @@ static const Values *stale_deals(Nat quiet, const Located *walk, Nat count, Inde
                                 : items);
 }
 
+/* M7 delta A-8: the one field of the Body attrs that is not the tag (as
+   the projection reads it), or null. */
+static const Value *stage_payload(const Attrs *attrs) {
+  return attrs == NULL                               ? &null_value
+         : same_text(attrs->key, kSchemaTag()) == 1 ? stage_payload(attrs->rest)
+                                                     : attrs->value;
+}
+
+/* M7 delta A-8: attrs with the value of the field key replaced by value. */
+static const Attrs *stage_replace(Text key, const Value *value, const Attrs *attrs) {
+  if (attrs == NULL) return NULL;
+  Attrs *field = arena_alloc(sizeof *field);
+  *field = same_text(attrs->key, key) == 1 ? (Attrs){key, value, attrs->rest}
+                                           : (Attrs){attrs->key, attrs->value, stage_replace(key, value, attrs->rest)};
+  return field;
+}
+
+/* M7 delta A-8: 1 when an entry of older is the same value as entry (thus
+   the same hash). */
+static Nat stage_known(const Value *entry, const Values *older) {
+  return older != NULL && (read_same(older->head, entry) == 1 || stage_known(entry, older->tail) == 1);
+}
+
+/* M7 delta A-8: the entries of items (log order) that make a record (the
+   first entry of each hash), newest first, in front of made. older holds
+   the entries before items. */
+static const Values *stage_makers(const Values *items, const Values *older, const Values *made) {
+  if (items == NULL) return made;
+  return stage_makers(items->tail, values_item(items->head, older),
+                      stage_known(items->head, older) == 1 ? made : values_item(items->head, made));
+}
+
+/* M7 delta A-8 (ruling (b)): the records of walk (newest first) as created:
+   each record takes the payload of the Body of its entry (made, newest
+   first, one entry for each record) as its state. The projection (design
+   item 5) moves the stage of a Commercial record; queryStageStats reads
+   the stage as created. */
+static const Located *stage_created(const Located *walk, const Values *made) {
+  if (walk == NULL || made == NULL) return walk;
+  const Value *body = write_field(text_of_cstring("body"), made->head);
+  const Value *record = walk->value;
+  const Value *state = stage_payload(body->kind == VALUE_ATTRS ? body->attrs : NULL);
+  const Value *value = record->kind == VALUE_ATTRS
+                           ? make_value((Value){.kind = VALUE_ATTRS, .attrs = stage_replace(kValue, state, record->attrs)})
+                           : record;
+  Located *cell = arena_alloc(sizeof *cell);
+  *cell = (Located){walk->position, walk->name, value, stage_created(walk->tail, made->tail)};
+  return cell;
+}
+
 /* M4 part A (design items 1 to 9): queryPipeline (pipeline = 1),
    queryStageStats (stats = 1) and queryStaleDeals. The records are the
    projection of the log (project_entries): each entry takes one work step,
@@ -3385,7 +3404,8 @@ static const Values *stale_deals(Nat quiet, const Located *walk, Nat count, Inde
    names no entry gives nil. pipelineByOwner and pipelineByTerritory (M6
    part C, design item 10) key each Commercial record on its owner
    Assignment: see pipeline_key. queryStageStats and queryStaleDeals
-   read the full log. The position of a record is its index in log order,
+   read the full log; queryStageStats reads the records as created (M7
+   delta A-8: stage_created). The position of a record is its index in log order,
    and L is the number of records (delta A-1). */
 static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values *items, const Value *query, Nat pipeline,
                          Nat stats, const Value **value, Nat *left, Failure *failure) {
@@ -3405,7 +3425,8 @@ static int read_pipeline(Fuel hash_fuel, Nat budget, Nat position, const Values 
   const Value *quiet = write_field(text_of_cstring("quietEntries"), query);
   const Values *answer = NULL;
   if (pipeline == 1 && !pipeline_buckets(kind, known, known, &answer, failure)) return 0;
-  if (stats == 1 && !stage_stats(stage_list(known, NULL), known, total, stage_index(known, total), &answer, failure))
+  const Located *created = stats == 1 ? stage_created(known, stage_makers(items, NULL, NULL)) : NULL;
+  if (stats == 1 && !stage_stats(stage_list(created, NULL), created, total, stage_index(created, total), &answer, failure))
     return 0;
   *value = items_value(pipeline == 1 || stats == 1
                            ? answer
@@ -3945,10 +3966,12 @@ static Nat rules_allow(const Values *rules, const PolicyAsk *ask) {
 
 /* Design item 12 (ruling Q-M6-11 (a)): 1 when the Policy record applies to
    subject: scopeAll; scopeParty and subjectParty; scopeCommercial k and
-   subjectCommercial c whose Commercial record (of all) has the kind k. */
+   subjectCommercial c whose Commercial record (of all) has the kind k. No
+   subject (null, M7 delta A-7) gives scopeAll only. */
 static Nat policy_applies(const Value *policy, const Value *subject, const Located *all) {
   const Value *scope = commitment_field(policy, "appliesTo");
   Text tag = commitment_tag(scope);
+  if (subject->kind == VALUE_NULL) return same_text(tag, text_of_cstring("scopeAll"));
   Text on = write_field(kSchemaTag(), subject)->text;
   const Value *record = record_named(all, subject_ref(subject));
   return same_text(tag, text_of_cstring("scopeAll")) == 1 ||
@@ -4145,6 +4168,239 @@ static Text actor_text(const Value *actor) {
   return same_text(write_field(kSchemaTag(), actor)->text, text_of_cstring("actorHuman")) == 1
              ? write_field(kRefHash(), write_field(text_of_cstring("party"), actor))->text
              : write_field(text_of_cstring("name"), actor)->text;
+}
+
+/* M7 design item 2 (Q-M7-8, delta A-6): the form of the subject of an ask:
+   no subject, a Party ref, a Commercial ref, a Subject, an Account, or a
+   List Account. */
+typedef enum { ASK_NONE, ASK_PARTY, ASK_COMMERCIAL, ASK_SUBJECT, ASK_ACCOUNT, ASK_ACCOUNTS } WriteAskForm;
+
+/* One row of the ask table: the Command, the Permission tag, the field of
+   the Command, the field of that value that holds the subject ("" for the
+   value itself), and the form of the subject. */
+typedef struct {
+  const char *command;
+  const char *action;
+  const char *field;
+  const char *inner;
+  WriteAskForm form;
+} WriteAsk;
+
+static const WriteAsk write_asks[8] = {
+    {"commandResolveParty", "permissionWrite", "", "", ASK_NONE},
+    {"commandStartMembership", "permissionWrite", "membership", "org", ASK_PARTY},
+    {"commandOpenCommercial", "permissionWrite", "commercial", "party", ASK_PARTY},
+    {"commandPropose", "permissionWrite", "commitment", "commercial", ASK_COMMERCIAL},
+    {"commandIngest", "permissionWrite", "artifact", "subjects", ASK_ACCOUNTS},
+    {"commandRecord", "permissionWrite", "event", "subject", ASK_SUBJECT},
+    {"commandAssign", "permissionAssign", "assignment", "subject", ASK_ACCOUNT},
+    {"commandTransition", "permissionTransition", "commercial", "", ASK_COMMERCIAL}};
+
+/* The row of write_asks that names the Command tag, from at on; 8 when no
+   row names it. */
+static Nat write_ask_at(Text tag, Nat at) {
+  if (at >= 8) return 8;
+  return same_text(tag, text_of_cstring(write_asks[at].command)) == 1 ? at : write_ask_at(tag, at + 1);
+}
+
+/* The Subject of value in the form: subjectParty of a Party ref,
+   subjectCommercial of a Commercial ref, the Subject itself, or the Subject
+   of an Account (accountParty p: subjectParty p; accountCommercial c:
+   subjectCommercial c). */
+static int write_subject(const Value *value, WriteAskForm form, const Value **subject, Failure *failure) {
+  if (form == ASK_SUBJECT) {
+    *subject = value;
+    return 1;
+  }
+  Nat party = form == ASK_PARTY ||
+              (form == ASK_ACCOUNT &&
+               same_text(write_field(kSchemaTag(), value)->text, text_of_cstring("accountParty")) == 1);
+  const Value *ref =
+      form == ASK_ACCOUNT ? write_field(text_of_cstring(party == 1 ? "party" : "commercial"), value) : value;
+  return write_value("Subject", party == 1 ? "subjectParty" : "subjectCommercial", values_item(ref, NULL), subject,
+                     failure);
+}
+
+/* The Subjects of the List Account items, in order. */
+static int write_subjects(const Values *accounts, const Values **subjects, Failure *failure) {
+  if (accounts == NULL) {
+    *subjects = NULL;
+    return 1;
+  }
+  const Values *rest;
+  const Value *subject;
+  if (!write_subjects(accounts->tail, &rest, failure) || !write_subject(accounts->head, ASK_ACCOUNT, &subject, failure))
+    return 0;
+  *subjects = values_item(subject, rest);
+  return 1;
+}
+
+/* Delta A-6: the subjects that the Command of row at asks for: one Subject,
+   the Subjects of the Account list of commandIngest, or one null (no
+   subject: a Command with no row, commandResolveParty, and commandIngest
+   with no subjects). */
+static int write_ask_list(const Value *command, Nat at, const Values **subjects, Failure *failure) {
+  WriteAskForm form = at < 8 ? write_asks[at].form : ASK_NONE;
+  const Value *field = at < 8 ? write_field(text_of_cstring(write_asks[at].field), command) : &null_value;
+  const Value *value = at < 8 && write_asks[at].inner[0] != '\0'
+                           ? write_field(text_of_cstring(write_asks[at].inner), field)
+                           : field;
+  const Value *subject;
+  if (form == ASK_NONE || (form == ASK_ACCOUNTS && items_of(value) == NULL)) {
+    *subjects = values_item(&null_value, NULL);
+    return 1;
+  }
+  if (form == ASK_ACCOUNTS) return write_subjects(items_of(value), subjects, failure);
+  if (!write_subject(value, form, &subject, failure)) return 0;
+  *subjects = values_item(subject, NULL);
+  return 1;
+}
+
+/* Delta A-6 (Q-M7-18 (a), Q-M7-5 (a)): the verdict of ask on each subject
+   (in order). The first subject whose applying policies have no allowing
+   rule gives deny the ref of the first applying policy; else allow gets the
+   ref of the first allowing policy of the first subject that has one (null
+   for none: no applying policy is an allow). The walk takes no step. */
+static void write_verdict(const Values *subjects, const PolicyAsk *ask, const Values *ordered, const Located *all,
+                          const Value **deny, const Value **allow) {
+  if (subjects == NULL) {
+    *deny = &null_value;
+    *allow = &null_value;
+    return;
+  }
+  PolicyAsk one = {ask->principal, ask->action, subjects->head, ask->fields};
+  const Value *allowing = policy_first(ordered, all, &one, 1);
+  const Value *applying = policy_first(ordered, all, &one, 0);
+  if (allowing == NULL && applying != NULL) {
+    *deny = policy_ref(applying);
+    *allow = &null_value;
+    return;
+  }
+  write_verdict(subjects->tail, ask, ordered, all, deny, allow);
+  if (allowing != NULL && (*deny)->kind == VALUE_NULL) *allow = policy_ref(allowing);
+}
+
+/* Delta A-5: the first Policy record of policies (log order) whose own
+   Missing list (dry_missing on that one policy) is not empty; NULL for
+   none. */
+static int write_guard(const Values *policies, const Located *all, const DryAsk *ask, Text stage, const Value *current,
+                       const Value **guard, Failure *failure) {
+  if (policies == NULL) {
+    *guard = NULL;
+    return 1;
+  }
+  const Values *missing;
+  if (!dry_missing(values_item(policies->head, NULL), all, ask, stage, current, &missing, failure)) return 0;
+  if (missing != NULL) {
+    *guard = policies->head;
+    return 1;
+  }
+  return write_guard(policies->tail, all, ask, stage, current, guard, failure);
+}
+
+/* M7 design item 4: the Body of commandTransition c stage on the Commercial
+   record current: createsEvent of makeEvent eventStageChanged
+   (subjectCommercial c) none none [before = the stage of current, after =
+   stage] policy. */
+static int write_transition_body(const Value *subject, const Value *current, const Value *stage, const Value *policy,
+                                 const Value **body, Failure *failure) {
+  Attrs *after = arena_alloc(sizeof *after);
+  Attrs *before = arena_alloc(sizeof *before);
+  *after = (Attrs){text_of_cstring("after"), stage, NULL};
+  *before = (Attrs){text_of_cstring("before"), commitment_field(current, "stage"), after};
+  const Value *payload = make_value((Value){.kind = VALUE_ATTRS, .attrs = before});
+  const Value *type;
+  const Value *event;
+  return write_value("EventType", "eventStageChanged", NULL, &type, failure) &&
+         write_value("Event", "makeEvent",
+                     values_item(type, values_item(subject, values_item(&null_value, values_item(&null_value,
+                                 values_item(payload, values_item(policy, NULL)))))),
+                     &event, failure) &&
+         write_value("Body", "createsEvent", values_item(event, NULL), body, failure);
+}
+
+/* write log w (M1 design items 7 and 8; M7 design items 1 to 4, deltas A-1
+   to A-7). The apply takes one work step. The check projects the log on a
+   private budget: the walk takes no work step (delta A-1). No Body:
+   outcomeDenied none nil. commandTransition on a ref with no Commercial
+   record: outcomeDenied none [missingField "commercial"] (Q-M7-10). The
+   asks of the Command (write_asks, principal actor_text of the actor): a
+   deny gives outcomeDenied (some p) nil. commandTransition then checks the
+   guard (a Missing list gives outcomeDenied (some g) missing) and makes its
+   Body with Event.policy the allowing policy (Q-M7-11 (a)). An expect on an
+   empty log: outcomeDenied none nil. An expect that is not the hash of the
+   last entry: outcomeConflict with that hash. Else the new Entry goes at
+   the end of the log (outcomeAppended with the allowing policy), and its
+   hash takes one more work step. The hash of the last entry takes no work
+   step (delta B-5). */
+int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const Value *write, const Value **value,
+               Nat *left, Failure *failure) {
+  if (budget == 0) {
+    *left = 0;
+    return fail_at(failure, position, eBudget);
+  }
+  Text none = {NULL, 0};
+  Nat ready = budget - 1;
+  const Value *command = write_field(text_of_cstring("command"), write);
+  const Value *expect = write_field(text_of_cstring("expect"), write);
+  const Values *items = log->kind == VALUE_ITEMS ? log->items : NULL;
+  const Value *last = write_last(items);
+  const Located *records = NULL;
+  Nat found;
+  Nat walk = read_count(items) + 1;
+  *left = ready;
+  if (!project_entries(hash_fuel, position, swrite, items, none, &records, &found, &walk, failure)) return 0;
+  const Values *ordered = log_order(records, NULL);
+  Text tag = write_field(kSchemaTag(), command)->text;
+  Nat at = write_ask_at(tag, 0);
+  Nat transition = same_text(tag, text_of_cstring("commandTransition"));
+  const Value *commercial = write_field(text_of_cstring("commercial"), command);
+  const Value *named = record_named(records, write_field(kRefHash(), commercial)->text);
+  const Value *current = named != NULL && record_is(named, "Commercial") == 1 ? named : NULL;
+  const Value *body = NULL;
+  const Value *missing;
+  if (transition == 1 && current == NULL)
+    return write_value("Missing", "missingField", values_item(text_value(text_of_cstring("commercial")), NULL),
+                       &missing, failure) &&
+           write_refused(log, &null_value, values_item(missing, NULL), value, failure);
+  if (transition != 1 && !write_command_body(command, tag, 0, &body, failure)) return 0;
+  if (transition != 1 && body == NULL) return write_denied(log, value, failure);
+  const Values *subjects;
+  if (!write_ask_list(command, at, &subjects, failure)) return 0;
+  PolicyAsk ask = {actor_text(write_field(text_of_cstring("actor"), write)),
+                   text_of_cstring(at < 8 ? write_asks[at].action : "permissionWrite"), &null_value, &null_value};
+  const Value *deny;
+  const Value *allow;
+  write_verdict(subjects, &ask, ordered, records, &deny, &allow);
+  if (deny->kind != VALUE_NULL) return write_refused(log, deny, NULL, value, failure);
+  if (transition == 1) {
+    const Value *attrs = commitment_field(current, "attrs");
+    const Value *stage = write_field(text_of_cstring("stage"), command);
+    DryAsk dry = {attrs->kind == VALUE_ATTRS ? attrs->attrs : NULL, ordered, write_field(kRefHash(), commercial)->text,
+                  subjects->head};
+    const Values *wanted;
+    const Value *guard;
+    if (!dry_missing(ordered, records, &dry, stage->text, current, &wanted, failure) ||
+        !write_guard(ordered, records, &dry, stage->text, current, &guard, failure))
+      return 0;
+    if (wanted != NULL) return write_refused(log, guard != NULL ? policy_ref(guard) : &null_value, wanted, value, failure);
+    if (!write_transition_body(subjects->head, current, stage, allow, &body, failure)) return 0;
+  }
+  if (last == NULL && expect->kind == VALUE_TEXT) return write_denied(log, value, failure);
+  Text head = {NULL, 0};
+  Nat unused;
+  if (last != NULL && !entry_hash(hash_fuel, 1, position, last, &head, &unused, failure)) return 0;
+  if (expect->kind == VALUE_TEXT && same_text(expect->text, head) != 1)
+    return write_answer(log, "outcomeConflict", values_item(text_value(head), NULL), value, failure);
+  const Value *entry;
+  const Values *fields = values_item(last != NULL ? text_value(head) : &null_value,
+                                     values_item(write_field(text_of_cstring("actor"), write), values_item(body, NULL)));
+  if (!write_value("Entry", "makeEntry", fields, &entry, failure)) return 0;
+  Text hash;
+  if (!entry_hash(hash_fuel, ready, position, entry, &hash, left, failure)) return 0;
+  return write_answer(items_value(append_values(items, values_item(entry, NULL))), "outcomeAppended",
+                      values_item(items_value(values_item(text_value(hash), NULL)), values_item(allow, NULL)), value,
+                      failure);
 }
 
 /* Design item 16 (ruling Q-M6-13 (a)): the Permission tag of an event

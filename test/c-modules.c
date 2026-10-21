@@ -3972,13 +3972,13 @@ static void test_m1_write(void) {
   assert(left == 4);
   assert(same_text(printed(step), text("{\"log\":[],\"outcome\":{\"tag\":\"outcomeDenied\",\"policy\":null,"
                                        "\"missing\":[]}}")));
-  Value transition = {.kind = VALUE_TEXT, .text = text("commandTransition")};
-  Attrs transition_tag = {text("tag"), &transition, NULL};
-  Value transition_command = {.kind = VALUE_ATTRS, .attrs = &transition_tag};
-  Attrs transition_field = {text("command"), &transition_command, NULL};
-  Attrs transition_expect = {text("expect"), &no_expect, &transition_field};
-  Attrs transition_actor = {text("actor"), &actor, &transition_expect};
-  Value no_body = {.kind = VALUE_ATTRS, .attrs = &transition_actor};
+  Value grant = {.kind = VALUE_TEXT, .text = text("commandGrantApproval")};
+  Attrs grant_tag = {text("tag"), &grant, NULL};
+  Value grant_command = {.kind = VALUE_ATTRS, .attrs = &grant_tag};
+  Attrs grant_field = {text("command"), &grant_command, NULL};
+  Attrs grant_expect = {text("expect"), &no_expect, &grant_field};
+  Attrs grant_actor = {text("actor"), &actor, &grant_expect};
+  Value no_body = {.kind = VALUE_ATTRS, .attrs = &grant_actor};
   assert(write_step(1000, 5, 3, logged, &no_body, &step, &left, &failure));
   assert(left == 4);
   assert(same_text(printed(step), text("{\"log\":[{\"prev\":null,\"actor\":\"p1\",\"body\":{\"tag\":\"createsEvent\","
@@ -6649,6 +6649,220 @@ static void test_m6_pipeline_keys(void) {
          bucket_is(pipeline_at(value, 1), "", 2, 750) == 1);
 }
 
+/* M7 part A (design item 1): a Write of actor with no expect and the
+   Command command. */
+typedef struct { Value none, value; Attrs fields[3]; } WriteTwo;
+
+static const Value *write_of(WriteTwo *s, const Value *actor, const Value *command) {
+  s->none = (Value){.kind = VALUE_NULL};
+  s->fields[2] = (Attrs){text("command"), command, NULL};
+  s->fields[1] = (Attrs){text("expect"), &s->none, &s->fields[2]};
+  s->fields[0] = (Attrs){text("actor"), actor, &s->fields[1]};
+  s->value = (Value){.kind = VALUE_ATTRS, .attrs = &s->fields[0]};
+  return &s->value;
+}
+
+/* M7 part A (design items 1 to 3, Q-M7-5 (a), Q-M7-6, Q-M7-10): writes on
+   the PolicyLog. A commandRecord on c1 asks permissionWrite on
+   subjectCommercial c1, where p1 applies: cy (r2) may write, an (r1, read
+   only) may not. The principal is the party hash of actorHuman and the name
+   of actorAgent and actorSystem. A deny keeps the log. No applying policy
+   is an allow with the policy none. */
+static void test_m7_check(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PolicyLog storage;
+  const Value *log = policy_test_log(&storage, &left, &failure);
+  Tagged subjects[2], events[2], commands[2], actors[4];
+  Attrs cy_fields[2], unknown_fields[2];
+  Value cy_ref, unknown_ref;
+  Value unknown_hash = account_text("c9");
+  Value stage = account_text("w");
+  assign_ref(cy_fields, &cy_ref, &storage.kind_party, &storage.cy);
+  assign_ref(unknown_fields, &unknown_ref, &storage.kind_commercial, &unknown_hash);
+  const Value *on_deal = tagged(&commands[0], "commandRecord", "event",
+                                tagged(&events[0], "makeEvent", "subject",
+                                       tagged(&subjects[0], "subjectCommercial", "commercial", &storage.c1_ref)));
+  const Value *on_who = tagged(&commands[1], "commandRecord", "event",
+                               tagged(&events[1], "makeEvent", "subject",
+                                      tagged(&subjects[1], "subjectParty", "party", &storage.who_ref)));
+  const Value *const principals[4] = {tagged(&actors[0], "actorAgent", "name", &storage.cy),
+                                      tagged(&actors[1], "actorAgent", "name", &storage.an),
+                                      tagged(&actors[2], "actorHuman", "party", &cy_ref),
+                                      tagged(&actors[3], "actorSystem", "name", &storage.an)};
+  WriteTwo writes[6];
+  QueryTwo transition;
+  const Value *step = NULL;
+  /* Allow (cy by actorAgent, and by actorHuman with the party hash cy):
+     outcomeAppended with the policy p1, the log one entry longer. Deny (an by
+     actorAgent and by actorSystem): outcomeDenied (some p1) nil, the same
+     log. */
+  for (Nat at = 0; at < 4; at++) {
+    Nat allow = at % 2 == 0;
+    assert(write_step(1000, 5, 3, log, write_of(&writes[at], principals[at], on_deal), &step, &left, &failure));
+    const Value *outcome = pipeline_field(step, "outcome");
+    assert(left == (allow == 1 ? 3 : 4));
+    assert(verdict_is(outcome, allow == 1 ? "outcomeAppended" : "outcomeDenied", &storage.hashes[2]) == 1);
+    assert(read_count(pipeline_field(step, "log")->items) == (allow == 1 ? 4 : 3));
+    assert(allow == 1 || pipeline_field(outcome, "missing")->items == NULL);
+  }
+  /* No applying policy (subjectParty who: p1 is for commercialDeal, p0 is
+     not active): an may write, with the policy none. */
+  assert(write_step(1000, 5, 3, log, write_of(&writes[4], principals[1], on_who), &step, &left, &failure));
+  assert(left == 3 && verdict_is(pipeline_field(step, "outcome"), "outcomeAppended", NULL) == 1);
+  /* commandTransition on a ref with no record: outcomeDenied none
+     [missingField "commercial"], before the policy check. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[5], principals[0],
+                             query_two(&transition, "commandTransition", "commercial", &unknown_ref, "stage", &stage)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 &&
+         read_count(pipeline_field(step, "log")->items) == 3);
+  assert(read_count(missing) == 1 && missing_is(missing->head, "missingField", "field", "commercial") == 1);
+}
+
+/* M7 part A (design items 3 to 5, delta A-5): commandTransition on the
+   RuleLog with two more entries: entry 4 the Commercial deal c2 at the stage
+   x (the attrs a and b), entry 5 the active scopeAll Policy whose rule lets
+   an transition. To w the guard of entry 1 wants z, an agreed
+   commitmentPrice and the role o: outcomeDenied (some entry 1) with those 3
+   items. To v no policy has a guard: outcomeAppended with the policy entry
+   5, an eventStageChanged Event with that policy, and the new log projects
+   c2 to the stage v. bo has no allowing rule: the ACL deny (some entry 1,
+   nil) comes before the guard. */
+static void test_m7_transition(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  RuleLog storage;
+  const Value *log = rule_test_log(&storage, &left, &failure);
+  AccountEntry extra[2];
+  Tagged scope, actors[2];
+  Value from = account_text("x");
+  Value to = account_text("v");
+  Value bo = account_text("bo");
+  Value transition = account_text("permissionTransition");
+  Values can_cells[1] = {{&transition, NULL}};
+  Value can = {.kind = VALUE_ITEMS, .items = &can_cells[0]};
+  Attrs rule_fields[3];
+  rule_fields[2] = (Attrs){text("fields"), &storage.none, NULL};
+  rule_fields[1] = (Attrs){text("can"), &can, &rule_fields[2]};
+  rule_fields[0] = (Attrs){text("principal"), &storage.an, &rule_fields[1]};
+  Value rule = {.kind = VALUE_ATTRS, .attrs = &rule_fields[0]};
+  Values rule_cells[1] = {{&rule, NULL}};
+  Value acl = {.kind = VALUE_ITEMS, .items = &rule_cells[0]};
+  const char *const deal_keys[3] = {"kind", "stage", "attrs"};
+  const char *const acl_keys[3] = {"appliesTo", "acl", "active"};
+  Values cells[2];
+  cells[1] = (Values){account_entry(&extra[1], "createsPolicy", "policy", 3, acl_keys,
+                                    (const Value *const[]){tagged(&scope, "scopeAll", NULL, NULL), &acl,
+                                                           &storage.flag_yes}),
+                      NULL};
+  cells[0] = (Values){account_entry(&extra[0], "createsCommercial", "commercial", 3, deal_keys,
+                                    (const Value *const[]){&storage.deal, &from, &storage.attrs}),
+                      &cells[1]};
+  storage.cells[3].tail = &cells[0];
+  Text hashes[2];
+  Value hash_texts[2];
+  for (Nat at = 0; at < 2; at++) {
+    assert(entry_hash(1000, 1, 0, cells[at].head, &hashes[at], &left, &failure));
+    hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = hashes[at]};
+  }
+  Attrs c2_fields[2];
+  Value c2_ref;
+  assign_ref(c2_fields, &c2_ref, &storage.kind_commercial, &hash_texts[0]);
+  const Value *an = tagged(&actors[0], "actorAgent", "name", &storage.an);
+  QueryTwo commands[3];
+  WriteTwo writes[3];
+  const Value *step = NULL;
+  /* To w: the guard of entry 1. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[0], an,
+                             query_two(&commands[0], "commandTransition", "commercial", &c2_ref, "stage",
+                                       &storage.stage)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", &storage.hashes[1]) == 1 && read_count(missing) == 3);
+  assert(missing_is(missing->head, "missingField", "field", "z") == 1);
+  assert(read_count(pipeline_field(step, "log")->items) == 6);
+  /* To v: no guard. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[1], an,
+                             query_two(&commands[1], "commandTransition", "commercial", &c2_ref, "stage", &to)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  const Value *logged = pipeline_field(step, "log");
+  assert(left == 3 && verdict_is(outcome, "outcomeAppended", &hashes[1]) == 1 && read_count(logged->items) == 7);
+  const Value *event = pipeline_field(pipeline_field(pipeline_at(logged, 6), "body"), "event");
+  /* The EventType of write_value, the plan form of the evaluator: a text. */
+  const Value *type = pipeline_field(event, "type");
+  assert(type->kind == VALUE_TEXT && same_text(type->text, text("eventStageChanged")) == 1);
+  assert(same_text(pipeline_field(pipeline_field(event, "policy"), "hash")->text, hashes[1]) == 1);
+  const Located *records = NULL;
+  Nat found = 0;
+  Nat budget = read_count(logged->items) + 1;
+  Text none = {NULL, 0};
+  assert(project_entries(1000, 7, text("log"), logged->items, none, &records, &found, &budget, &failure));
+  const Value *record = project_find(hashes[0], records);
+  assert(record != NULL && same_text(pipeline_field(record->attrs->rest->rest->value, "stage")->text, text("v")) == 1);
+  /* bo to w: the ACL deny comes before the guard. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[2], tagged(&actors[1], "actorAgent", "name", &bo),
+                             query_two(&commands[2], "commandTransition", "commercial", &c2_ref, "stage",
+                                       &storage.stage)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", &storage.hashes[1]) == 1 &&
+         pipeline_field(outcome, "missing")->items == NULL);
+}
+
+/* A stage payload is arbitrary Value data. Only text can replace the
+   Commercial stage, including empty text; every Event still sets lastEvent. */
+static void test_m7_stage_payload(void) {
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  Nat left;
+  Value stage = account_text("q");
+  Value none = {.kind = VALUE_NULL};
+  Value kind = account_text("kindCommercial");
+  Value type = account_text("eventStageChanged");
+  Value afters[] = {{.kind = VALUE_NAT, .number = 7}, {.kind = VALUE_FLAG, .flag = FLAG_YES},
+                    {.kind = VALUE_NULL}, {.kind = VALUE_ITEMS}, {.kind = VALUE_ATTRS},
+                    {.kind = VALUE_TEXT, .text = text("")}, {.kind = VALUE_TEXT, .text = text("won")}};
+  AccountEntry commercial, events[7];
+  const char *const commercial_keys[] = {"stage", "lastEvent"};
+  const Value *entry = account_entry(&commercial, "createsCommercial", "commercial", 2, commercial_keys,
+                                     (const Value *const[]){&stage, &none});
+  Text hash;
+  assert(entry_hash(1000, 1, 0, entry, &hash, &left, &failure));
+  Value hash_value = {.kind = VALUE_TEXT, .text = hash};
+  Attrs ref_fields[2];
+  Value ref;
+  assign_ref(ref_fields, &ref, &kind, &hash_value);
+  Tagged subject_storage;
+  const Value *subject = tagged(&subject_storage, "subjectCommercial", "commercial", &ref);
+  const char *const event_keys[] = {"type", "subject", "payload"};
+  for (Nat at = 0; at < 7; at++) {
+    Attrs after = {text("after"), &afters[at], NULL};
+    Value payload = {.kind = VALUE_ATTRS, .attrs = &after};
+    const Value *event = account_entry(&events[at], "createsEvent", "event", 3, event_keys,
+                                       (const Value *const[]){&type, subject, &payload});
+    Values tail = {event, NULL}, head = {entry, &tail};
+    const Located *records = NULL;
+    Nat found, budget = 2;
+    Text stop = {NULL, 0};
+    assert(project_entries(1000, 0, text("log"), &head, stop, &records, &found, &budget, &failure));
+    const Value *record = project_find(hash, records);
+    assert(record != NULL);
+    const Value *state = pipeline_field(record, "value");
+    const Value *actual = pipeline_field(state, "stage");
+    Text expected = at < 5 ? stage.text : afters[at].text;
+    assert(actual->kind == VALUE_TEXT && same_text(actual->text, expected) == 1);
+    assert(pipeline_field(state, "lastEvent")->kind == VALUE_ATTRS);
+  }
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -6744,6 +6958,9 @@ int main(void) {
   test_m6_dry();
   test_m6_simulate();
   test_m6_pipeline_keys();
+  test_m7_check();
+  test_m7_transition();
+  test_m7_stage_payload();
   puts("C module tests passed");
   return 0;
 }

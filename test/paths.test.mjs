@@ -197,7 +197,9 @@ test('the builtin write is the body of a WritePath definition', () => {
 });
 
 test('write of a Command with no Body gives outcomeDenied and the same log', () => {
-  assert.deepEqual(values(`${actors}def s : Step := write history advance`).at(-1), ['s', denied]);
+  const grant = 'def request : Ref kindEvent := refTo (hashOf "event-request") ' +
+    'def grant : Write := makeWrite (actorHuman acme) none (commandGrantApproval request) ';
+  assert.deepEqual(values(`${actors}${grant}def s : Step := write history grant`).at(-1), ['s', denied]);
 });
 
 test('write appends one entry and gives the hash of the entry', () => {
@@ -223,7 +225,8 @@ test('an expect that is not the hash of the last entry gives outcomeConflict', (
 test('an expect on an empty log gives outcomeDenied', () => {
   const guarded = 'def guarded : Write := makeWrite (actorHuman acme) (some (hashOf "entry-0")) ';
   assert.deepEqual(values(`${actors}${guarded}(commandTransition deal "won") def s : Step := write history guarded`)
-    .at(-1), ['s', denied]);
+    .at(-1), ['s', { log: [], outcome: { tag: 'outcomeDenied', policy: null,
+      missing: [{ tag: 'missingField', field: 'commercial' }] } }]);
   assert.deepEqual(named(`${actors}${note}${guarded}(commandRecord note) def s : Step := write history guarded`).s,
     denied);
 });
@@ -1208,4 +1211,63 @@ test('m6 certificate of the dry run and simulate queries checks', () => {
   assert.equal(certified.status, 0, certified.stderr);
   assert.match(certified.stdout, /dryRead/);
   assert.match(certified.stdout, /simWalk/);
+});
+
+const m7First = [
+  'def acme : Ref kindParty := refTo (hashOf "p")',
+  'def deal0 : Commercial := makeCommercial commercialDeal "D" acme "q" none "U" none statusOpen attrsEnd none',
+  'def e1 : Entry := makeEntry none (actorAgent "a") (createsCommercial deal0)',
+  ''
+].join('\n');
+const m7Log = () => m7First + [
+  'def rule : AclRule := makeAclRule "a" (cons permissionTransition nil) none',
+  'def need : Requirement := makeRequirement (some (cons "po" nil)) none none none',
+  'def guard : Policy := makePolicy "o" (scopeCommercial commercialDeal) none (some "won") need (cons rule nil) flagYes',
+  'def e2 : Entry := makeEntry none (actorAgent "a") (createsPolicy guard)',
+  `def deal : Ref kindCommercial := refTo (hashOf "${sha256(named(m7First).e1)}")`,
+  ''
+].join('\n');
+const m7Step = (actor, stage) => `${m7Log()}def s : Step := write (cons e1 (cons e2 nil)) ` +
+  `(makeWrite (actorAgent "${actor}") none (commandTransition deal "${stage}"))`;
+const m7Policy = () => ({ kind: 'kindPolicy', hash: sha256(named(m7Log()).e2) });
+
+test('m7 a write asks the queryCan verdict', () => {
+  const policy = m7Policy();
+  const can = principal => named(`${m7Log()}def book : Log := cons e1 (cons e2 nil) def r : Verdict := read Verdict book ` +
+    `(queryCan "${principal}" permissionTransition (subjectCommercial deal) none)`).r;
+  const allowed = named(m7Step('a', 'r')).s;
+  assert.deepEqual(can('a'), { tag: 'verdictAllow', policy });
+  assert.deepEqual(allowed.outcome, { tag: 'outcomeAppended', entries: [sha256(allowed.log.at(-1))], policy });
+  assert.deepEqual(can('b'), { tag: 'verdictDeny', policy });
+  assert.deepEqual(named(m7Step('b', 'r')).s.outcome, { tag: 'outcomeDenied', policy, missing: [] });
+  const { e1, s } = named(`${m7First}def s : Step := write nil ` +
+    '(makeWrite (actorAgent "a") none (commandOpenCommercial deal0))');
+  assert.deepEqual(s, appended([e1], e1));
+});
+
+test('m7 commandTransition projects the stage', () => {
+  const { deal0, guard, s, records } = projected(m7Step('a', 'r'));
+  const [e1, e2, e3] = s.log;
+  assert.deepEqual(records.slice(0, 2), [
+    record(e1, 'Commercial', { ...deal0, stage: 'r', lastEvent: { kind: 'kindEvent', hash: sha256(e3) } }),
+    record(e2, 'Policy', guard),
+  ]);
+  assert.deepEqual(records.map(item => item.type), ['Commercial', 'Policy', 'Event']);
+});
+
+test('m7 commandTransition is denied by its guard', () => {
+  const policy = m7Policy();
+  const { e1, e2, s } = named(m7Step('a', 'won'));
+  assert.deepEqual(s, { log: [e1, e2], outcome: { tag: 'outcomeDenied', policy, missing: [{ tag: 'missingField', field: 'po' }] } });
+  assert.deepEqual(named(m7Step('b', 'won')).s.outcome, { tag: 'outcomeDenied', policy, missing: [] });
+});
+
+// The kernel check of the program stays in `make certificate-check`.
+test('m7 certificate of the policy check checks', () => {
+  const program = fileURLToPath(new URL('../test/certificate-write-m7a.ledger', import.meta.url));
+  const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(certified.status, 0, certified.stderr);
+  assert.match(certified.stdout, /askWalk/);
+  assert.match(certified.stdout, /guardWalk/);
 });

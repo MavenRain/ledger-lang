@@ -1059,14 +1059,37 @@ static const Attrs *projection_replace(Text key, const Value *value, const Attrs
              : attrs_field(attrs->key, attrs->value, projection_replace(key, value, attrs->rest));
 }
 
+/* M7 design item 5: the projection table. An Event of the EventType (row
+   item 0) on a record of the family (item 1) sets the field (item 2) to the
+   payload value of the key (item 3). */
+static const char *const projection_rows[1][4] = {{"eventStageChanged", "Commercial", "stage", "after"}};
+
+/* The state attrs after the Event event, by the rows of projection_rows
+   from at on. A missing or non-text stage payload gives no change. */
+static const Attrs *projection_moved(Text family, const Value *event, const Attrs *attrs, Nat at) {
+  if (at >= 1) return attrs;
+  const Value *type = projection_field(text_of_cstring("type"), event);
+  Text tag = type->kind == VALUE_TEXT ? type->text : projection_field(kSchemaTag(), type)->text;
+  const Value *moved = projection_field(text_of_cstring(projection_rows[at][3]),
+                                        projection_field(text_of_cstring("payload"), event));
+  Nat row = same_text(tag, text_of_cstring(projection_rows[at][0])) == 1 &&
+            same_text(family, text_of_cstring(projection_rows[at][1])) == 1 && moved->kind == VALUE_TEXT;
+  return projection_moved(
+      family, event, row == 1 ? projection_replace(text_of_cstring(projection_rows[at][2]), moved, attrs) : attrs,
+      at + 1);
+}
+
 /* Item 11: the Party or Commercial record with the identity subject gets
-   lastEvent = some (refTo h). The value of some x is the value of x. */
-static const Value *projection_updated(Text subject, const Value *event, const Value *record) {
+   lastEvent = some (refTo h). The value of some x is the value of x. M7
+   design item 5: first the rows of projection_rows for the Event state. */
+static const Value *projection_updated(Text subject, const Value *event, const Value *state, const Value *record) {
   Text family = projection_field(kType, record)->text;
   if (same_text(projection_field(kRef, record)->text, subject) != 1) return record;
   if (same_text(family, kParty) != 1 && same_text(family, kCommercial) != 1) return record;
-  const Value *state = projection_field(kValue, record);
-  return projection_record(subject, family, projection_attrs(projection_replace(kLastEvent, event, state->attrs)));
+  const Value *was = projection_field(kValue, record);
+  return projection_record(
+      subject, family,
+      projection_attrs(projection_replace(kLastEvent, event, projection_moved(family, state, was->attrs, 0))));
 }
 
 /* M5 items 2, 3 and 3b (delta A-7): -1, 0 or 1 when a is below, equal to or
@@ -1197,7 +1220,7 @@ static void projection_entry(Nat position, Text name, Nat k, const Keyed *entrie
     Text subject = projection_field(kHash, projection_payload(projection_field(kSubject, state)))->text;
     Nat slot = projection_slot(subject, k, hashes, incoming, slots);
     const Value *event = object_two(kKind, text_value(kKindEvent), kHash, text_value(hash));
-    if (slot < m + k) slots[slot].value = projection_updated(subject, event, slots[slot].value);
+    if (slot < m + k) slots[slot].value = projection_updated(subject, event, state, slots[slot].value);
   }
   slots[m + k] = (ProjectionSlot){position, name, projection_record(hash, text_drop(tag, 7), state)};
 }

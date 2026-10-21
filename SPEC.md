@@ -290,6 +290,18 @@ Encoding rules:
   changes when the given Policy takes the place of the Policy records of
   its name) in the same way. Each `Query` constructor has an answer
   (docs/STATUS.md `## M6`).
+- M7: the command bodies and the policy check of the write path. Part A
+  checks each write with the policy check of `queryCan` over the records
+  of the log: the principal is the actor of the Write, and the action and
+  the subject come from the Command. An active applying Policy record that
+  allows the request gives `outcomeAppended` with `policy = some p`. An
+  active applying Policy record with no allowing rule gives `outcomeDenied
+  (some p) nil`, and the log does not change. No active applying Policy
+  record gives `outcomeAppended` with `policy = none`. `commandTransition c
+  s` appends an `eventStageChanged` Event of `c` with the stages `before`
+  and `after`, after the guard of `queryDryRun` for `c` and `s`, and the
+  projection sets the `stage` of the Commercial record to `after`. The
+  certificate covers part A (docs/STATUS.md `## M7`).
 
 ## 7. Milestones
 
@@ -302,3 +314,4 @@ Encoding rules:
 | M4 | Read path: the Rollups queries |
 | M5 | Speed and a kernel-checked certificate for the output |
 | M6 | Read path: the remaining queries and the pipeline keys |
+| M7 | Write path: the command bodies and the policy check |

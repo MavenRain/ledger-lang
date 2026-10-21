@@ -248,9 +248,10 @@ M2 is the read path (parts A, B and C).
 - Out of M2: the other 24 Query constructors (the Membership, Commitment,
   Artifact, Assignment, Policy and Rollups groups, and `queryTimeline`,
   `queryThread` and `queryAuditByPolicy`; after M3, 17 (see `## M3`)), a
-  policy check, a host runtime, the find by merge key of
-  `commandResolveParty`, `commandExtract` with more than one entry for
-  each write, and the 21 Commands with no body.
+  policy check (M7 part A: see `## M7`), a host runtime, the find by
+  merge key of `commandResolveParty`, `commandExtract` with more than one
+  entry for each write, and the 21 Commands with no body (after M7 part
+  A, 20).
 
 ## M3
 
@@ -325,7 +326,9 @@ of records.
   in the stage. A stay starts at a Commercial record in the stage or at a
   stage change into the stage. Its exit is the position of the next stage
   change of the deal out of the stage, else L. The unit is log entries,
-  because the schema has no clock.
+  because the schema has no clock. The stage of a Commercial record here
+  is its stage as created (its Body), not the stage that the M7
+  projection sets (`## M7`; delta A-8).
 - The stale deals (part A). The last position of a Commercial record is
   the larger of its position and the position of its `lastEvent` record.
   `queryStaleDeals q` gives each Commercial record of the full log whose
@@ -649,6 +652,80 @@ part D1.
   rows "m6 queryDryRun and querySimulatePolicy answer over the m6e
   program" and "m6 certificate of the dry run and simulate queries checks"
   in test/paths.test.mjs.
+
+## M7
+
+M7 gives the Commands their bodies and checks the policy on the write
+path. Part A checks each write that has a Body (`write_step` in
+compiler/checker.c), gives `commandTransition` its Body, and lets the
+projection set the stage (`projection_rows` in compiler/program.c).
+
+- The order. `write log x` makes the Body, checks the policy, compares
+  the `expect`, then appends (the default of Q-M7-7).
+- The ask. The principal is the actor of the Write (`actor_text`; the
+  default of Q-M7-6). The action and the subject come from the table of
+  the Command (`write_asks`; the default of Q-M7-8): `commandTransition`
+  asks `permissionTransition` on `subjectCommercial c`, `commandAssign`
+  asks `permissionAssign` on the Account, and each other Command with a
+  Body asks `permissionWrite` on the parent record of the create (the
+  `org` of `commandStartMembership`, the `party` of
+  `commandOpenCommercial`, the `commercial` of `commandPropose`, the
+  subject of the event of `commandRecord`, each subject of the artifact
+  of `commandIngest`). `commandResolveParty` asks with no subject, so
+  only a `scopeAll` Policy record applies to it (delta A-7). The fields
+  of each ask are `none`.
+- The verdict. The check is the policy check of `queryCan` over the
+  records of the input log. The first active applying Policy record that
+  allows the request: the write goes on with `policy = some p`. Active
+  applying Policy records and none that allows: `outcomeDenied (some p)
+  nil`, where `p` is the first of them, and the log does not change
+  (ruling Q-M7-3 (a)). No active applying Policy record: the write goes
+  on with `policy = none` (ruling Q-M7-5 (a)). On the read path,
+  `queryCan` gives `verdictDeny none` for that case. With more than one
+  subject, the first deny denies; else the policy is that of the first
+  allow (delta A-6). `commandIngest` with no subjects asks once with no
+  subject.
+- The missing record. The Ref of a Command that changes a record must
+  name a record of its kind; else the write gives `outcomeDenied none
+  [missingField "<field>"]` (the default of Q-M7-10, delta A-2). In part
+  A this is the `commercial` of `commandTransition`. The parent Ref of a
+  create is not checked.
+- `commandTransition c s`. The entry is `createsEvent (makeEvent
+  eventStageChanged (subjectCommercial c) none none [before, after]
+  policy)`: `before` is the stage of the record of `c`, `after` is `s`,
+  and `policy` is the allowing Policy record, or `none` (the default of
+  Q-M7-11). After an allow, the dry run of `queryDryRun` for `c` and `s`
+  is the guard: a missing list that is not empty gives `outcomeDenied
+  (some g) missing`, where `g` is the first guard Policy record in log
+  order with a missing item of its own (delta A-5).
+- The projection. A table of rows (EventType, record type, field,
+  payload key) sets a field of a record from the payload of an Event.
+  Part A has one row: an `eventStageChanged` Event sets the `stage` of
+  its Commercial record to the `after` of its payload. `lastEvent` is as
+  in `## M1`. The records, `queryPipeline pipelineByStage` and the
+  `fromStage` check of `queryDryRun` see the new stage;
+  `queryStageStats` reads the stage of each record as created (delta
+  A-8, see `## M4`).
+- The work budget. The check projects the input log on a private
+  budget, and the walk takes no work step (delta A-1). No budget output
+  of M1 to M6 changes.
+- The expect (ruling Q-M7-9 (a)). An `expect` is compared with the hash
+  of the last entry of the whole log, not with the hash of the last
+  entry on the subject of the Command (core/ops.def:69-70). This gap
+  stays open.
+- The certificate. The `writeBody` arm of `commandTransition`, the
+  policy check (`canRead` inside `writeWith`), the guard through the dry
+  run mirror of M6 part D2 and the stage row of `ledgerLastEvent`
+  (core/certificate.def, compiler/certificate.c) cover part A. The
+  program test/certificate-write-m7a.ledger (one Policy record with a
+  `toStage` guard and one `permissionTransition` rule, one Commercial
+  record, an allowed and a denied transition; 21 hash blocks) is in
+  CERT_PROGRAMS of `make certificate-check`: max RSS 920092672 B,
+  footprint 1153812160 B (the kernel fc80b5d). The d3 case 114 holds an
+  allowed, a denied and a no-policy write; its certificate case runs
+  through CERT_EXTRA of the gate script.
+- Tests: `test_m7_check` and `test_m7_transition` in test/c-modules.c;
+  4 m7 rows in test/paths.test.mjs.
 
 ## Remaining M0 work
 
