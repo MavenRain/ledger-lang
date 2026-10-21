@@ -1,0 +1,14 @@
+-- M7 part B (B1): the Party find and the identifier writes. A found
+-- ResolveParty does not change the log, and its outcome holds the hash
+-- of the Party entry. AddIdentifier and VerifyIdentifier append one
+-- event each. Its certificate checks in the kernel (make
+-- certificate-check). The other Party writes are in
+-- certificate-write-m7b2.ledger: one program cannot have more than 24
+-- hash blocks.
+def org : Party := makeParty partyOrg "A" none (cons (makeIdentifier systemDomain "acme.example" none) nil) attrsEnd none none
+def pe : Entry := makeEntry none (actorAgent "a") (createsParty org)
+def log1 : Log := cons pe nil
+def p1 : Ref kindParty := refTo (hashOf "7dd45b2ccaff5991097109a7feb850c26c40fc183ee192a422ffa1dd19cf8dde")
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandResolveParty partyOrg "B" (cons (makeIdentifier systemDomain "acme.example" none) nil)))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandAddIdentifier p1 (makeIdentifier systemEmail "x@y" none)))
+def s3 : Step := write log1 (makeWrite (actorAgent "a") none (commandVerifyIdentifier p1 systemDomain "acme.example"))

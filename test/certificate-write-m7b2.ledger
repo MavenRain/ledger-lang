@@ -1,0 +1,13 @@
+-- M7 part B (B1): the Party edit writes. EnrichParty, DeleteParty and
+-- RestoreParty append one event each. de is the entry that s2 writes,
+-- and RestoreParty reads it. Its certificate checks in the kernel (make
+-- certificate-check).
+def org : Party := makeParty partyOrg "A" none nil attrsEnd none none
+def pe : Entry := makeEntry none (actorAgent "a") (createsParty org)
+def log1 : Log := cons pe nil
+def p1 : Ref kindParty := refTo (hashOf "467b4433bc95df918bb5b10a1ede5252c0249a5d411878393689b2f44c9a50e9")
+def de : Entry := makeEntry (some (hashOf "467b4433bc95df918bb5b10a1ede5252c0249a5d411878393689b2f44c9a50e9")) (actorAgent "a") (createsEvent (makeEvent eventDeleted (subjectParty p1) none none attrsEnd none))
+def log2 : Log := cons pe (cons de nil)
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandEnrichParty p1 (attrsField "tier" (valueText "gold") attrsEnd) (makeProvenance none none none)))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandDeleteParty p1))
+def s3 : Step := write log2 (makeWrite (actorAgent "a") none (commandRestoreParty p1))

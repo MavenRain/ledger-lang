@@ -121,6 +121,42 @@ int main(int argc, char **argv) {
     check_module(argv[1], module, count++, 0);
   }
 
+  /* Free Identifier payloads have the same projection in C and the kernel,
+     including malformed fields and explicit empty text. */
+  {
+    static const char *const payloads[] = {
+        "attrsField \"system\" (valueText \"unknown\") (attrsField \"value\" (valueText \"id\") attrsEnd)",
+        "attrsField \"system\" (valueText \"systemOther\") (attrsField \"value\" (valueText \"id\") attrsEnd)",
+        "attrsField \"system\" (valueText \"systemOther\") (attrsField \"name\" (valueNat 7) "
+        "(attrsField \"value\" (valueText \"id\") attrsEnd))",
+        "attrsField \"system\" (valueText \"systemEmail\") attrsEnd",
+        "attrsField \"system\" (valueText \"systemEmail\") (attrsField \"value\" (valueNat 7) attrsEnd)",
+        "attrsField \"system\" (valueText \"systemEmail\") (attrsField \"value\" (valueText \"\") attrsEnd)",
+        "attrsField \"system\" (valueText \"systemOther\") (attrsField \"name\" (valueText \"\") "
+        "(attrsField \"value\" (valueText \"id\") attrsEnd))"};
+    for (unsigned verify = 0; verify < 2; verify++)
+      for (unsigned row = 0; row < sizeof payloads / sizeof payloads[0]; row++) {
+        char bytes[2048];
+        int size = snprintf(bytes, sizeof bytes,
+            "def org : Party := makeParty partyOrg \"A\" none (cons (makeIdentifier systemEmail \"\" none) "
+            "(cons (makeIdentifier (systemOther \"\") \"id\" none) nil)) attrsEnd none none\n"
+            "def pe : Entry := makeEntry none (actorAgent \"a\") (createsParty org)\n"
+            "def p : Ref kindParty := refTo (hashOf \"ecfefbfd7e68d070e66b541ded4b7168b1a283ceeddc9621b3e3d93831ac62eb\")\n"
+            "def ev : Event := makeEvent %s (subjectParty p) none none (%s) none\n"
+            "def ee : Entry := makeEntry none (actorAgent \"a\") (createsEvent ev)\n"
+            "def book : Log := cons pe (cons ee nil)\n"
+            "def answer : Account360 := read Account360 book (queryAccount360 p momentNow)\n",
+            verify == 1 ? "eventIdentifierVerified" : "eventFieldsChanged", payloads[row]);
+        assert(size >= 0 && (size_t)size < sizeof bytes);
+        Text output, module, refusal;
+        Failure failure;
+        Hashed collected = {builder_new(), builder_new(), builder_new()};
+        assert(compile_collect(text(bytes), &output, &collected, &failure));
+        assert(certificate_module(text(bytes), output, &collected, &module, &refusal));
+        check_module(argv[1], module, count++, 0);
+      }
+  }
+
   /* Parentheses in a type comment must not select another log's hashes. */
   {
     Text source = text(

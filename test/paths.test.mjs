@@ -1271,3 +1271,41 @@ test('m7 certificate of the policy check checks', () => {
   assert.match(certified.stdout, /askWalk/);
   assert.match(certified.stdout, /guardWalk/);
 });
+
+// M7 part B1: the Party find, the delete and the restore. The log has no Policy, so each outcome has policy null.
+const m7Party = 'def company : Party := makeParty partyOrg "Acme" none ' +
+  '(cons (makeIdentifier systemEmail "a@x" none) nil) attrsEnd none none ' +
+  'def pe : Entry := makeEntry none (actorHuman acme) (createsParty company) ';
+const m7Head = () => sha256(named(`${actors}${m7Party}`).pe);
+const m7Who = () => `(refTo (hashOf "${m7Head()}"))`;
+const m7Deleted = () => `def de : Entry := makeEntry (some (hashOf "${m7Head()}")) (actorHuman acme) ` +
+  `(createsEvent (makeEvent eventDeleted (subjectParty ${m7Who()}) none none attrsEnd none)) `;
+const m7Edit = (log, command) => `def s : Step := write ${log} (makeWrite (actorHuman acme) none (${command}))`;
+
+test('m7 a found commandResolveParty appends nothing and gives the Party entry', () => {
+  const { pe, s } = named(`${actors}${m7Party}` +
+    m7Edit('(cons pe nil)', 'commandResolveParty partyOrg "Other" (cons (makeIdentifier systemEmail "a@x" none) nil)'));
+  assert.deepEqual(s, appended([pe], pe));
+});
+
+test('m7 commandDeleteParty writes eventDeleted and sets deletedBy', () => {
+  const { pe, s, records } = projected(`${actors}${m7Party}${m7Edit('(cons pe nil)', `commandDeleteParty ${m7Who()}`)}`);
+  const { de } = named(`${actors}${m7Party}${m7Deleted()}`);
+  const party = { kind: 'kindParty', hash: sha256(pe) };
+  assert.deepEqual(de, { prev: sha256(pe), actor: human, body: { tag: 'createsEvent', event: {
+    type: 'eventDeleted', subject: { tag: 'subjectParty', party }, artifact: null, parent: null, payload: {}, policy: null } } });
+  assert.deepEqual(s, appended([pe, de], de));
+  assert.deepEqual(records[0].value.deletedBy, { kind: 'kindEvent', hash: sha256(de) });
+});
+
+// The JSON form of the restore payload is {"restored": true} (VALUE_FLAG FLAG_YES).
+test('m7 commandRestoreParty writes the restored flag and clears deletedBy', () => {
+  const { pe, de, s, records } = projected(`${actors}${m7Party}${m7Deleted()}` +
+    m7Edit('(cons pe (cons de nil))', `commandRestoreParty ${m7Who()}`));
+  const re = s.log[2];
+  assert.deepEqual(s, appended([pe, de, re], re));
+  assert.deepEqual([re.prev, re.actor, re.body.event.type, re.body.event.subject.party.hash],
+    [sha256(de), human, 'eventFieldsChanged', sha256(pe)]);
+  assert.equal(JSON.stringify(re.body.event.payload), '{"restored":true}');
+  assert.equal(records[0].value.deletedBy, null);
+});

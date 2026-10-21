@@ -6818,6 +6818,434 @@ static void test_m7_transition(void) {
          pipeline_field(outcome, "missing")->items == NULL);
 }
 
+/* M7 part B1: a log of two entries. Entry 0 creates the Party acme
+   (partyOrg) with the Identifiers systemEmail "a@x" and systemOther "crm"
+   "c-1" (verifiedBy null) and the attrs title "ceo". Entry 1 creates the
+   active scopeAll Policy n: an may write any field, bo may write the field
+   title only. ref is the Party Ref of acme. */
+typedef struct {
+  Value kind_party, org, acme, mail, crm, crm_value, ceo, an, bo, write, title, name_n, none, flag_yes;
+  Value idents[2], ident_list, attrs, party, party_entry, can, titles, rules[2], acl, ref, hash_texts[2], log;
+  const Value *systems[2];
+  Tagged system_tags[2], body, scope;
+  Attrs ident_fields[2][3], party_fields[7], attr_fields[1], rule_fields[2][3], ref_fields[2], entry_field;
+  Values ident_cells[2], can_cells[1], title_cells[1], rule_cells[2], cells[2];
+  AccountEntry policy;
+  Text hashes[2];
+} PartyLog;
+
+/* The Identifier {system, value, verifiedBy} (makeIdentifier: one
+   constructor, so no tag). */
+static const Value *party_ident(Attrs fields[3], Value *ident, const Value *system, const Value *value,
+                                const Value *verified) {
+  fields[2] = (Attrs){text("verifiedBy"), verified, NULL};
+  fields[1] = (Attrs){text("value"), value, &fields[2]};
+  fields[0] = (Attrs){text("system"), system, &fields[1]};
+  *ident = (Value){.kind = VALUE_ATTRS, .attrs = &fields[0]};
+  return ident;
+}
+
+static const Value *party_test_log(PartyLog *s, Nat *left, Failure *failure) {
+  s->kind_party = account_text("kindParty");
+  s->org = account_text("partyOrg");
+  s->acme = account_text("acme");
+  s->mail = account_text("a@x");
+  s->crm = account_text("crm");
+  s->crm_value = account_text("c-1");
+  s->ceo = account_text("ceo");
+  s->an = account_text("an");
+  s->bo = account_text("bo");
+  s->write = account_text("permissionWrite");
+  s->title = account_text("title");
+  s->name_n = account_text("n");
+  s->none = (Value){.kind = VALUE_NULL};
+  s->flag_yes = (Value){.kind = VALUE_FLAG, .flag = FLAG_YES};
+  s->systems[0] = tagged(&s->system_tags[0], "systemEmail", NULL, NULL);
+  s->systems[1] = tagged(&s->system_tags[1], "systemOther", "name", &s->crm);
+  s->ident_cells[1] =
+      (Values){party_ident(s->ident_fields[1], &s->idents[1], s->systems[1], &s->crm_value, &s->none), NULL};
+  s->ident_cells[0] =
+      (Values){party_ident(s->ident_fields[0], &s->idents[0], s->systems[0], &s->mail, &s->none), &s->ident_cells[1]};
+  s->ident_list = (Value){.kind = VALUE_ITEMS, .items = &s->ident_cells[0]};
+  s->attr_fields[0] = (Attrs){text("title"), &s->ceo, NULL};
+  s->attrs = (Value){.kind = VALUE_ATTRS, .attrs = &s->attr_fields[0]};
+  const char *const party_keys[7] = {"kind", "displayName", "legalName", "identifiers", "attrs", "lastEvent",
+                                     "deletedBy"};
+  const Value *const party_values[7] = {&s->org, &s->acme, &s->none, &s->ident_list, &s->attrs, &s->none, &s->none};
+  for (Nat at = 7; at > 0; at--)
+    s->party_fields[at - 1] =
+        (Attrs){text(party_keys[at - 1]), party_values[at - 1], at < 7 ? &s->party_fields[at] : NULL};
+  s->party = (Value){.kind = VALUE_ATTRS, .attrs = &s->party_fields[0]};
+  s->entry_field = (Attrs){text("body"), tagged(&s->body, "createsParty", "party", &s->party), NULL};
+  s->party_entry = (Value){.kind = VALUE_ATTRS, .attrs = &s->entry_field};
+  s->can_cells[0] = (Values){&s->write, NULL};
+  s->can = (Value){.kind = VALUE_ITEMS, .items = &s->can_cells[0]};
+  s->title_cells[0] = (Values){&s->title, NULL};
+  s->titles = (Value){.kind = VALUE_ITEMS, .items = &s->title_cells[0]};
+  const Value *const principals[2] = {&s->an, &s->bo};
+  const Value *const fields[2] = {&s->none, &s->titles};
+  for (Nat at = 0; at < 2; at++) {
+    s->rule_fields[at][2] = (Attrs){text("fields"), fields[at], NULL};
+    s->rule_fields[at][1] = (Attrs){text("can"), &s->can, &s->rule_fields[at][2]};
+    s->rule_fields[at][0] = (Attrs){text("principal"), principals[at], &s->rule_fields[at][1]};
+    s->rules[at] = (Value){.kind = VALUE_ATTRS, .attrs = &s->rule_fields[at][0]};
+  }
+  s->rule_cells[1] = (Values){&s->rules[1], NULL};
+  s->rule_cells[0] = (Values){&s->rules[0], &s->rule_cells[1]};
+  s->acl = (Value){.kind = VALUE_ITEMS, .items = &s->rule_cells[0]};
+  const char *const policy_keys[4] = {"name", "appliesTo", "acl", "active"};
+  const Value *entries[2] = {
+      &s->party_entry,
+      account_entry(&s->policy, "createsPolicy", "policy", 4, policy_keys,
+                    (const Value *const[]){&s->name_n, tagged(&s->scope, "scopeAll", NULL, NULL), &s->acl,
+                                           &s->flag_yes})};
+  for (Nat at = 0; at < 2; at++) {
+    assert(entry_hash(1000, 1, 0, entries[at], &s->hashes[at], left, failure));
+    s->hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = s->hashes[at]};
+    s->cells[at] = (Values){entries[at], at + 1 < 2 ? &s->cells[at + 1] : NULL};
+  }
+  assign_ref(s->ref_fields, &s->ref, &s->kind_party, &s->hash_texts[0]);
+  s->log = (Value){.kind = VALUE_ITEMS, .items = &s->cells[0]};
+  return &s->log;
+}
+
+typedef struct { Value name, value; Attrs fields[4]; } CommandThree;
+
+static const Value *command_three(CommandThree *s, const char *tag, const char *a, const Value *x, const char *b,
+                                  const Value *y, const char *c, const Value *z) {
+  s->name = account_text(tag);
+  s->fields[3] = (Attrs){text(c), z, NULL};
+  s->fields[2] = (Attrs){text(b), y, &s->fields[3]};
+  s->fields[1] = (Attrs){text(a), x, &s->fields[2]};
+  s->fields[0] = (Attrs){text("tag"), &s->name, &s->fields[1]};
+  s->value = (Value){.kind = VALUE_ATTRS, .attrs = &s->fields[0]};
+  return &s->value;
+}
+
+/* The projected state of the record ref on the log of a write step. */
+static const Value *party_state(const Value *step, Text ref) {
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  const Value *logged = pipeline_field(step, "log");
+  const Located *records = NULL;
+  Nat found = 0;
+  Nat budget = read_count(logged->items) + 1;
+  Text none = {NULL, 0};
+  assert(project_entries(1000, 7, text("log"), logged->items, none, &records, &found, &budget, &failure));
+  const Value *record = project_find(ref, records);
+  assert(record != NULL);
+  return record->attrs->rest->rest->value;
+}
+
+/* The first hash of the outcomeAppended of a write step. */
+static Text appended_hash(const Value *step) {
+  return pipeline_field(pipeline_field(step, "outcome"), "entries")->items->head->text;
+}
+
+/* M7 part B1 (design item 7, deltas MB-2 and MB-3, Q-M7-12 (a), Q-M7-13
+   (a)): commandResolveParty on the PartyLog. An Identifier with the system
+   and the value of an Identifier of acme finds acme: outcomeAppended [acme],
+   the same log, no hash step. The value a@x under systemOther crm finds
+   nothing: a createsParty entry (mutant B-M1 kills this row). The find skips
+   a deleted Party. An expect that is not the head gives outcomeConflict on a
+   found Party too. */
+static void test_m7_find(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PartyLog storage;
+  const Value *log = party_test_log(&storage, &left, &failure);
+  Tagged actor, deleting;
+  Value wrong = account_text("zz");
+  Attrs ident_fields[3][3];
+  Value idents[3], lists[3];
+  Values ident_cells[3];
+  const Value *const wanted[3] = {
+      party_ident(ident_fields[0], &idents[0], storage.systems[0], &storage.mail, &storage.none),
+      party_ident(ident_fields[1], &idents[1], storage.systems[1], &storage.crm_value, &storage.none),
+      party_ident(ident_fields[2], &idents[2], storage.systems[1], &storage.mail, &storage.none)};
+  for (Nat at = 0; at < 3; at++) {
+    ident_cells[at] = (Values){wanted[at], NULL};
+    lists[at] = (Value){.kind = VALUE_ITEMS, .items = &ident_cells[at]};
+  }
+  const Value *an = tagged(&actor, "actorAgent", "name", &storage.an);
+  CommandThree commands[5];
+  WriteTwo writes[6];
+  const Value *step = NULL;
+  /* Found by systemEmail a@x and by systemOther crm c-1. */
+  for (Nat at = 0; at < 2; at++) {
+    assert(write_step(1000, 5, 3, log,
+                      write_of(&writes[at], an,
+                               command_three(&commands[at], "commandResolveParty", "kind", &storage.org, "displayName",
+                                             &storage.acme, "identifiers", &lists[at])),
+                      &step, &left, &failure));
+    assert(left == 4 &&
+           same_text(pipeline_field(pipeline_field(step, "outcome"), "tag")->text, text("outcomeAppended")) == 1);
+    assert(same_text(appended_hash(step), storage.hashes[0]) == 1 && read_count(pipeline_field(step, "log")->items) == 2);
+  }
+  /* a@x under systemOther crm: no match, a createsParty entry (B-M1). */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[2], an,
+                             command_three(&commands[2], "commandResolveParty", "kind", &storage.org, "displayName",
+                                           &storage.acme, "identifiers", &lists[2])),
+                    &step, &left, &failure));
+  const Value *logged = pipeline_field(step, "log");
+  assert(left == 3 && read_count(logged->items) == 3);
+  assert(same_text(pipeline_field(pipeline_field(pipeline_at(logged, 2), "body"), "tag")->text, text("createsParty")) == 1);
+  /* Delete acme; the find then skips it: a createsParty entry. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[3], an, tagged(&deleting, "commandDeleteParty", "party", &storage.ref)), &step,
+                    &left, &failure));
+  logged = pipeline_field(step, "log");
+  assert(left == 3 && read_count(logged->items) == 3);
+  assert(write_step(1000, 5, 3, logged,
+                    write_of(&writes[4], an,
+                             command_three(&commands[3], "commandResolveParty", "kind", &storage.org, "displayName",
+                                           &storage.acme, "identifiers", &lists[0])),
+                    &step, &left, &failure));
+  logged = pipeline_field(step, "log");
+  assert(left == 3 && read_count(logged->items) == 4 && same_text(appended_hash(step), storage.hashes[0]) != 1);
+  assert(same_text(pipeline_field(pipeline_field(pipeline_at(logged, 3), "body"), "tag")->text, text("createsParty")) == 1);
+  /* An expect that is not the head: outcomeConflict with the head. */
+  write_of(&writes[5], an,
+           command_three(&commands[4], "commandResolveParty", "kind", &storage.org, "displayName", &storage.acme,
+                         "identifiers", &lists[0]));
+  writes[5].fields[1].value = &wrong;
+  assert(write_step(1000, 5, 3, log, &writes[5].value, &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  assert(left == 4 && same_text(pipeline_field(outcome, "tag")->text, text("outcomeConflict")) == 1);
+  assert(same_text(pipeline_field(outcome, "head")->text, storage.hashes[1]) == 1 &&
+         read_count(pipeline_field(step, "log")->items) == 2);
+}
+
+/* M7 part B1 (design items 2 and 9, deltas MB-1, MB-2, MB-6, MB-7): the 5
+   B1 Party bodies on the PartyLog, each write on the log of the one before,
+   with the projected field of each. The asks are permissionWrite on
+   subjectParty acme, where n applies. AddIdentifier appends the Identifier
+   with verifiedBy null; the same system and value again gives an Event and
+   no change. VerifyIdentifier sets verifiedBy to the Event ref; with no
+   matching Identifier: outcomeDenied none [missingField "identifier"].
+   Enrich replaces a present key in place and adds a new key at the end, in
+   payload order; its ask holds the keys (bo may write title only). Delete
+   sets deletedBy; Restore (payload restored flagYes) sets it null. No Party
+   record: outcomeDenied none [missingField "party"]. */
+static void test_m7_identity(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PartyLog storage;
+  const Value *log = party_test_log(&storage, &left, &failure);
+  Text acme = storage.hashes[0];
+  Tagged actors[2], erp, parties[3];
+  Value erp_name = account_text("erp");
+  Value erp_value = account_text("e-9");
+  Value wrong = account_text("zz");
+  Value unknown = account_text("p9");
+  Value cto = account_text("cto");
+  Value eu = account_text("eu");
+  Value retail = account_text("retail");
+  Attrs ident_fields[2][3], unknown_fields[2], provenance_fields[3], enrich_fields[5];
+  Value idents[2], unknown_ref, provenance, enrich[3];
+  enrich_fields[2] = (Attrs){text("industry"), &retail, NULL};
+  enrich_fields[1] = (Attrs){text("title"), &cto, &enrich_fields[2]};
+  enrich_fields[0] = (Attrs){text("region"), &eu, &enrich_fields[1]};
+  enrich_fields[3] = (Attrs){text("industry"), &retail, NULL};
+  enrich_fields[4] = (Attrs){text("title"), &storage.ceo, NULL};
+  enrich[0] = (Value){.kind = VALUE_ATTRS, .attrs = &enrich_fields[0]};
+  enrich[1] = (Value){.kind = VALUE_ATTRS, .attrs = &enrich_fields[3]};
+  enrich[2] = (Value){.kind = VALUE_ATTRS, .attrs = &enrich_fields[4]};
+  provenance_fields[2] = (Attrs){text("confidence"), &storage.none, NULL};
+  provenance_fields[1] = (Attrs){text("event"), &storage.none, &provenance_fields[2]};
+  provenance_fields[0] = (Attrs){text("artifact"), &storage.none, &provenance_fields[1]};
+  provenance = (Value){.kind = VALUE_ATTRS, .attrs = &provenance_fields[0]};
+  assign_ref(unknown_fields, &unknown_ref, &storage.kind_party, &unknown);
+  const Value *an = tagged(&actors[0], "actorAgent", "name", &storage.an);
+  const Value *bo = tagged(&actors[1], "actorAgent", "name", &storage.bo);
+  QueryTwo adds[2];
+  CommandThree commands[5];
+  WriteTwo writes[10];
+  const Value *step = NULL;
+  /* AddIdentifier systemOther erp e-9. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[0], an,
+                             query_two(&adds[0], "commandAddIdentifier", "party", &storage.ref, "identifier",
+                                       party_ident(ident_fields[0], &idents[0],
+                                                   tagged(&erp, "systemOther", "name", &erp_name), &erp_value,
+                                                   &storage.none))),
+                    &step, &left, &failure));
+  assert(left == 3 && verdict_is(pipeline_field(step, "outcome"), "outcomeAppended", &storage.hashes[1]) == 1);
+  const Values *now = pipeline_field(party_state(step, acme), "identifiers")->items;
+  const Value *added = read_count(now) == 3 ? now->tail->tail->head : NULL;
+  assert(added != NULL && same_text(pipeline_field(added, "value")->text, text("e-9")) == 1 &&
+         pipeline_field(added, "verifiedBy")->kind == VALUE_NULL);
+  assert(same_text(pipeline_field(pipeline_field(added, "system"), "tag")->text, text("systemOther")) == 1 &&
+         same_text(pipeline_field(pipeline_field(added, "system"), "name")->text, text("erp")) == 1);
+  /* systemEmail a@x again (its verifiedBy is not read): an Event, no change. */
+  log = pipeline_field(step, "log");
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[1], an,
+                             query_two(&adds[1], "commandAddIdentifier", "party", &storage.ref, "identifier",
+                                       party_ident(ident_fields[1], &idents[1], storage.systems[0], &storage.mail,
+                                                   &storage.ref))),
+                    &step, &left, &failure));
+  assert(left == 3 && read_count(pipeline_field(step, "log")->items) == 4);
+  assert(read_count(pipeline_field(party_state(step, acme), "identifiers")->items) == 3);
+  /* VerifyIdentifier systemEmail a@x: verifiedBy is the ref of the Event. */
+  log = pipeline_field(step, "log");
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[2], an,
+                             command_three(&commands[0], "commandVerifyIdentifier", "party", &storage.ref, "system",
+                                           storage.systems[0], "value", &storage.mail)),
+                    &step, &left, &failure));
+  assert(left == 3 && verdict_is(pipeline_field(step, "outcome"), "outcomeAppended", &storage.hashes[1]) == 1);
+  const Value *verified =
+      pipeline_field(pipeline_field(party_state(step, acme), "identifiers")->items->head, "verifiedBy");
+  assert(same_text(pipeline_field(verified, "hash")->text, appended_hash(step)) == 1);
+  /* VerifyIdentifier systemEmail zz: no matching Identifier. */
+  log = pipeline_field(step, "log");
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[3], an,
+                             command_three(&commands[1], "commandVerifyIdentifier", "party", &storage.ref, "system",
+                                           storage.systems[0], "value", &wrong)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 &&
+         read_count(pipeline_field(step, "log")->items) == 5);
+  assert(read_count(missing) == 1 && missing_is(missing->head, "missingField", "field", "identifier") == 1);
+  /* Enrich {region, title, industry}: title in place, then region, industry. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[4], an,
+                             command_three(&commands[2], "commandEnrichParty", "party", &storage.ref, "attrs",
+                                           &enrich[0], "provenance", &provenance)),
+                    &step, &left, &failure));
+  assert(left == 3 && verdict_is(pipeline_field(step, "outcome"), "outcomeAppended", &storage.hashes[1]) == 1);
+  const Attrs *merged = pipeline_field(party_state(step, acme), "attrs")->attrs;
+  assert(merged != NULL && merged->rest != NULL && merged->rest->rest != NULL && merged->rest->rest->rest == NULL);
+  assert(same_text(merged->key, text("title")) == 1 && same_text(merged->value->text, text("cto")) == 1);
+  assert(same_text(merged->rest->key, text("region")) == 1 && same_text(merged->rest->rest->key, text("industry")) == 1);
+  /* The Enrich fields ask: bo may not write industry, may write title. */
+  log = pipeline_field(step, "log");
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[5], bo,
+                             command_three(&commands[3], "commandEnrichParty", "party", &storage.ref, "attrs",
+                                           &enrich[1], "provenance", &provenance)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", &storage.hashes[1]) == 1 &&
+         pipeline_field(outcome, "missing")->items == NULL);
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[6], bo,
+                             command_three(&commands[4], "commandEnrichParty", "party", &storage.ref, "attrs",
+                                           &enrich[2], "provenance", &provenance)),
+                    &step, &left, &failure));
+  assert(left == 3 && verdict_is(pipeline_field(step, "outcome"), "outcomeAppended", &storage.hashes[1]) == 1);
+  /* DeleteParty: deletedBy is the ref of the Event. */
+  log = pipeline_field(step, "log");
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[7], an, tagged(&parties[0], "commandDeleteParty", "party", &storage.ref)), &step,
+                    &left, &failure));
+  assert(left == 3 && same_text(pipeline_field(pipeline_field(party_state(step, acme), "deletedBy"), "hash")->text,
+                                appended_hash(step)) == 1);
+  /* RestoreParty: the payload restored is flagYes; deletedBy null again. */
+  log = pipeline_field(step, "log");
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[8], an, tagged(&parties[1], "commandRestoreParty", "party", &storage.ref)), &step,
+                    &left, &failure));
+  const Value *logged = pipeline_field(step, "log");
+  const Value *restored = pipeline_field(
+      pipeline_field(pipeline_field(pipeline_field(pipeline_at(logged, 8), "body"), "event"), "payload"), "restored");
+  assert(left == 3 && read_count(logged->items) == 9 && restored->kind == VALUE_FLAG && restored->flag == FLAG_YES);
+  assert(pipeline_field(party_state(step, acme), "deletedBy")->kind == VALUE_NULL);
+  /* No Party record: outcomeDenied none [missingField "party"]. */
+  assert(write_step(1000, 5, 3, logged,
+                    write_of(&writes[9], an, tagged(&parties[2], "commandDeleteParty", "party", &unknown_ref)), &step,
+                    &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1);
+  assert(missing_is(missing->head, "missingField", "field", "party") == 1);
+}
+
+/* Malformed Identifier payloads cannot add or verify an Identifier.
+   Explicit empty text remains valid; every Event still sets lastEvent. */
+static void test_m7_identifier_payload(void) {
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  Nat left;
+  Value none = {.kind = VALUE_NULL};
+  Value empty = account_text("");
+  Value id = account_text("id");
+  Value email = account_text("systemEmail");
+  Value other = account_text("systemOther");
+  Value unknown = account_text("unknown");
+  Value number = {.kind = VALUE_NAT, .number = 7};
+  Value yes = {.kind = VALUE_FLAG, .flag = FLAG_YES};
+  Value items = {.kind = VALUE_ITEMS};
+  Value attrs = {.kind = VALUE_ATTRS};
+  Value kind = account_text("kindParty");
+  Tagged systems[2];
+  Attrs ident_fields[2][3];
+  Value idents[2];
+  const Value *first = party_ident(ident_fields[0], &idents[0],
+                                  tagged(&systems[0], "systemEmail", NULL, NULL), &empty, &none);
+  const Value *second = party_ident(ident_fields[1], &idents[1],
+                                   tagged(&systems[1], "systemOther", "name", &empty), &id, &none);
+  Values second_cell = {second, NULL}, first_cell = {first, &second_cell};
+  Value identifiers = {.kind = VALUE_ITEMS, .items = &first_cell};
+  AccountEntry party;
+  const char *const party_keys[] = {"identifiers", "attrs", "lastEvent", "deletedBy"};
+  const Value *entry = account_entry(&party, "createsParty", "party", 4, party_keys,
+                                     (const Value *const[]){&identifiers, &attrs, &none, &none});
+  Text hash;
+  assert(entry_hash(1000, 1, 0, entry, &hash, &left, &failure));
+  Value hash_value = {.kind = VALUE_TEXT, .text = hash};
+  Attrs ref_fields[2];
+  Value ref;
+  assign_ref(ref_fields, &ref, &kind, &hash_value);
+  Tagged subject_storage;
+  const Value *subject = tagged(&subject_storage, "subjectParty", "party", &ref);
+  struct { const Value *system, *value, *name; Nat valid, match; } rows[] = {
+      {&unknown, &id, NULL, 0, 0}, {&other, &id, NULL, 0, 0},
+      {&other, &id, &number, 0, 0}, {&other, &id, &none, 0, 0},
+      {NULL, &empty, NULL, 0, 0}, {&number, &empty, NULL, 0, 0},
+      {&email, NULL, NULL, 0, 0}, {&email, &none, NULL, 0, 0},
+      {&email, &number, NULL, 0, 0}, {&email, &yes, NULL, 0, 0},
+      {&email, &items, NULL, 0, 0}, {&email, &attrs, NULL, 0, 0},
+      {&email, &empty, NULL, 1, 1}, {&other, &id, &empty, 1, 2},
+      {&other, &id, &id, 1, 0}};
+  const char *const event_keys[] = {"type", "subject", "payload"};
+  for (Nat verify = 0; verify < 2; verify++) {
+    Value type = account_text(verify == 1 ? "eventIdentifierVerified" : "eventFieldsChanged");
+    for (Nat at = 0; at < sizeof rows / sizeof rows[0]; at++) {
+      Attrs fields[3];
+      const Attrs *payload_fields = NULL;
+      const Value *values[] = {rows[at].name, rows[at].value, rows[at].system};
+      const char *keys[] = {"name", "value", "system"};
+      for (Nat field = 0; field < 3; field++)
+        if (values[field] != NULL) {
+          fields[field] = (Attrs){text(keys[field]), values[field], payload_fields};
+          payload_fields = &fields[field];
+        }
+      Value payload = {.kind = VALUE_ATTRS, .attrs = payload_fields};
+      AccountEntry event_storage;
+      const Value *event = account_entry(&event_storage, "createsEvent", "event", 3, event_keys,
+                                         (const Value *const[]){&type, subject, &payload});
+      Values tail = {event, NULL}, head = {entry, &tail};
+      const Located *records = NULL;
+      Nat found, budget = 2;
+      Text stop = {NULL, 0};
+      assert(project_entries(1000, 0, text("log"), &head, stop, &records, &found, &budget, &failure));
+      const Value *state = pipeline_field(project_find(hash, records), "value");
+      const Values *actual = pipeline_field(state, "identifiers")->items;
+      Nat appended = verify == 0 && rows[at].valid == 1 && rows[at].match == 0;
+      assert(read_count(actual) == 2 + appended);
+      for (Nat index = 1; index <= 2; index++, actual = actual->tail) {
+        const Value *verified = pipeline_field(actual->head, "verifiedBy");
+        assert(verified->kind == (verify == 1 && rows[at].valid == 1 && rows[at].match == index
+                                     ? VALUE_ATTRS : VALUE_NULL));
+      }
+      assert(pipeline_field(state, "lastEvent")->kind == VALUE_ATTRS);
+    }
+  }
+}
+
 /* A stage payload is arbitrary Value data. Only text can replace the
    Commercial stage, including empty text; every Event still sets lastEvent. */
 static void test_m7_stage_payload(void) {
@@ -6961,6 +7389,9 @@ int main(void) {
   test_m7_check();
   test_m7_transition();
   test_m7_stage_payload();
+  test_m7_find();
+  test_m7_identity();
+  test_m7_identifier_payload();
   puts("C module tests passed");
   return 0;
 }

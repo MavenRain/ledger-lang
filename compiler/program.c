@@ -1059,6 +1059,12 @@ static const Attrs *projection_replace(Text key, const Value *value, const Attrs
              : attrs_field(attrs->key, attrs->value, projection_replace(key, value, attrs->rest));
 }
 
+/* The tag of a constructor value: the text of a nullary tag, else the tag
+   field of its attrs. */
+static Text projection_tag(const Value *value) {
+  return value->kind == VALUE_TEXT ? value->text : projection_field(kSchemaTag(), value)->text;
+}
+
 /* M7 design item 5: the projection table. An Event of the EventType (row
    item 0) on a record of the family (item 1) sets the field (item 2) to the
    payload value of the key (item 3). */
@@ -1069,7 +1075,7 @@ static const char *const projection_rows[1][4] = {{"eventStageChanged", "Commerc
 static const Attrs *projection_moved(Text family, const Value *event, const Attrs *attrs, Nat at) {
   if (at >= 1) return attrs;
   const Value *type = projection_field(text_of_cstring("type"), event);
-  Text tag = type->kind == VALUE_TEXT ? type->text : projection_field(kSchemaTag(), type)->text;
+  Text tag = projection_tag(type);
   const Value *moved = projection_field(text_of_cstring(projection_rows[at][3]),
                                         projection_field(text_of_cstring("payload"), event));
   Nat row = same_text(tag, text_of_cstring(projection_rows[at][0])) == 1 &&
@@ -1079,17 +1085,145 @@ static const Attrs *projection_moved(Text family, const Value *event, const Attr
       at + 1);
 }
 
+static const Value *projection_items(const Values *items) {
+  Value *value = arena_alloc(sizeof *value);
+  *value = (Value){.kind = VALUE_ITEMS, .items = items};
+  return value;
+}
+
+static const Values *projection_cell(const Value *head, const Values *tail) {
+  Values *cell = arena_alloc(sizeof *cell);
+  *cell = (Values){head, tail};
+  return cell;
+}
+
+/* Free Event payloads describe an Identifier only with a schema system tag,
+   a text value, and a text name for systemOther, as payIdent in the kernel. */
+static Nat projection_ident_valid(const Value *payload) {
+  const Value *system = projection_field(text_of_cstring("system"), payload);
+  const Value *value = projection_field(text_of_cstring("value"), payload);
+  const Value *name = projection_field(text_of_cstring("name"), payload);
+  Plan plan;
+  return system->kind == VALUE_TEXT && value->kind == VALUE_TEXT &&
+         schema_constructor_plan(text_of_cstring("IdentifierSystem"), system->text, &plan) &&
+         (same_text(system->text, text_of_cstring("systemOther")) != 1 || name->kind == VALUE_TEXT);
+}
+
+/* Delta MB-2: 1 when the Identifier ident has the system tag, the name (for
+   systemOther only) and the value of the payload. */
+static Nat projection_ident_match(const Value *ident, const Value *payload) {
+  const Value *system = projection_field(text_of_cstring("system"), ident);
+  Text tag = projection_tag(system);
+  return same_text(tag, projection_field(text_of_cstring("system"), payload)->text) == 1 &&
+         (same_text(tag, text_of_cstring("systemOther")) != 1 ||
+          same_text(projection_field(text_of_cstring("name"), system)->text,
+                    projection_field(text_of_cstring("name"), payload)->text) == 1) &&
+         same_text(projection_field(text_of_cstring("value"), ident)->text,
+                   projection_field(text_of_cstring("value"), payload)->text) == 1;
+}
+
+static Nat projection_ident_in(const Values *items, const Value *payload) {
+  return items != NULL &&
+         (projection_ident_match(items->head, payload) == 1 || projection_ident_in(items->tail, payload) == 1);
+}
+
+/* Delta MB-2: the Identifier of the payload, with verifiedBy none. */
+static const Value *projection_ident(const Value *payload) {
+  const Value *system = projection_field(text_of_cstring("system"), payload);
+  const Attrs *name = same_text(system->text, text_of_cstring("systemOther")) == 1
+                          ? attrs_field(text_of_cstring("name"), projection_field(text_of_cstring("name"), payload), NULL)
+                          : NULL;
+  return projection_attrs(
+      attrs_field(text_of_cstring("system"), projection_attrs(attrs_field(kSchemaTag(), system, name)),
+                  attrs_field(text_of_cstring("value"), projection_field(text_of_cstring("value"), payload),
+                              attrs_field(text_of_cstring("verifiedBy"), &projection_null, NULL))));
+}
+
+/* items with ident at the end. */
+static const Values *projection_ident_append(const Values *items, const Value *ident) {
+  return items == NULL ? projection_cell(ident, NULL)
+                       : projection_cell(items->head, projection_ident_append(items->tail, ident));
+}
+
+/* items where each Identifier that matches the payload has verifiedBy event. */
+static const Values *projection_verified(const Values *items, const Value *payload, const Value *event) {
+  return items == NULL ? NULL
+         : projection_cell(
+               projection_ident_match(items->head, payload) == 1
+                   ? projection_attrs(projection_replace(text_of_cstring("verifiedBy"), event, items->head->attrs))
+                   : items->head,
+               projection_verified(items->tail, payload, event));
+}
+
+/* attrs with key value at the end. */
+static const Attrs *projection_append(Text key, const Value *value, const Attrs *attrs) {
+  return attrs == NULL ? attrs_field(key, value, NULL)
+                       : attrs_field(attrs->key, attrs->value, projection_append(key, value, attrs->rest));
+}
+
+/* attrs after each key of payload, in payload order: a present key is
+   replaced, a new key goes at the end. */
+static const Attrs *projection_merge(const Attrs *payload, const Attrs *attrs) {
+  return payload == NULL ? attrs
+                         : projection_merge(payload->rest, has_field(payload->key, attrs) == 1
+                                                               ? projection_replace(payload->key, payload->value, attrs)
+                                                               : projection_append(payload->key, payload->value, attrs));
+}
+
+/* M7 design item 5 (delta MB-6, part B1): the Party state attrs after the
+   Event state with the ref event. eventDeleted sets deletedBy (MB-7: every
+   eventDeleted in B1); eventFieldsChanged restored (flag yes) sets deletedBy
+   none, system with value appends the Identifier (a match gives no change),
+   attrs merges the keys; eventIdentifierVerified sets verifiedBy on each
+   matching Identifier. */
+static const Attrs *projection_party(const Value *event, const Value *state, const Attrs *attrs) {
+  Text tag = projection_tag(projection_field(text_of_cstring("type"), state));
+  const Value *payload = projection_field(text_of_cstring("payload"), state);
+  const Value *restored = projection_field(text_of_cstring("restored"), payload);
+  const Value *merged = projection_field(text_of_cstring("attrs"), payload);
+  const Value *had = projection_attr(text_of_cstring("identifiers"), attrs);
+  const Values *idents = had->kind == VALUE_ITEMS ? had->items : NULL;
+  const Value *kept = projection_attr(text_of_cstring("attrs"), attrs);
+  Nat changed = same_text(tag, text_of_cstring("eventFieldsChanged"));
+  Nat verify = same_text(tag, text_of_cstring("eventIdentifierVerified"));
+  Nat identifier = (changed == 1 || verify == 1) && projection_ident_valid(payload) == 1;
+  Nat restore = changed == 1 && restored->kind == VALUE_FLAG && restored->flag == FLAG_YES;
+  Nat add = changed == 1 && identifier == 1 && projection_ident_in(idents, payload) != 1;
+  Nat enrich = changed == 1 && merged->kind == VALUE_ATTRS;
+  const Attrs *deleted =
+      same_text(tag, text_of_cstring("eventDeleted")) == 1 ? projection_replace(text_of_cstring("deletedBy"), event, attrs)
+      : restore == 1 ? projection_replace(text_of_cstring("deletedBy"), &projection_null, attrs)
+                     : attrs;
+  const Attrs *added =
+      add == 1 ? projection_replace(text_of_cstring("identifiers"),
+                                    projection_items(projection_ident_append(idents, projection_ident(payload))), deleted)
+               : deleted;
+  const Attrs *enriched =
+      enrich == 1 ? projection_replace(text_of_cstring("attrs"),
+                                       projection_attrs(projection_merge(
+                                           merged->attrs, kept->kind == VALUE_ATTRS ? kept->attrs : NULL)),
+                                       added)
+                  : added;
+  return verify == 1 && identifier == 1
+             ? projection_replace(text_of_cstring("identifiers"),
+                                  projection_items(projection_verified(idents, payload, event)), enriched)
+             : enriched;
+}
+
 /* Item 11: the Party or Commercial record with the identity subject gets
    lastEvent = some (refTo h). The value of some x is the value of x. M7
-   design item 5: first the rows of projection_rows for the Event state. */
+   design item 5: first the rows of projection_rows for the Event state;
+   then, for a Party, the arm projection_party (delta MB-6). */
 static const Value *projection_updated(Text subject, const Value *event, const Value *state, const Value *record) {
   Text family = projection_field(kType, record)->text;
   if (same_text(projection_field(kRef, record)->text, subject) != 1) return record;
   if (same_text(family, kParty) != 1 && same_text(family, kCommercial) != 1) return record;
   const Value *was = projection_field(kValue, record);
+  const Attrs *moved = projection_moved(family, state, was->attrs, 0);
   return projection_record(
       subject, family,
-      projection_attrs(projection_replace(kLastEvent, event, projection_moved(family, state, was->attrs, 0))));
+      projection_attrs(projection_replace(
+          kLastEvent, event, same_text(family, kParty) == 1 ? projection_party(event, state, moved) : moved)));
 }
 
 /* M5 items 2, 3 and 3b (delta A-7): -1, 0 or 1 when a is below, equal to or

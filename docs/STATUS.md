@@ -249,9 +249,9 @@ M2 is the read path (parts A, B and C).
   Artifact, Assignment, Policy and Rollups groups, and `queryTimeline`,
   `queryThread` and `queryAuditByPolicy`; after M3, 17 (see `## M3`)), a
   policy check (M7 part A: see `## M7`), a host runtime, the find by
-  merge key of `commandResolveParty`, `commandExtract` with more than one
-  entry for each write, and the 21 Commands with no body (after M7 part
-  A, 20).
+  merge key of `commandResolveParty` (M7 part B1: see `## M7`),
+  `commandExtract` with more than one entry for each write, and the 21
+  Commands with no body (after M7 part A, 20; after part B1, 15).
 
 ## M3
 
@@ -724,8 +724,54 @@ projection set the stage (`projection_rows` in compiler/program.c).
   footprint 1153812160 B (the kernel fc80b5d). The d3 case 114 holds an
   allowed, a denied and a no-policy write; its certificate case runs
   through CERT_EXTRA of the gate script.
-- Tests: `test_m7_check` and `test_m7_transition` in test/c-modules.c;
-  4 m7 rows in test/paths.test.mjs.
+- Part B1, the Party find. `commandResolveParty k n ids` finds the
+  first Party record in log order that has `deletedBy = none` and an
+  Identifier that matches an Identifier of `ids`: the same system tag,
+  the same name for `systemOther`, and the same value. For a found
+  Party, the write asks, then compares the `expect`, then gives
+  `outcomeAppended [h] policy`, where `h` is the hash of the entry of
+  the Party. The log does not change. If no Party is found, the write
+  appends the `createsParty` entry as before.
+- Part B1, the Party edits. `commandAddIdentifier`,
+  `commandVerifyIdentifier`, `commandEnrichParty`, `commandDeleteParty`
+  and `commandRestoreParty` have a Body. The `party` Ref must name a
+  Party record; else the write gives `outcomeDenied none [missingField
+  "party"]`. Each asks `permissionWrite` on the Party; the fields of the
+  Enrich ask are the keys of its attrs. The entry is a `createsEvent` of
+  an Event on `subjectParty p`. AddIdentifier: `eventFieldsChanged`
+  with the system, the name (`systemOther` only) and the value.
+  VerifyIdentifier: `eventIdentifierVerified` with the same payload; if
+  no Identifier of the record matches, `outcomeDenied none
+  [missingField "identifier"]`. EnrichParty: `eventFieldsChanged` with
+  `attrs`; the artifact and the parent come from the provenance.
+  DeleteParty: `eventDeleted` with an empty payload. RestoreParty:
+  `eventFieldsChanged` with `restored = true`.
+- Part B1, the Party projection. `eventDeleted` sets `deletedBy` to the
+  Event. `eventFieldsChanged` with `restored` sets `deletedBy` to
+  `none`; with a system and a value it adds the Identifier at the end (a
+  duplicate gives no change); with `attrs`, each key replaces the same
+  key and a new key goes at the end. `eventIdentifierVerified` sets
+  `verifiedBy` of each matching Identifier to the Event.
+- Free Identifier payloads require a known system tag and a text value;
+  `systemOther` also requires a text name. Missing or non-text fields
+  leave the Identifiers unchanged in C and the kernel, including on
+  `eventIdentifierVerified`. Explicit empty text is valid. Every Event
+  still sets `lastEvent`.
+- The certificate of part B1. `systemText`, `identMatch`, `partyFind`,
+  `writeFound`, the missing-record check of `party` and the 5 `writeGo`
+  arms (core/certificate.def), and the Party arm of `ledgerLastEvent`
+  (compiler/certificate.c). The 6 writes in one program take 40 hash
+  blocks (the cap is 24), so CERT_PROGRAMS has two programs:
+  test/certificate-write-m7b.ledger (the find, AddIdentifier and
+  VerifyIdentifier; 19 hash blocks; max RSS 1628389376 B, footprint 750978104
+  B) and test/certificate-write-m7b2.ledger (EnrichParty, DeleteParty
+  and RestoreParty; 24 hash blocks; max RSS 1599832064 B, footprint
+  858981552 B), with the kernel fc80b5d.
+- Tests: `test_m7_check`, `test_m7_transition`, `test_m7_find`,
+  `test_m7_identity`, `test_m7_stage_payload` and
+  `test_m7_identifier_payload` in test/c-modules.c; 7 m7 rows in
+  test/paths.test.mjs. The Identifier payload matrix in
+  test/c-certificate.c also checks both Event types in the kernel.
 
 ## Remaining M0 work
 

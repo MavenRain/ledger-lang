@@ -300,8 +300,14 @@ Encoding rules:
   record gives `outcomeAppended` with `policy = none`. `commandTransition c
   s` appends an `eventStageChanged` Event of `c` with the stages `before`
   and `after`, after the guard of `queryDryRun` for `c` and `s`, and the
-  projection sets the `stage` of the Commercial record to `after`. The
-  certificate covers part A (docs/STATUS.md `## M7`).
+  projection sets the `stage` of the Commercial record to `after`. Part B1
+  gives `commandResolveParty` the Party find: the first Party record that
+  is not deleted and has a matching Identifier is the result, and the log
+  does not change. Part B1 also gives a Body to `commandAddIdentifier`,
+  `commandVerifyIdentifier`, `commandEnrichParty`, `commandDeleteParty`
+  and `commandRestoreParty`, and the projection applies their Events to
+  the Party record. The certificate covers part A and part B1
+  (docs/STATUS.md `## M7`).
 
 ## 7. Milestones
 

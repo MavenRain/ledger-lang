@@ -4186,7 +4186,9 @@ typedef struct {
   WriteAskForm form;
 } WriteAsk;
 
-static const WriteAsk write_asks[8] = {
+enum { WRITE_ASKS = 13 };
+
+static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandResolveParty", "permissionWrite", "", "", ASK_NONE},
     {"commandStartMembership", "permissionWrite", "membership", "org", ASK_PARTY},
     {"commandOpenCommercial", "permissionWrite", "commercial", "party", ASK_PARTY},
@@ -4194,12 +4196,17 @@ static const WriteAsk write_asks[8] = {
     {"commandIngest", "permissionWrite", "artifact", "subjects", ASK_ACCOUNTS},
     {"commandRecord", "permissionWrite", "event", "subject", ASK_SUBJECT},
     {"commandAssign", "permissionAssign", "assignment", "subject", ASK_ACCOUNT},
-    {"commandTransition", "permissionTransition", "commercial", "", ASK_COMMERCIAL}};
+    {"commandTransition", "permissionTransition", "commercial", "", ASK_COMMERCIAL},
+    {"commandAddIdentifier", "permissionWrite", "party", "", ASK_PARTY},
+    {"commandVerifyIdentifier", "permissionWrite", "party", "", ASK_PARTY},
+    {"commandEnrichParty", "permissionWrite", "party", "", ASK_PARTY},
+    {"commandDeleteParty", "permissionWrite", "party", "", ASK_PARTY},
+    {"commandRestoreParty", "permissionWrite", "party", "", ASK_PARTY}};
 
-/* The row of write_asks that names the Command tag, from at on; 8 when no
-   row names it. */
+/* The row of write_asks that names the Command tag, from at on; WRITE_ASKS
+   when no row names it. */
 static Nat write_ask_at(Text tag, Nat at) {
-  if (at >= 8) return 8;
+  if (at >= WRITE_ASKS) return WRITE_ASKS;
   return same_text(tag, text_of_cstring(write_asks[at].command)) == 1 ? at : write_ask_at(tag, at + 1);
 }
 
@@ -4240,9 +4247,9 @@ static int write_subjects(const Values *accounts, const Values **subjects, Failu
    subject: a Command with no row, commandResolveParty, and commandIngest
    with no subjects). */
 static int write_ask_list(const Value *command, Nat at, const Values **subjects, Failure *failure) {
-  WriteAskForm form = at < 8 ? write_asks[at].form : ASK_NONE;
-  const Value *field = at < 8 ? write_field(text_of_cstring(write_asks[at].field), command) : &null_value;
-  const Value *value = at < 8 && write_asks[at].inner[0] != '\0'
+  WriteAskForm form = at < WRITE_ASKS ? write_asks[at].form : ASK_NONE;
+  const Value *field = at < WRITE_ASKS ? write_field(text_of_cstring(write_asks[at].field), command) : &null_value;
+  const Value *value = at < WRITE_ASKS && write_asks[at].inner[0] != '\0'
                            ? write_field(text_of_cstring(write_asks[at].inner), field)
                            : field;
   const Value *subject;
@@ -4319,6 +4326,162 @@ static int write_transition_body(const Value *subject, const Value *current, con
          write_value("Body", "createsEvent", values_item(event, NULL), body, failure);
 }
 
+/* M7 delta MB-4 (A-2): the Commands that change a record: the Command, its
+   Ref field, and the family of the record that the Ref names. */
+typedef struct {
+  const char *command;
+  const char *field;
+  const char *family;
+} WriteRecord;
+
+enum { WRITE_RECORDS = 6 };
+
+static const WriteRecord write_records[WRITE_RECORDS] = {
+    {"commandTransition", "commercial", "Commercial"}, {"commandAddIdentifier", "party", "Party"},
+    {"commandVerifyIdentifier", "party", "Party"},     {"commandEnrichParty", "party", "Party"},
+    {"commandDeleteParty", "party", "Party"},          {"commandRestoreParty", "party", "Party"}};
+
+/* The row of write_records that names the Command tag, from at on;
+   WRITE_RECORDS when no row names it. */
+static Nat write_record_at(Text tag, Nat at) {
+  if (at >= WRITE_RECORDS) return WRITE_RECORDS;
+  return same_text(tag, text_of_cstring(write_records[at].command)) == 1 ? at : write_record_at(tag, at + 1);
+}
+
+/* The record that the Ref field of row at names when it is of the family of
+   the row; else NULL (and NULL for no row). */
+static const Value *write_record(const Located *records, const Value *command, Nat at) {
+  if (at >= WRITE_RECORDS) return NULL;
+  const Value *ref = write_field(text_of_cstring(write_records[at].field), command);
+  const Value *named = record_named(records, write_field(kRefHash(), ref)->text);
+  return named != NULL && record_is(named, write_records[at].family) == 1 ? named : NULL;
+}
+
+/* outcomeDenied none [missingField field]. */
+static int write_missing(const Value *log, Text field, const Value **value, Failure *failure) {
+  const Value *missing;
+  return write_value("Missing", "missingField", values_item(text_value(field), NULL), &missing, failure) &&
+         write_refused(log, &null_value, values_item(missing, NULL), value, failure);
+}
+
+/* One payload key on rest. */
+static const Attrs *write_attr_item(const char *key, const Value *value, const Attrs *rest) {
+  Attrs *made = arena_alloc(sizeof *made);
+  *made = (Attrs){text_of_cstring(key), value, rest};
+  return made;
+}
+
+/* Delta MB-5: the key texts of attrs, in order. */
+static const Values *write_attr_keys(const Attrs *attrs) {
+  return attrs == NULL ? NULL : values_item(text_value(attrs->key), write_attr_keys(attrs->rest));
+}
+
+/* Delta MB-2: the payload of an identifier: system (the tag), name (for
+   systemOther only) and value. */
+static const Attrs *write_ident_payload(const Value *system, const Value *value) {
+  Text tag = commitment_tag(system);
+  const Attrs *tail = write_attr_item("value", value, NULL);
+  return write_attr_item("system", text_value(tag),
+                         same_text(tag, text_of_cstring("systemOther")) == 1
+                             ? write_attr_item("name", write_field(text_of_cstring("name"), system), tail)
+                             : tail);
+}
+
+/* Delta MB-2: 1 when the Identifier ident has the system and the value: the
+   same tag, the same name for systemOther, and the same value. */
+static Nat write_ident_match(const Value *ident, const Value *system, Text value) {
+  const Value *had = write_field(text_of_cstring("system"), ident);
+  Text tag = commitment_tag(had);
+  return same_text(tag, commitment_tag(system)) == 1 &&
+         (same_text(tag, text_of_cstring("systemOther")) != 1 ||
+          same_text(write_field(text_of_cstring("name"), had)->text,
+                    write_field(text_of_cstring("name"), system)->text) == 1) &&
+         same_text(write_field(text_of_cstring("value"), ident)->text, value) == 1;
+}
+
+/* 1 when an Identifier of the List Identifier items matches system and value. */
+static Nat write_ident_in(const Values *items, const Value *system, Text value) {
+  return items != NULL &&
+         (write_ident_match(items->head, system, value) == 1 || write_ident_in(items->tail, system, value) == 1);
+}
+
+/* 1 when an Identifier of items matches an Identifier of wanted. */
+static Nat write_idents_meet(const Values *items, const Values *wanted) {
+  return wanted != NULL && (write_ident_in(items, write_field(text_of_cstring("system"), wanted->head),
+                                           write_field(text_of_cstring("value"), wanted->head)->text) == 1 ||
+                            write_idents_meet(items, wanted->tail) == 1);
+}
+
+/* M7 design item 7 (delta MB-3, Q-M7-13 (a)): the first Party record of the
+   records in log order with deletedBy none and an Identifier that matches an
+   Identifier of the Command; NULL when none. A loop (M5 item 0d): a long log
+   does not take one C frame for each record. */
+static const Value *write_party_find(const Values *ordered, const Value *command) {
+  const Values *wanted = items_of(write_field(text_of_cstring("identifiers"), command));
+  const Value *found = NULL;
+  for (const Values *walk = ordered; walk != NULL && found == NULL; walk = walk->tail)
+    found = record_is(walk->head, "Party") == 1 &&
+                    commitment_field(walk->head, "deletedBy")->kind == VALUE_NULL &&
+                    write_idents_meet(items_of(commitment_field(walk->head, "identifiers")), wanted) == 1
+                ? walk->head
+                : NULL;
+  return found;
+}
+
+/* M7 design item 9: the createsEvent Body of a Party Command: the EventType,
+   subjectParty of the party Ref, the artifact and parent of the provenance
+   (null for none), the payload, and policy none. */
+static int write_party_event(const Value *party, const char *type, const Attrs *payload, const Value *provenance,
+                             const Value **body, Failure *failure) {
+  const Value *made;
+  const Value *subject;
+  const Value *event;
+  const Value *attrs = make_value((Value){.kind = VALUE_ATTRS, .attrs = payload});
+  return write_value("EventType", type, NULL, &made, failure) &&
+         write_value("Subject", "subjectParty", values_item(party, NULL), &subject, failure) &&
+         write_value("Event", "makeEvent",
+                     values_item(made, values_item(subject,
+                                 values_item(write_field(text_of_cstring("artifact"), provenance),
+                                 values_item(write_field(text_of_cstring("event"), provenance),
+                                 values_item(attrs, values_item(&null_value, NULL)))))),
+                     &event, failure) &&
+         write_value("Body", "createsEvent", values_item(event, NULL), body, failure);
+}
+
+/* M7 design item 9 (part B1): the Body of a Party Command with a row in
+   write_records on its Party record current. commandVerifyIdentifier with no
+   matching Identifier in current gives no Body and missed "identifier". */
+static int write_party_change(const Value *command, Text tag, const Value *current, const Value **body, Text *missed,
+                              Failure *failure) {
+  const Value *party = write_field(text_of_cstring("party"), command);
+  const Value *ident = write_field(text_of_cstring("identifier"), command);
+  const Value *system = write_field(text_of_cstring("system"), command);
+  const Value *value = write_field(text_of_cstring("value"), command);
+  Nat verify = same_text(tag, text_of_cstring("commandVerifyIdentifier"));
+  /* The run-time form of flagYes (Flag is not a schema family). */
+  const Value *yes = make_value((Value){.kind = VALUE_FLAG, .flag = FLAG_YES});
+  if (same_text(tag, text_of_cstring("commandAddIdentifier")) == 1)
+    return write_party_event(party, "eventFieldsChanged",
+                             write_ident_payload(write_field(text_of_cstring("system"), ident),
+                                                 write_field(text_of_cstring("value"), ident)),
+                             &null_value, body, failure);
+  if (verify == 1 && write_ident_in(items_of(commitment_field(current, "identifiers")), system, value->text) != 1) {
+    *missed = text_of_cstring("identifier");
+    return 1;
+  }
+  if (verify == 1)
+    return write_party_event(party, "eventIdentifierVerified", write_ident_payload(system, value), &null_value, body,
+                             failure);
+  if (same_text(tag, text_of_cstring("commandEnrichParty")) == 1)
+    return write_party_event(party, "eventFieldsChanged",
+                             write_attr_item("attrs", write_field(text_of_cstring("attrs"), command), NULL),
+                             write_field(text_of_cstring("provenance"), command), body, failure);
+  if (same_text(tag, text_of_cstring("commandDeleteParty")) == 1)
+    return write_party_event(party, "eventDeleted", NULL, &null_value, body, failure);
+  return write_party_event(party, "eventFieldsChanged", write_attr_item("restored", yes, NULL), &null_value, body,
+                           failure);
+}
+
 /* write log w (M1 design items 7 and 8; M7 design items 1 to 4, deltas A-1
    to A-7). The apply takes one work step. The check projects the log on a
    private budget: the walk takes no work step (delta A-1). No Body:
@@ -4353,22 +4516,29 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
   const Values *ordered = log_order(records, NULL);
   Text tag = write_field(kSchemaTag(), command)->text;
   Nat at = write_ask_at(tag, 0);
+  Nat row = write_record_at(tag, 0);
   Nat transition = same_text(tag, text_of_cstring("commandTransition"));
   const Value *commercial = write_field(text_of_cstring("commercial"), command);
-  const Value *named = record_named(records, write_field(kRefHash(), commercial)->text);
-  const Value *current = named != NULL && record_is(named, "Commercial") == 1 ? named : NULL;
+  const Value *current = write_record(records, command, row);
+  const Value *resolved =
+      same_text(tag, text_of_cstring("commandResolveParty")) == 1 ? write_party_find(ordered, command) : NULL;
   const Value *body = NULL;
-  const Value *missing;
-  if (transition == 1 && current == NULL)
-    return write_value("Missing", "missingField", values_item(text_value(text_of_cstring("commercial")), NULL),
-                       &missing, failure) &&
-           write_refused(log, &null_value, values_item(missing, NULL), value, failure);
-  if (transition != 1 && !write_command_body(command, tag, 0, &body, failure)) return 0;
-  if (transition != 1 && body == NULL) return write_denied(log, value, failure);
+  Text missed = none;
+  if (row < WRITE_RECORDS && current == NULL)
+    return write_missing(log, text_of_cstring(write_records[row].field), value, failure);
+  if (row < WRITE_RECORDS && transition != 1 && !write_party_change(command, tag, current, &body, &missed, failure))
+    return 0;
+  if (missed.size > 0) return write_missing(log, missed, value, failure);
+  if (row == WRITE_RECORDS && resolved == NULL && !write_command_body(command, tag, 0, &body, failure)) return 0;
+  if (transition != 1 && resolved == NULL && body == NULL) return write_denied(log, value, failure);
   const Values *subjects;
   if (!write_ask_list(command, at, &subjects, failure)) return 0;
+  const Value *enrich = write_field(text_of_cstring("attrs"), command);
   PolicyAsk ask = {actor_text(write_field(text_of_cstring("actor"), write)),
-                   text_of_cstring(at < 8 ? write_asks[at].action : "permissionWrite"), &null_value, &null_value};
+                   text_of_cstring(at < WRITE_ASKS ? write_asks[at].action : "permissionWrite"), &null_value,
+                   same_text(tag, text_of_cstring("commandEnrichParty")) == 1
+                       ? items_value(write_attr_keys(enrich->kind == VALUE_ATTRS ? enrich->attrs : NULL))
+                       : &null_value};
   const Value *deny;
   const Value *allow;
   write_verdict(subjects, &ask, ordered, records, &deny, &allow);
@@ -4392,6 +4562,11 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
   if (last != NULL && !entry_hash(hash_fuel, 1, position, last, &head, &unused, failure)) return 0;
   if (expect->kind == VALUE_TEXT && same_text(expect->text, head) != 1)
     return write_answer(log, "outcomeConflict", values_item(text_value(head), NULL), value, failure);
+  if (resolved != NULL)
+    return write_answer(log, "outcomeAppended",
+                        values_item(items_value(values_item(write_field(text_of_cstring("ref"), resolved), NULL)),
+                                    values_item(allow, NULL)),
+                        value, failure);
   const Value *entry;
   const Values *fields = values_item(last != NULL ? text_value(head) : &null_value,
                                      values_item(write_field(text_of_cstring("actor"), write), values_item(body, NULL)));
