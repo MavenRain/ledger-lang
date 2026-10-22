@@ -1,0 +1,8 @@
+-- M7 part B2a: the Party split write. SplitParty appends two entries (the
+-- new Party with the moved identifier, then splitTo on p1). Its certificate
+-- checks in the kernel (make certificate-check).
+def org : Party := makeParty partyOrg "A" none (cons (makeIdentifier systemEmail "a@x" none) (cons (makeIdentifier systemEmail "b@x" none) nil)) attrsEnd none none
+def pe : Entry := makeEntry none (actorAgent "a") (createsParty org)
+def log1 : Log := cons pe nil
+def p1 : Ref kindParty := refTo (hashOf "a6d8b3564cefbeb50725ded0fe51599a817d2fa286ff01e5f1e2f5dcdfdf2fb9")
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandSplitParty p1 (cons (makeIdentifier systemEmail "b@x" none) nil)))

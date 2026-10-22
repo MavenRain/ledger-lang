@@ -61,7 +61,7 @@ build/c-certificate-test: test/c-certificate.c $(filter-out compiler/main.c,$(C_
 # Q-M5-28). MECH_BIN names the kernel. Then it checks the certificates of
 # CERT_PROGRAMS (ruling Q-M5-30 (a)) and of CERT_EXTRA (default empty; delta
 # E-1 (f)) in the same way.
-CERT_PROGRAMS := examples/crm.ledger test/certificate-small.ledger test/certificate-write1.ledger test/certificate-write3.ledger test/certificate-read-m2.ledger test/certificate-read-m3.ledger test/certificate-read-m4.ledger test/certificate-read-m6a.ledger test/certificate-read-m6b.ledger test/certificate-read-m6c.ledger test/certificate-read-m6d.ledger test/certificate-read-m6e.ledger test/certificate-write-m7a.ledger test/certificate-write-m7b.ledger test/certificate-write-m7b2.ledger
+CERT_PROGRAMS := examples/crm.ledger test/certificate-small.ledger test/certificate-write1.ledger test/certificate-write3.ledger test/certificate-read-m2.ledger test/certificate-read-m3.ledger test/certificate-read-m4.ledger test/certificate-read-m6a.ledger test/certificate-read-m6b.ledger test/certificate-read-m6c.ledger test/certificate-read-m6d.ledger test/certificate-read-m6e.ledger test/certificate-write-m7a.ledger test/certificate-write-m7b.ledger test/certificate-write-m7b2.ledger test/certificate-write-m7b3.ledger test/certificate-write-m7b4.ledger
 CERT_EXTRA ?=
 MECH_BIN ?= /Users/oobi/Documents/mechanism-lang/_tcc/bin/mech
 CERT_LIMIT ?= 4294967296

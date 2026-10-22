@@ -1309,3 +1309,25 @@ test('m7 commandRestoreParty writes the restored flag and clears deletedBy', () 
   assert.equal(JSON.stringify(re.body.event.payload), '{"restored":true}');
   assert.equal(records[0].value.deletedBy, null);
 });
+
+// Entry 1 of a split is the new Party (the kind and the displayName of the party, identifiers = moved).
+// Entry 2 is eventFieldsChanged on the party with splitTo = the hash of entry 1 and prev = that hash.
+test('m7 commandSplitParty writes the new Party, then splitTo on the party', () => {
+  const moved = '(cons (makeIdentifier systemEmail "a@x" none) nil)';
+  const { pe, s, records } = projected(`${actors}${m7Party}` +
+    m7Edit('(cons pe nil)', `commandSplitParty ${m7Who()} ${moved}`));
+  const { ne } = named(`${actors}${m7Party}def ne : Entry := makeEntry (some (hashOf "${m7Head()}")) ` +
+    `(actorHuman acme) (createsParty (makeParty partyOrg "Acme" none ${moved} attrsEnd none none)) `);
+  const se = s.log[2];
+  assert.deepEqual(s, { log: [pe, ne, se], outcome: { tag: 'outcomeAppended', entries: [sha256(ne), sha256(se)],
+    policy: null } });
+  assert.deepEqual([se.prev, se.actor, se.body.event.type, se.body.event.subject.party.hash, se.body.event.payload.splitTo],
+    [sha256(ne), human, 'eventFieldsChanged', sha256(pe), sha256(ne)]);
+  assert.deepEqual(records.filter(record => record.type === 'Party').map(record => record.value.identifiers.length),
+    [0, 1]);
+  assert.deepEqual(records[0].value.lastEvent, { kind: 'kindEvent', hash: sha256(se) });
+  const denied = named(`${actors}${m7Party}` + m7Edit('(cons pe nil)',
+    `commandSplitParty ${m7Who()} (cons (makeIdentifier systemEmail "zz" none) nil)`)).s;
+  assert.deepEqual(denied, { log: [pe], outcome: { tag: 'outcomeDenied', policy: null,
+    missing: [{ tag: 'missingField', field: 'moved' }] } });
+});

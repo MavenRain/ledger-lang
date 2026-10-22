@@ -2543,14 +2543,17 @@ static const char *const write_bodies[6][3] = {
     {"commandAssign", "assignment", "createsAssignment"}};
 
 /* commandResolveParty kind displayName identifiers gives createsParty of
-   makeParty kind displayName none identifiers attrsEnd none none. */
-static int write_party_body(const Value *command, const Value **body, Failure *failure) {
+   makeParty kind displayName none identifiers attrsEnd none none. Delta
+   MB-9: entry 1 of commandSplitParty is the same Body with the kind and the
+   displayName of the party record and identifiers = moved. */
+static int write_party_body(const Value *kind, const Value *name, const Value *idents, const Value **body,
+                            Failure *failure) {
   const Value *party;
   const Values *fields =
-      values_item(write_field(text_of_cstring("kind"), command),
-                  values_item(write_field(text_of_cstring("displayName"), command),
+      values_item(kind,
+                  values_item(name,
                               values_item(&null_value,
-                                          values_item(write_field(text_of_cstring("identifiers"), command),
+                                          values_item(idents,
                                                       values_item(make_value((Value){.kind = VALUE_ATTRS}),
                                                                   values_item(&null_value,
                                                                               values_item(&null_value, NULL)))))));
@@ -2567,7 +2570,9 @@ static int write_no_body(const Value **body) {
    NULL when the Command has no Body. */
 static int write_command_body(const Value *command, Text tag, Nat index, const Value **body, Failure *failure) {
   if (index == 6 && same_text(tag, text_of_cstring("commandResolveParty")) == 1)
-    return write_party_body(command, body, failure);
+    return write_party_body(write_field(text_of_cstring("kind"), command),
+                            write_field(text_of_cstring("displayName"), command),
+                            write_field(text_of_cstring("identifiers"), command), body, failure);
   if (index == 6) return write_no_body(body);
   if (same_text(tag, text_of_cstring(write_bodies[index][0])) != 1)
     return write_command_body(command, tag, index + 1, body, failure);
@@ -4186,7 +4191,7 @@ typedef struct {
   WriteAskForm form;
 } WriteAsk;
 
-enum { WRITE_ASKS = 13 };
+enum { WRITE_ASKS = 15 };
 
 static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandResolveParty", "permissionWrite", "", "", ASK_NONE},
@@ -4201,7 +4206,9 @@ static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandVerifyIdentifier", "permissionWrite", "party", "", ASK_PARTY},
     {"commandEnrichParty", "permissionWrite", "party", "", ASK_PARTY},
     {"commandDeleteParty", "permissionWrite", "party", "", ASK_PARTY},
-    {"commandRestoreParty", "permissionWrite", "party", "", ASK_PARTY}};
+    {"commandRestoreParty", "permissionWrite", "party", "", ASK_PARTY},
+    {"commandSplitParty", "permissionWrite", "party", "", ASK_PARTY},
+    {"commandEraseParty", "permissionWrite", "party", "", ASK_PARTY}};
 
 /* The row of write_asks that names the Command tag, from at on; WRITE_ASKS
    when no row names it. */
@@ -4334,12 +4341,13 @@ typedef struct {
   const char *family;
 } WriteRecord;
 
-enum { WRITE_RECORDS = 6 };
+enum { WRITE_RECORDS = 8 };
 
 static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandTransition", "commercial", "Commercial"}, {"commandAddIdentifier", "party", "Party"},
     {"commandVerifyIdentifier", "party", "Party"},     {"commandEnrichParty", "party", "Party"},
-    {"commandDeleteParty", "party", "Party"},          {"commandRestoreParty", "party", "Party"}};
+    {"commandDeleteParty", "party", "Party"},          {"commandRestoreParty", "party", "Party"},
+    {"commandSplitParty", "party", "Party"},           {"commandEraseParty", "party", "Party"}};
 
 /* The row of write_records that names the Command tag, from at on;
    WRITE_RECORDS when no row names it. */
@@ -4448,16 +4456,49 @@ static int write_party_event(const Value *party, const char *type, const Attrs *
          write_value("Body", "createsEvent", values_item(event, NULL), body, failure);
 }
 
-/* M7 design item 9 (part B1): the Body of a Party Command with a row in
-   write_records on its Party record current. commandVerifyIdentifier with no
-   matching Identifier in current gives no Body and missed "identifier". */
+/* Delta MB-9: 1 when each Identifier of moved matches an Identifier of items. */
+static Nat write_idents_held(const Values *items, const Values *moved) {
+  return moved == NULL || (write_ident_in(items, write_field(text_of_cstring("system"), moved->head),
+                                          write_field(text_of_cstring("value"), moved->head)->text) == 1 &&
+                           write_idents_held(items, moved->tail) == 1);
+}
+
+/* Delta MB-9: the payload (MB-2) of each Identifier of moved, in order. */
+static const Values *write_moved_items(const Values *moved) {
+  return moved == NULL ? NULL
+                       : values_item(make_value((Value){.kind = VALUE_ATTRS,
+                                                        .attrs = write_ident_payload(
+                                                            write_field(text_of_cstring("system"), moved->head),
+                                                            write_field(text_of_cstring("value"), moved->head))}),
+                                     write_moved_items(moved->tail));
+}
+
+/* M7 design item 8 (delta MB-9): the Body of entry 2 of commandSplitParty
+   from the hash of entry 1: eventFieldsChanged on party with [splitTo = the
+   hash, moved = the payload of each moved Identifier]. */
+static int write_split_next(const Value *command, Text hash, const Value **body, Failure *failure) {
+  const Value *moved = items_value(write_moved_items(items_of(write_field(text_of_cstring("moved"), command))));
+  return write_party_event(write_field(text_of_cstring("party"), command), "eventFieldsChanged",
+                           write_attr_item("splitTo", text_value(hash), write_attr_item("moved", moved, NULL)),
+                           &null_value, body, failure);
+}
+
+/* M7 design item 9 (parts B1 and B2a): the Body of a Party Command with a
+   row in write_records on its Party record current. commandVerifyIdentifier
+   with no matching Identifier in current gives no Body and missed
+   "identifier"; commandSplitParty with a moved Identifier that current does
+   not hold gives no Body and missed "moved" (delta MB-9). The Body of
+   commandSplitParty is entry 1 (the new Party); write_split_next makes
+   entry 2. */
 static int write_party_change(const Value *command, Text tag, const Value *current, const Value **body, Text *missed,
                               Failure *failure) {
   const Value *party = write_field(text_of_cstring("party"), command);
   const Value *ident = write_field(text_of_cstring("identifier"), command);
   const Value *system = write_field(text_of_cstring("system"), command);
   const Value *value = write_field(text_of_cstring("value"), command);
+  const Value *moved = write_field(text_of_cstring("moved"), command);
   Nat verify = same_text(tag, text_of_cstring("commandVerifyIdentifier"));
+  Nat split = same_text(tag, text_of_cstring("commandSplitParty"));
   /* The run-time form of flagYes (Flag is not a schema family). */
   const Value *yes = make_value((Value){.kind = VALUE_FLAG, .flag = FLAG_YES});
   if (same_text(tag, text_of_cstring("commandAddIdentifier")) == 1)
@@ -4476,10 +4517,49 @@ static int write_party_change(const Value *command, Text tag, const Value *curre
     return write_party_event(party, "eventFieldsChanged",
                              write_attr_item("attrs", write_field(text_of_cstring("attrs"), command), NULL),
                              write_field(text_of_cstring("provenance"), command), body, failure);
+  if (split == 1 && write_idents_held(items_of(commitment_field(current, "identifiers")), items_of(moved)) != 1) {
+    *missed = text_of_cstring("moved");
+    return 1;
+  }
+  if (split == 1)
+    return write_party_body(commitment_field(current, "kind"), commitment_field(current, "displayName"), moved, body,
+                            failure);
+  if (same_text(tag, text_of_cstring("commandEraseParty")) == 1)
+    return write_party_event(party, "eventDeleted", write_attr_item("erased", yes, NULL), &null_value, body,
+                             failure);
   if (same_text(tag, text_of_cstring("commandDeleteParty")) == 1)
     return write_party_event(party, "eventDeleted", NULL, &null_value, body, failure);
   return write_party_event(party, "eventFieldsChanged", write_attr_item("restored", yes, NULL), &null_value, body,
                            failure);
+}
+
+/* M7 design item 8: the Body of the next Entry from the hash of the Entry
+   before it. */
+typedef int (*WriteNext)(const Value *command, Text hash, const Value **body, Failure *failure);
+
+/* M7 design item 8 (Q-M7-18 (a)): count Entries from body on: the first has
+   prev; each next one has prev the hash of the Entry before it and the Body
+   that next makes from that hash. Each hash takes one work step of ready.
+   The Entries and their hashes go out in order. */
+static int write_entries(Fuel hash_fuel, Nat ready, Nat position, const Value *prev, const Value *actor,
+                         const Value *body, Nat count, const Value *command, WriteNext next, const Values **entries,
+                         const Values **hashes, Nat *left, Failure *failure) {
+  const Value *entry;
+  Text hash;
+  const Value *after = NULL;
+  const Values *more = NULL;
+  const Values *rest = NULL;
+  if (!write_value("Entry", "makeEntry", values_item(prev, values_item(actor, values_item(body, NULL))), &entry,
+                   failure) ||
+      !entry_hash(hash_fuel, ready, position, entry, &hash, left, failure))
+    return 0;
+  if (count > 1 && (!next(command, hash, &after, failure) ||
+                    !write_entries(hash_fuel, *left, position, text_value(hash), actor, after, count - 1, command,
+                                   next, &more, &rest, left, failure)))
+    return 0;
+  *entries = values_item(entry, more);
+  *hashes = values_item(text_value(hash), rest);
+  return 1;
 }
 
 /* write log w (M1 design items 7 and 8; M7 design items 1 to 4, deltas A-1
@@ -4492,10 +4572,13 @@ static int write_party_change(const Value *command, Text tag, const Value *curre
    guard (a Missing list gives outcomeDenied (some g) missing) and makes its
    Body with Event.policy the allowing policy (Q-M7-11 (a)). An expect on an
    empty log: outcomeDenied none nil. An expect that is not the hash of the
-   last entry: outcomeConflict with that hash. Else the new Entry goes at
-   the end of the log (outcomeAppended with the allowing policy), and its
-   hash takes one more work step. The hash of the last entry takes no work
-   step (delta B-5). */
+   last entry: outcomeConflict with that hash. Else the Entries of the
+   Command go at the end of the log (outcomeAppended with their hashes in
+   order and the allowing policy; M7 design item 8): 2 for
+   commandSplitParty, 1 for each other Command. Each Entry has prev the hash
+   of the entry before it, and each hash takes one more work step; a budget
+   short of them gives eBudget before any append (Q-M7-18 (a)). The hash of
+   the last entry takes no work step (delta B-5). */
 int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const Value *write, const Value **value,
                Nat *left, Failure *failure) {
   if (budget == 0) {
@@ -4567,15 +4650,20 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
                         values_item(items_value(values_item(write_field(text_of_cstring("ref"), resolved), NULL)),
                                     values_item(allow, NULL)),
                         value, failure);
-  const Value *entry;
-  const Values *fields = values_item(last != NULL ? text_value(head) : &null_value,
-                                     values_item(write_field(text_of_cstring("actor"), write), values_item(body, NULL)));
-  if (!write_value("Entry", "makeEntry", fields, &entry, failure)) return 0;
-  Text hash;
-  if (!entry_hash(hash_fuel, ready, position, entry, &hash, left, failure)) return 0;
-  return write_answer(items_value(append_values(items, values_item(entry, NULL))), "outcomeAppended",
-                      values_item(items_value(values_item(text_value(hash), NULL)), values_item(allow, NULL)), value,
-                      failure);
+  Nat split = same_text(tag, text_of_cstring("commandSplitParty"));
+  Nat count = split == 1 ? 2 : 1;
+  const Values *entries;
+  const Values *hashes;
+  if (ready < count) {
+    *left = ready;
+    return fail_at(failure, position, eBudget);
+  }
+  if (!write_entries(hash_fuel, ready, position, last != NULL ? text_value(head) : &null_value,
+                     write_field(text_of_cstring("actor"), write), body, count, command,
+                     split == 1 ? write_split_next : NULL, &entries, &hashes, left, failure))
+    return 0;
+  return write_answer(items_value(append_values(items, entries)), "outcomeAppended",
+                      values_item(items_value(hashes), values_item(allow, NULL)), value, failure);
 }
 
 /* Design item 16 (ruling Q-M6-13 (a)): the Permission tag of an event

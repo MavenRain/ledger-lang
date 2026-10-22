@@ -7033,7 +7033,7 @@ static void test_m7_identity(void) {
   PartyLog storage;
   const Value *log = party_test_log(&storage, &left, &failure);
   Text acme = storage.hashes[0];
-  Tagged actors[2], erp, parties[3];
+  Tagged actors[2], erp, parties[4];
   Value erp_name = account_text("erp");
   Value erp_value = account_text("e-9");
   Value wrong = account_text("zz");
@@ -7060,7 +7060,7 @@ static void test_m7_identity(void) {
   const Value *bo = tagged(&actors[1], "actorAgent", "name", &storage.bo);
   QueryTwo adds[2];
   CommandThree commands[5];
-  WriteTwo writes[10];
+  WriteTwo writes[11];
   const Value *step = NULL;
   /* AddIdentifier systemOther erp e-9. */
   assert(write_step(1000, 5, 3, log,
@@ -7154,6 +7154,22 @@ static void test_m7_identity(void) {
       pipeline_field(pipeline_field(pipeline_field(pipeline_at(logged, 8), "body"), "event"), "payload"), "restored");
   assert(left == 3 && read_count(logged->items) == 9 && restored->kind == VALUE_FLAG && restored->flag == FLAG_YES);
   assert(pipeline_field(party_state(step, acme), "deletedBy")->kind == VALUE_NULL);
+  /* EraseParty (Q-M7-15 (a)): the payload erased is flagYes; the record
+     is blank (displayName "", legalName none, no Identifiers, attrsEnd) and
+     deletedBy is the ref of the Event. */
+  assert(write_step(1000, 5, 3, logged,
+                    write_of(&writes[10], an, tagged(&parties[3], "commandEraseParty", "party", &storage.ref)), &step,
+                    &left, &failure));
+  const Value *blank = party_state(step, acme);
+  const Value *erased = pipeline_field(
+      pipeline_field(pipeline_field(pipeline_field(pipeline_at(pipeline_field(step, "log"), 9), "body"), "event"),
+                     "payload"),
+      "erased");
+  assert(left == 3 && erased->kind == VALUE_FLAG && erased->flag == FLAG_YES);
+  assert(same_text(pipeline_field(blank, "displayName")->text, text("")) == 1 &&
+         pipeline_field(blank, "legalName")->kind == VALUE_NULL &&
+         pipeline_field(blank, "identifiers")->items == NULL && pipeline_field(blank, "attrs")->attrs == NULL);
+  assert(same_text(pipeline_field(pipeline_field(blank, "deletedBy"), "hash")->text, appended_hash(step)) == 1);
   /* No Party record: outcomeDenied none [missingField "party"]. */
   assert(write_step(1000, 5, 3, logged,
                     write_of(&writes[9], an, tagged(&parties[2], "commandDeleteParty", "party", &unknown_ref)), &step,
@@ -7162,6 +7178,150 @@ static void test_m7_identity(void) {
   missing = pipeline_field(outcome, "missing")->items;
   assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1);
   assert(missing_is(missing->head, "missingField", "field", "party") == 1);
+}
+
+/* M7 part B2a (design item 8, delta MB-9, ruling Q-M7-18 (a)):
+   commandSplitParty on the PartyLog. Split acme with moved [crm c-1] gives
+   two entries: entry 1 creates the new Party (the kind and the displayName
+   of acme, the moved Identifiers), entry 2 is eventFieldsChanged on acme
+   with splitTo the hash of entry 1. The prev of entry 2 is the hash of
+   entry 1 (mutant B-M2 kills this row); outcomeAppended [h1, h2]. Budget 2
+   (ready 1) gives eBudget and no answer. A moved Identifier that acme does
+   not hold gives missingField "moved", also when the policy denies the
+   actor: the order of the checks of writeSplit in core/certificate.def. */
+static void test_m7_many(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PartyLog storage;
+  const Value *log = party_test_log(&storage, &left, &failure);
+  Text acme = storage.hashes[0];
+  Tagged actors[2];
+  Value zz = account_text("zz");
+  Value cy_name = account_text("cy");
+  Attrs zz_fields[3];
+  Value zz_ident;
+  Values moved_cells[2];
+  moved_cells[0] = (Values){&storage.idents[1], NULL};
+  moved_cells[1] = (Values){party_ident(zz_fields, &zz_ident, storage.systems[1], &zz, &storage.none), NULL};
+  Value moved = {.kind = VALUE_ITEMS, .items = &moved_cells[0]};
+  Value unheld = {.kind = VALUE_ITEMS, .items = &moved_cells[1]};
+  const Value *an = tagged(&actors[0], "actorAgent", "name", &storage.an);
+  const Value *cy = tagged(&actors[1], "actorAgent", "name", &cy_name);
+  QueryTwo splits[5];
+  WriteTwo writes[5];
+  const Value *step = NULL;
+  /* Split acme, moved [crm c-1]: two entries, one hash step each. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[0], an,
+                             query_two(&splits[0], "commandSplitParty", "party", &storage.ref, "moved", &moved)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Values *hashes = pipeline_field(outcome, "entries")->items;
+  const Value *logged = pipeline_field(step, "log");
+  assert(left == 2 && verdict_is(outcome, "outcomeAppended", &storage.hashes[1]) == 1 && read_count(hashes) == 2 &&
+         read_count(logged->items) == 4);
+  Text h1 = hashes->head->text;
+  Text h2 = hashes->tail->head->text;
+  Text again = {NULL, 0};
+  assert(entry_hash(1000, 1, 0, pipeline_at(logged, 2), &again, &left, &failure) && same_text(again, h1) == 1);
+  assert(entry_hash(1000, 1, 0, pipeline_at(logged, 3), &again, &left, &failure) && same_text(again, h2) == 1);
+  assert(same_text(pipeline_field(pipeline_at(logged, 2), "prev")->text, storage.hashes[1]) == 1 &&
+         same_text(pipeline_field(pipeline_at(logged, 3), "prev")->text, h1) == 1);
+  const Value *payload =
+      pipeline_field(pipeline_field(pipeline_field(pipeline_at(logged, 3), "body"), "event"), "payload");
+  assert(same_text(pipeline_field(payload, "splitTo")->text, h1) == 1);
+  /* The new Party holds the moved Identifier; acme holds a@x only. */
+  const Value *made = party_state(step, h1);
+  const Values *made_idents = pipeline_field(made, "identifiers")->items;
+  assert(same_text(pipeline_field(made, "displayName")->text, text("acme")) == 1 &&
+         pipeline_field(made, "legalName")->kind == VALUE_NULL && pipeline_field(made, "attrs")->attrs == NULL);
+  assert(read_count(made_idents) == 1 &&
+         same_text(pipeline_field(made_idents->head, "value")->text, text("c-1")) == 1);
+  const Values *kept = pipeline_field(party_state(step, acme), "identifiers")->items;
+  assert(read_count(kept) == 1 && same_text(pipeline_field(kept->head, "value")->text, text("a@x")) == 1);
+  /* Budget 2 (ready 1) for two entries: eBudget, no answer. */
+  Failure starved = {0, {NULL, 0}, {NULL, 0}};
+  const Value *no_step = NULL;
+  assert(!write_step(1000, 2, 3, log,
+                     write_of(&writes[1], an,
+                              query_two(&splits[1], "commandSplitParty", "party", &storage.ref, "moved", &moved)),
+                     &no_step, &left, &starved));
+  assert(left == 1 && no_step == NULL && same_text(starved.message, eBudget) == 1);
+  /* moved [crm zz]: acme does not hold it. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[2], an,
+                             query_two(&splits[2], "commandSplitParty", "party", &storage.ref, "moved", &unheld)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 &&
+         read_count(pipeline_field(step, "log")->items) == 2 && read_count(missing) == 1 &&
+         missing_is(missing->head, "missingField", "field", "moved") == 1);
+  /* cy (no rule in the policy) with moved [crm zz]: the moved check comes
+     first. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[3], cy,
+                             query_two(&splits[3], "commandSplitParty", "party", &storage.ref, "moved", &unheld)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1 &&
+         missing_is(missing->head, "missingField", "field", "moved") == 1);
+  /* cy with moved [crm c-1]: the policy denies. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[4], cy,
+                             query_two(&splits[4], "commandSplitParty", "party", &storage.ref, "moved", &moved)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  assert(verdict_is(outcome, "outcomeDenied", &storage.hashes[1]) == 1);
+  assert(left == 4 && pipeline_field(outcome, "missing")->items == NULL &&
+         read_count(pipeline_field(step, "log")->items) == 2);
+}
+
+/* A combined split and add applies the add to the remaining Identifiers,
+   including when it adds back the Identifier that was moved. */
+static void test_m7_split_add(void) {
+  for (Nat same = 0; same < 2; same++) {
+    Failure failure = {0, {NULL, 0}, {NULL, 0}};
+    Nat left = 0;
+    PartyLog storage;
+    party_test_log(&storage, &left, &failure);
+    Value system = account_text("systemEmail");
+    Value old_value = account_text("a@x");
+    Value added_value = account_text(same == 1 ? "a@x" : "b@x");
+    Value split_to = account_text("new-party");
+    Value type = account_text("eventFieldsChanged");
+    Attrs moved_fields[2] = {{text("system"), &system, &moved_fields[1]},
+                             {text("value"), &old_value, NULL}};
+    Value moved_ident = {.kind = VALUE_ATTRS, .attrs = moved_fields};
+    Values moved_cell = {&moved_ident, NULL};
+    Value moved = {.kind = VALUE_ITEMS, .items = &moved_cell};
+    Attrs fields[4] = {{text("system"), &system, &fields[1]},
+                       {text("value"), &added_value, &fields[2]},
+                       {text("splitTo"), &split_to, &fields[3]},
+                       {text("moved"), &moved, NULL}};
+    Value payload = {.kind = VALUE_ATTRS, .attrs = fields};
+    Tagged subject_storage;
+    const Value *subject = tagged(&subject_storage, "subjectParty", "party", &storage.ref);
+    Attrs event_fields[6] = {{text("type"), &type, &event_fields[1]},
+                            {text("subject"), subject, &event_fields[2]},
+                            {text("artifact"), &storage.none, &event_fields[3]},
+                            {text("parent"), &storage.none, &event_fields[4]},
+                            {text("payload"), &payload, &event_fields[5]},
+                            {text("policy"), &storage.none, NULL}};
+    Value event = {.kind = VALUE_ATTRS, .attrs = event_fields};
+    Tagged command_storage, actor_storage;
+    const Value *command = tagged(&command_storage, "commandRecord", "event", &event);
+    const Value *actor = tagged(&actor_storage, "actorAgent", "name", &storage.an);
+    WriteTwo write_storage;
+    const Value *step = NULL;
+    assert(write_step(1000, 5, 3, &storage.log, write_of(&write_storage, actor, command), &step, &left, &failure));
+    const Value *state = party_state(step, storage.hashes[0]);
+    const Values *idents = pipeline_field(state, "identifiers")->items;
+    assert(read_count(idents) == 2);
+    assert(same_text(pipeline_field(idents->head, "value")->text, text("c-1")) == 1);
+    assert(same_text(pipeline_field(idents->tail->head, "value")->text, added_value.text) == 1);
+  }
 }
 
 /* Malformed Identifier payloads cannot add or verify an Identifier.
@@ -7391,6 +7551,8 @@ int main(void) {
   test_m7_stage_payload();
   test_m7_find();
   test_m7_identity();
+  test_m7_many();
+  test_m7_split_add();
   test_m7_identifier_payload();
   puts("C module tests passed");
   return 0;

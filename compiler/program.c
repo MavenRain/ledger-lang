@@ -1170,12 +1170,33 @@ static const Attrs *projection_merge(const Attrs *payload, const Attrs *attrs) {
                                                                : projection_append(payload->key, payload->value, attrs));
 }
 
-/* M7 design item 5 (delta MB-6, part B1): the Party state attrs after the
-   Event state with the ref event. eventDeleted sets deletedBy (MB-7: every
-   eventDeleted in B1); eventFieldsChanged restored (flag yes) sets deletedBy
-   none, system with value appends the Identifier (a match gives no change),
-   attrs merges the keys; eventIdentifierVerified sets verifiedBy on each
-   matching Identifier. */
+/* The empty Text (the displayName of an erased Party). */
+static const Value projection_blank = {.kind = VALUE_TEXT};
+
+/* Delta MB-9: 1 when ident matches a valid Identifier payload of moved. */
+static Nat projection_split_hit(const Value *ident, const Values *moved) {
+  return moved != NULL &&
+         ((projection_ident_valid(moved->head) == 1 && projection_ident_match(ident, moved->head) == 1) ||
+          projection_split_hit(ident, moved->tail) == 1);
+}
+
+/* Delta MB-9: items without each Identifier that matches one item of moved. */
+static const Values *projection_split_keep(const Values *items, const Values *moved) {
+  return items == NULL                                   ? NULL
+         : projection_split_hit(items->head, moved) == 1 ? projection_split_keep(items->tail, moved)
+                                                         : projection_cell(items->head,
+                                                                           projection_split_keep(items->tail, moved));
+}
+
+/* M7 design item 5 (delta MB-6, parts B1 and B2a): the Party state attrs
+   after the Event state with the ref event. eventDeleted sets deletedBy
+   (MB-7); with erased (flag yes) it also sets displayName "", legalName
+   none, identifiers nil and attrs attrsEnd (Q-M7-15 (a)). eventFieldsChanged
+   restored (flag yes) sets deletedBy none, system with value appends the
+   Identifier (a match gives no change), attrs merges the keys, splitTo with
+   moved removes each Identifier that matches one valid item of moved (delta
+   MB-9); eventIdentifierVerified sets verifiedBy on each matching
+   Identifier. */
 static const Attrs *projection_party(const Value *event, const Value *state, const Attrs *attrs) {
   Text tag = projection_tag(projection_field(text_of_cstring("type"), state));
   const Value *payload = projection_field(text_of_cstring("payload"), state);
@@ -1188,16 +1209,34 @@ static const Attrs *projection_party(const Value *event, const Value *state, con
   Nat verify = same_text(tag, text_of_cstring("eventIdentifierVerified"));
   Nat identifier = (changed == 1 || verify == 1) && projection_ident_valid(payload) == 1;
   Nat restore = changed == 1 && restored->kind == VALUE_FLAG && restored->flag == FLAG_YES;
-  Nat add = changed == 1 && identifier == 1 && projection_ident_in(idents, payload) != 1;
   Nat enrich = changed == 1 && merged->kind == VALUE_ATTRS;
-  const Attrs *deleted =
-      same_text(tag, text_of_cstring("eventDeleted")) == 1 ? projection_replace(text_of_cstring("deletedBy"), event, attrs)
-      : restore == 1 ? projection_replace(text_of_cstring("deletedBy"), &projection_null, attrs)
-                     : attrs;
+  const Value *erased = projection_field(text_of_cstring("erased"), payload);
+  const Value *moved = projection_field(text_of_cstring("moved"), payload);
+  Nat deletes = same_text(tag, text_of_cstring("eventDeleted"));
+  Nat erase = deletes == 1 && erased->kind == VALUE_FLAG && erased->flag == FLAG_YES;
+  Nat split = changed == 1 && projection_field(text_of_cstring("splitTo"), payload)->kind == VALUE_TEXT &&
+              moved->kind == VALUE_ITEMS;
+  const Values *remaining = split == 1 ? projection_split_keep(idents, moved->items) : idents;
+  Nat add = changed == 1 && identifier == 1 && projection_ident_in(remaining, payload) != 1;
+  const Attrs *deleted = deletes == 1   ? projection_replace(text_of_cstring("deletedBy"), event, attrs)
+                         : restore == 1 ? projection_replace(text_of_cstring("deletedBy"), &projection_null, attrs)
+                                        : attrs;
+  const Attrs *blanked =
+      erase == 1 ? projection_replace(
+                       text_of_cstring("displayName"), &projection_blank,
+                       projection_replace(text_of_cstring("legalName"), &projection_null,
+                                          projection_replace(text_of_cstring("identifiers"), projection_items(NULL),
+                                                             projection_replace(text_of_cstring("attrs"),
+                                                                                projection_attrs(NULL), deleted))))
+                 : deleted;
+  const Attrs *unsplit =
+      split == 1 ? projection_replace(text_of_cstring("identifiers"),
+                                      projection_items(remaining), blanked)
+                 : blanked;
   const Attrs *added =
       add == 1 ? projection_replace(text_of_cstring("identifiers"),
-                                    projection_items(projection_ident_append(idents, projection_ident(payload))), deleted)
-               : deleted;
+                                    projection_items(projection_ident_append(remaining, projection_ident(payload))), unsplit)
+               : unsplit;
   const Attrs *enriched =
       enrich == 1 ? projection_replace(text_of_cstring("attrs"),
                                        projection_attrs(projection_merge(

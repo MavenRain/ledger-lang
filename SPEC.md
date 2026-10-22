@@ -306,7 +306,12 @@ Encoding rules:
   does not change. Part B1 also gives a Body to `commandAddIdentifier`,
   `commandVerifyIdentifier`, `commandEnrichParty`, `commandDeleteParty`
   and `commandRestoreParty`, and the projection applies their Events to
-  the Party record. The certificate covers part A and part B1
+  the Party record. Part B2a gives a Body to `commandSplitParty` (a
+  new Party record takes the moved Identifiers, then an
+  `eventFieldsChanged` Event with `splitTo` removes them from the
+  party) and to `commandEraseParty` (an `eventDeleted` Event that
+  blanks the Party record; the earlier entries of the log keep their
+  text). The certificate covers part A, part B1 and part B2a
   (docs/STATUS.md `## M7`).
 
 ## 7. Milestones

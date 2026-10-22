@@ -777,14 +777,15 @@ static const char *const bodies[] = {"Party", "Membership", "Commercial", "Commi
 /* The lastEvent setter (schema.def:123 and :153: field 6 of 7 of makeParty,
    field 10 of 10 of makeCommercial). M7 design item 5 (delta A-4): on a
    Commercial, first the stage from the after payload of the event Body e
-   (stageAfter, as program.c projection_moved). M7 part B1 (delta MB-6): on a
-   Party, the identifiers, attrs and deletedBy after e (partyIdents,
-   partyAttrs and partyDeleted, as program.c projection_party). */
+   (stageAfter, as program.c projection_moved). M7 parts B1 and B2a (deltas
+   MB-6 and MB-9, Q-M7-15 (a)): on a Party, the displayName, legalName,
+   identifiers, attrs and deletedBy after e (partyName, partyLegal,
+   partyIdents, partyAttrs and partyDeleted, as program.c projection_party). */
 static const char last_event[] =
     "\ndef ledgerLastEvent : Text -> Body -> Body -> Body := fun (h : Text) (e : Body) (b : Body) => case b as s1 in Body return Body with"
     " | createsParty (m : Party) => createsParty (case m as s2 in Party return Party with | makeParty (x0 : KindParty)"
     " (x1 : Text) (x2 : Option Text) (x3 : List Identifier) (x4 : Attrs) (x5 : Option (Ref kindEvent))"
-    " (x6 : Option (Ref kindEvent)) => makeParty x0 x1 x2 (partyIdents h e x3) (partyAttrs e x4)"
+    " (x6 : Option (Ref kindEvent)) => makeParty x0 (partyName e x1) (partyLegal e x2) (partyIdents h e x3) (partyAttrs e x4)"
     " (some (refTo (hashOf h))) (partyDeleted h e x6))"
     " | createsMembership (m : Membership) => createsMembership m"
     " | createsCommercial (m : Commercial) => createsCommercial (case m as s2 in Commercial return Commercial with"

@@ -251,7 +251,8 @@ M2 is the read path (parts A, B and C).
   policy check (M7 part A: see `## M7`), a host runtime, the find by
   merge key of `commandResolveParty` (M7 part B1: see `## M7`),
   `commandExtract` with more than one entry for each write, and the 21
-  Commands with no body (after M7 part A, 20; after part B1, 15).
+  Commands with no body (after M7 part A, 20; after part B1, 15;
+  after part B2a, 13).
 
 ## M3
 
@@ -772,6 +773,52 @@ projection set the stage (`projection_rows` in compiler/program.c).
   `test_m7_identifier_payload` in test/c-modules.c; 7 m7 rows in
   test/paths.test.mjs. The Identifier payload matrix in
   test/c-certificate.c also checks both Event types in the kernel.
+- Part B2a, the Party split. `commandSplitParty p moved` moves the
+  Identifiers of `moved` from the Party record `p` to a new Party
+  record. If `p` names no Party record, the write gives
+  `outcomeDenied none [missingField "party"]`. If `p` does not hold
+  each Identifier of `moved`, the write gives `outcomeDenied none
+  [missingField "moved"]`. These two checks come before the policy
+  check. The write asks `permissionWrite` on `subjectParty p` with no
+  fields. Then it appends two entries: a `createsParty` entry `h1`
+  (the kind and the display name of `p`, the Identifiers of `moved`),
+  then a `createsEvent` entry `h2` of an `eventFieldsChanged` Event on
+  `p` with the payload `splitTo = h1` and `moved`. The prev of `h2` is
+  `h1`. The outcome is `outcomeAppended [h1, h2] policy`. The
+  projection makes the new Party record `h1` and removes each moved
+  Identifier from `p`.
+- Part B2a, the Party erase. `commandEraseParty p` appends one entry,
+  a `createsEvent` of an `eventDeleted` Event on `p` with the payload
+  `erased = true`. A missing record gives `outcomeDenied none
+  [missingField "party"]`. The write asks `permissionWrite` on
+  `subjectParty p` with no fields. The projection sets `deletedBy` to
+  the Event and blanks the record: the display name `""`, the legal
+  name `none`, no Identifiers and no attrs (ruling Q-M7-15 (a)). The
+  erase is not a privacy erase: the earlier entries of the log keep
+  their text.
+- Limits of part B2a. In C, a split with a budget below 2 gives
+  `eBudget` before it appends. The .def has no budget, so this
+  `eBudget` has no mirror in the kernel. The ask of a split has no
+  fields, so a rule that allows `permissionWrite` on some fields only
+  (for example `[title]`) also allows the split. This is a C check
+  only: the program of this case is above the 24 hash block cap, so
+  the kernel does not check it.
+- The certificate of part B2a. The list forms `writeAdds`,
+  `writeSnocs` and `writeAllowM`; `identsHeld`, `movedItems`,
+  `splitNext` and `writeSplit`; the erase and split projection
+  helpers; the `commandSplitParty` and `commandEraseParty` arms of
+  `writeGo` (core/certificate.def); and the name and the legal name of
+  the Party arm of `ledgerLastEvent` (compiler/certificate.c). The
+  split and the erase in one program take more than 24 hash blocks, so
+  CERT_PROGRAMS has two more programs:
+  test/certificate-write-m7b3.ledger (the split; 20 hash blocks; max
+  RSS 1117798400 B, footprint 883590824 B) and
+  test/certificate-write-m7b4.ledger (the erase; 13 hash blocks; max
+  RSS 1074987008 B, footprint 627623328 B), with the kernel fc80b5d.
+- Tests of part B2a: `test_m7_many`, `test_m7_split_add` and the
+  EraseParty rows of `test_m7_identity` in test/c-modules.c; 1 m7 row
+  in test/paths.test.mjs. The combined split and add rows check that
+  adding an Identifier uses the list after removing moved Identifiers.
 
 ## Remaining M0 work
 
