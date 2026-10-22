@@ -252,7 +252,7 @@ M2 is the read path (parts A, B and C).
   merge key of `commandResolveParty` (M7 part B1: see `## M7`),
   `commandExtract` with more than one entry for each write, and the 21
   Commands with no body (after M7 part A, 20; after part B1, 15;
-  after part B2a, 13).
+  after part B2a, 13; after part B2b, 12).
 
 ## M3
 
@@ -819,6 +819,44 @@ projection set the stage (`projection_rows` in compiler/program.c).
   EraseParty rows of `test_m7_identity` in test/c-modules.c; 1 m7 row
   in test/paths.test.mjs. The combined split and add rows check that
   adding an Identifier uses the list after removing moved Identifiers.
+- Part B2b, the Party merge. `commandMergeParties keep drop` merges
+  the Party record `drop` into the Party record `keep`. If `keep`
+  names no Party record, the write gives `outcomeDenied none
+  [missingField "keep"]`. If `drop` names no Party record, the write
+  gives `outcomeDenied none [missingField "drop"]`. These two checks
+  come before the policy check. The write makes one ask of
+  `permissionWrite` with no fields on `subjectParty keep`, then on
+  `subjectParty drop`: the first subject that no policy allows denies
+  the write (A-6). Then it appends one entry, a `createsEvent` of an
+  `eventDeleted` Event on `drop` with the payload `mergedInto` (the
+  hash of `keep`). The outcome is `outcomeAppended [h] policy`.
+- The projection of a merge (MB-11). The Event sets `deletedBy` of
+  `drop`, as a delete does. Then each record that names `drop` in one
+  of these keys names `keep`: Membership `person` and `org`,
+  Commercial `party`, Assignment `assignee` and `subject` (the party
+  of the Account), and Artifact `subjects` (the party of each Account)
+  (ruling Q-M7-14 (a)). An Event record keeps its subject.
+- Limits of part B2b. The tests show the A-6 order only with an actor
+  that no policy allows, so both subjects deny. `scopeParty` has no
+  argument, so a Policy cannot allow `keep` and deny `drop` by the
+  Party kind. No test has a policy that allows `keep` and denies
+  `drop`.
+- The certificate of part B2b. `keyMergedInto`, `partyRepoint`,
+  `accountRepoint`, `accountsRepoint`, `bodyRepoint`,
+  `recordsRepoint`, `attrsInto`, `etDeleted` and `recordsMerged`;
+  `recordsAdd`, which runs `recordsMerged` after the subject update;
+  `keyKeep`, `keyDrop`, `writeMerge` and the `commandMergeParties` arm
+  of `writeGo` (core/certificate.def). compiler/certificate.c has no
+  code change: the Party arm of `ledgerLastEvent` changes only the
+  subject record. CERT_PROGRAMS has one more program,
+  test/certificate-write-m7b5.ledger (the merge, then `queryEmployer`
+  of `keep` gives the org of the moved Membership; 22 hash
+  blocks; max RSS 1243824128 B, footprint 1015645888 B), with the kernel
+  fc80b5d.
+- Tests of part B2b: `test_m7_merge` in test/c-modules.c. It has the
+  missing `keep` and missing `drop` rows, the deny row, and the merge,
+  with one moved record for each of Membership, Commercial,
+  Assignment and Artifact.
 
 ## Remaining M0 work
 

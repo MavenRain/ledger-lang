@@ -780,7 +780,10 @@ static const char *const bodies[] = {"Party", "Membership", "Commercial", "Commi
    (stageAfter, as program.c projection_moved). M7 parts B1 and B2a (deltas
    MB-6 and MB-9, Q-M7-15 (a)): on a Party, the displayName, legalName,
    identifiers, attrs and deletedBy after e (partyName, partyLegal,
-   partyIdents, partyAttrs and partyDeleted, as program.c projection_party). */
+   partyIdents, partyAttrs and partyDeleted, as program.c projection_party).
+   M7 part B2b (MB-11): this setter changes the subject record only. The
+   Merge repoint of the other records is recordsMerged (certificate.def),
+   which recordsAdd runs after this setter. */
 static const char last_event[] =
     "\ndef ledgerLastEvent : Text -> Body -> Body -> Body := fun (h : Text) (e : Body) (b : Body) => case b as s1 in Body return Body with"
     " | createsParty (m : Party) => createsParty (case m as s2 in Party return Party with | makeParty (x0 : KindParty)"

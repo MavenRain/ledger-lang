@@ -4191,7 +4191,7 @@ typedef struct {
   WriteAskForm form;
 } WriteAsk;
 
-enum { WRITE_ASKS = 15 };
+enum { WRITE_ASKS = 17 };
 
 static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandResolveParty", "permissionWrite", "", "", ASK_NONE},
@@ -4208,7 +4208,9 @@ static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandDeleteParty", "permissionWrite", "party", "", ASK_PARTY},
     {"commandRestoreParty", "permissionWrite", "party", "", ASK_PARTY},
     {"commandSplitParty", "permissionWrite", "party", "", ASK_PARTY},
-    {"commandEraseParty", "permissionWrite", "party", "", ASK_PARTY}};
+    {"commandEraseParty", "permissionWrite", "party", "", ASK_PARTY},
+    {"commandMergeParties", "permissionWrite", "keep", "", ASK_PARTY},
+    {"commandMergeParties", "permissionWrite", "drop", "", ASK_PARTY}};
 
 /* The row of write_asks that names the Command tag, from at on; WRITE_ASKS
    when no row names it. */
@@ -4267,6 +4269,28 @@ static int write_ask_list(const Value *command, Nat at, const Values **subjects,
   if (form == ASK_ACCOUNTS) return write_subjects(items_of(value), subjects, failure);
   if (!write_subject(value, form, &subject, failure)) return 0;
   *subjects = values_item(subject, NULL);
+  return 1;
+}
+
+/* The items of first, then the items of rest. */
+static const Values *write_values_join(const Values *first, const Values *rest) {
+  return first == NULL ? rest : values_item(first->head, write_values_join(first->tail, rest));
+}
+
+/* Delta A-6 (MB-10): the subjects of row at and of each next row of
+   write_asks that names the Command tag, in row order (commandMergeParties:
+   keep, then drop). */
+static int write_ask_rows(const Value *command, Text tag, Nat at, const Values **subjects, Failure *failure) {
+  Nat next = at < WRITE_ASKS ? write_ask_at(tag, at + 1) : WRITE_ASKS;
+  const Values *these;
+  const Values *rest;
+  if (!write_ask_list(command, at, &these, failure)) return 0;
+  if (next >= WRITE_ASKS) {
+    *subjects = these;
+    return 1;
+  }
+  if (!write_ask_rows(command, tag, next, &rest, failure)) return 0;
+  *subjects = write_values_join(these, rest);
   return 1;
 }
 
@@ -4341,13 +4365,14 @@ typedef struct {
   const char *family;
 } WriteRecord;
 
-enum { WRITE_RECORDS = 8 };
+enum { WRITE_RECORDS = 10 };
 
 static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandTransition", "commercial", "Commercial"}, {"commandAddIdentifier", "party", "Party"},
     {"commandVerifyIdentifier", "party", "Party"},     {"commandEnrichParty", "party", "Party"},
     {"commandDeleteParty", "party", "Party"},          {"commandRestoreParty", "party", "Party"},
-    {"commandSplitParty", "party", "Party"},           {"commandEraseParty", "party", "Party"}};
+    {"commandSplitParty", "party", "Party"},           {"commandEraseParty", "party", "Party"},
+    {"commandMergeParties", "keep", "Party"},          {"commandMergeParties", "drop", "Party"}};
 
 /* The row of write_records that names the Command tag, from at on;
    WRITE_RECORDS when no row names it. */
@@ -4363,6 +4388,14 @@ static const Value *write_record(const Located *records, const Value *command, N
   const Value *ref = write_field(text_of_cstring(write_records[at].field), command);
   const Value *named = record_named(records, write_field(kRefHash(), ref)->text);
   return named != NULL && record_is(named, write_records[at].family) == 1 ? named : NULL;
+}
+
+/* Delta MB-10: the first row of write_records from at on that names the
+   Command tag and has no record; WRITE_RECORDS when each row has its record. */
+static Nat write_record_gap(const Located *records, const Value *command, Text tag, Nat at) {
+  Nat row = write_record_at(tag, at);
+  if (row >= WRITE_RECORDS) return WRITE_RECORDS;
+  return write_record(records, command, row) == NULL ? row : write_record_gap(records, command, tag, row + 1);
 }
 
 /* outcomeDenied none [missingField field]. */
@@ -4527,6 +4560,15 @@ static int write_party_change(const Value *command, Text tag, const Value *curre
   if (same_text(tag, text_of_cstring("commandEraseParty")) == 1)
     return write_party_event(party, "eventDeleted", write_attr_item("erased", yes, NULL), &null_value, body,
                              failure);
+  /* Q-M7-14 (a), delta MB-8: commandMergeParties deletes drop into keep. */
+  if (same_text(tag, text_of_cstring("commandMergeParties")) == 1)
+    return write_party_event(write_field(text_of_cstring("drop"), command), "eventDeleted",
+                             write_attr_item("mergedInto",
+                                             text_value(write_field(kRefHash(),
+                                                                    write_field(text_of_cstring("keep"), command))
+                                                            ->text),
+                                             NULL),
+                             &null_value, body, failure);
   if (same_text(tag, text_of_cstring("commandDeleteParty")) == 1)
     return write_party_event(party, "eventDeleted", NULL, &null_value, body, failure);
   return write_party_event(party, "eventFieldsChanged", write_attr_item("restored", yes, NULL), &null_value, body,
@@ -4607,15 +4649,15 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
       same_text(tag, text_of_cstring("commandResolveParty")) == 1 ? write_party_find(ordered, command) : NULL;
   const Value *body = NULL;
   Text missed = none;
-  if (row < WRITE_RECORDS && current == NULL)
-    return write_missing(log, text_of_cstring(write_records[row].field), value, failure);
+  Nat gap = write_record_gap(records, command, tag, 0);
+  if (gap < WRITE_RECORDS) return write_missing(log, text_of_cstring(write_records[gap].field), value, failure);
   if (row < WRITE_RECORDS && transition != 1 && !write_party_change(command, tag, current, &body, &missed, failure))
     return 0;
   if (missed.size > 0) return write_missing(log, missed, value, failure);
   if (row == WRITE_RECORDS && resolved == NULL && !write_command_body(command, tag, 0, &body, failure)) return 0;
   if (transition != 1 && resolved == NULL && body == NULL) return write_denied(log, value, failure);
   const Values *subjects;
-  if (!write_ask_list(command, at, &subjects, failure)) return 0;
+  if (!write_ask_rows(command, tag, at, &subjects, failure)) return 0;
   const Value *enrich = write_field(text_of_cstring("attrs"), command);
   PolicyAsk ask = {actor_text(write_field(text_of_cstring("actor"), write)),
                    text_of_cstring(at < WRITE_ASKS ? write_asks[at].action : "permissionWrite"), &null_value,

@@ -311,8 +311,11 @@ Encoding rules:
   `eventFieldsChanged` Event with `splitTo` removes them from the
   party) and to `commandEraseParty` (an `eventDeleted` Event that
   blanks the Party record; the earlier entries of the log keep their
-  text). The certificate covers part A, part B1 and part B2a
-  (docs/STATUS.md `## M7`).
+  text). Part B2b gives a Body to `commandMergeParties` (an
+  `eventDeleted` Event on `drop` with the payload `mergedInto`; the
+  projection then moves the Party references of the other records
+  from `drop` to `keep`). The certificate covers part A, part B1,
+  part B2a and part B2b (docs/STATUS.md `## M7`).
 
 ## 7. Milestones
 

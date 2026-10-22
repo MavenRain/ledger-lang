@@ -1374,6 +1374,73 @@ static Nat projection_slot(Text ref, Nat k, Index hashes, Index incoming, const 
                                                                                     : m + k;
 }
 
+/* Q-M7-14 (a), delta MB-11: value with each Party Ref of drop set to keep: a
+   Ref, the party Ref of an Account, or each item of a List Account. */
+static const Value *projection_repoint(Text drop, Text keep, const Value *value);
+
+static const Values *projection_repoint_items(Text drop, Text keep, const Values *items) {
+  return items == NULL ? NULL
+                       : projection_cell(projection_repoint(drop, keep, items->head),
+                                         projection_repoint_items(drop, keep, items->tail));
+}
+
+static const Value *projection_repoint(Text drop, Text keep, const Value *value) {
+  const Value *party = projection_field(text_of_cstring("party"), value);
+  if (value->kind == VALUE_ITEMS) return projection_items(projection_repoint_items(drop, keep, value->items));
+  if (party->kind == VALUE_ATTRS)
+    return projection_attrs(
+        projection_replace(text_of_cstring("party"), projection_repoint(drop, keep, party), value->attrs));
+  return same_text(projection_field(kKind, value)->text, text_of_cstring("kindParty")) == 1 &&
+                 same_text(projection_field(kHash, value)->text, drop) == 1
+             ? projection_attrs(projection_replace(kHash, text_value(keep), value->attrs))
+             : value;
+}
+
+/* Delta MB-11: the record keys that hold a Party Ref (Q-M7-14 (a)). An Event
+   record keeps its subject. */
+typedef struct {
+  const char *family;
+  const char *key;
+} ProjectionRepoint;
+
+enum { PROJECTION_REPOINTS = 6 };
+
+static const ProjectionRepoint projection_repoints[PROJECTION_REPOINTS] = {
+    {"Membership", "person"},   {"Membership", "org"},     {"Commercial", "party"},
+    {"Assignment", "assignee"}, {"Assignment", "subject"}, {"Artifact", "subjects"}};
+
+/* 1 when a row of projection_repoints from at on names family. */
+static Nat projection_repoint_named(Text family, Nat at) {
+  return at < PROJECTION_REPOINTS &&
+         (same_text(family, text_of_cstring(projection_repoints[at].family)) == 1 ||
+          projection_repoint_named(family, at + 1) == 1);
+}
+
+/* Delta MB-11: attrs with the value of the key of each row from at on that
+   names family repointed. */
+static const Attrs *projection_repoint_keys(Text drop, Text keep, Text family, Nat at, const Attrs *attrs) {
+  if (at >= PROJECTION_REPOINTS) return attrs;
+  Text key = text_of_cstring(projection_repoints[at].key);
+  Nat named = same_text(family, text_of_cstring(projection_repoints[at].family));
+  return projection_repoint_keys(
+      drop, keep, family, at + 1,
+      named == 1 ? projection_replace(key, projection_repoint(drop, keep, projection_attr(key, attrs)), attrs)
+                 : attrs);
+}
+
+/* Delta MB-11: each record of slots from at to end with the Party Refs of
+   drop set to keep. */
+static void projection_repoint_slots(Text drop, Text keep, ProjectionSlot *slots, Nat at, Nat end) {
+  if (at >= end) return;
+  const Value *record = slots[at].value;
+  Text family = record != NULL ? projection_field(kType, record)->text : (Text){NULL, 0};
+  const Value *was = record != NULL ? projection_field(kValue, record) : &projection_null;
+  if (was->kind == VALUE_ATTRS && projection_repoint_named(family, 0) == 1)
+    slots[at].value = projection_record(projection_field(kRef, record)->text, family,
+                                        projection_attrs(projection_repoint_keys(drop, keep, family, 0, was->attrs)));
+  projection_repoint_slots(drop, keep, slots, at + 1, end);
+}
+
 /* Items 10, 11 and 13 (item 3b, pass 2): entry k of entries. An entry with
    a known hash (an incoming record, or the hash of an entry below k) changes
    nothing. Else a createsEvent entry first updates the record of its
@@ -1394,6 +1461,14 @@ static void projection_entry(Nat position, Text name, Nat k, const Keyed *entrie
     Nat slot = projection_slot(subject, k, hashes, incoming, slots);
     const Value *event = object_two(kKind, text_value(kKindEvent), kHash, text_value(hash));
     if (slot < m + k) slots[slot].value = projection_updated(subject, event, state, slots[slot].value);
+    /* Delta MB-11: an eventDeleted on a Party with mergedInto keep repoints
+       each record from the Party to keep. */
+    const Value *into = projection_field(text_of_cstring("mergedInto"), projection_field(text_of_cstring("payload"), state));
+    if (same_text(projection_tag(projection_field(text_of_cstring("type"), state)), text_of_cstring("eventDeleted")) == 1 &&
+        same_text(projection_field(kSchemaTag(), projection_field(kSubject, state))->text,
+                  text_of_cstring("subjectParty")) == 1 &&
+        into->kind == VALUE_TEXT)
+      projection_repoint_slots(subject, into->text, slots, 0, m + k);
   }
   slots[m + k] = (ProjectionSlot){position, name, projection_record(hash, text_drop(tag, 7), state)};
 }

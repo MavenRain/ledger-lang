@@ -1,0 +1,18 @@
+-- M7 part B2b: the Party merge write. MergeParties appends one event. me is
+-- the entry that s1 writes. It moves the Membership of d to k, thus
+-- queryEmployer of k gives o. Its certificate checks in the kernel (make
+-- certificate-check).
+def kp : Party := makeParty partyPerson "K" none nil attrsEnd none none
+def dp : Party := makeParty partyPerson "D" none nil attrsEnd none none
+def ke : Entry := makeEntry none (actorAgent "a") (createsParty kp)
+def de : Entry := makeEntry none (actorAgent "a") (createsParty dp)
+def k : Ref kindParty := refTo (hashOf "46b714f70ba3294761dddddced5cc6ccdde6ebe0435ac53e811a24849c6b4052")
+def d : Ref kindParty := refTo (hashOf "0fc61a441e6682b04a2dd4af4c3838bb5888bd5ed584dddf7cf9ea728aeb169d")
+def o : Ref kindParty := refTo (hashOf "o")
+def job : Membership := makeMembership d o none flagYes none (makeProvenance none none none) attrsEnd
+def je : Entry := makeEntry none (actorAgent "a") (createsMembership job)
+def log1 : Log := cons ke (cons de (cons je nil))
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandMergeParties k d))
+def me : Entry := makeEntry (some (hashOf "1732974c8976c34e20f02d53723dab0bc09aaaa8a4f32189332cbb9d4eadcad4")) (actorAgent "a") (createsEvent (makeEvent eventDeleted (subjectParty d) none none (attrsField "mergedInto" (valueText "46b714f70ba3294761dddddced5cc6ccdde6ebe0435ac53e811a24849c6b4052") attrsEnd) none))
+def log2 : Log := cons ke (cons de (cons je (cons me nil)))
+def employer : Option (Ref kindParty) := read (Option (Ref kindParty)) log2 (queryEmployer k momentNow)

@@ -7180,6 +7180,114 @@ static void test_m7_identity(void) {
   assert(missing_is(missing->head, "missingField", "field", "party") == 1);
 }
 
+/* M7 part B2b (Q-M7-14 (a), deltas MB-8, MB-10 and MB-11):
+   commandMergeParties on the PartyLog with a second Party d and one
+   Membership (person d), Commercial (party d), Assignment (subject and
+   assignee d) and Artifact (subjects [d]). No keep record gives missingField
+   "keep" and no drop record gives missingField "drop" (the record checks come
+   before the policy). An actor with no rule (cy) gives outcomeDenied policy n
+   (A-6, the first deny). The Merge by an deletes d into acme: deletedBy of d
+   is the ref of the Event, the payload mergedInto is the acme hash, each Ref
+   to d in the 4 families names acme, and the Event keeps its subject d. */
+static void test_m7_merge(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PartyLog storage;
+  party_test_log(&storage, &left, &failure);
+  Text acme = storage.hashes[0];
+  Value d_name = account_text("d");
+  Value zz = account_text("zz");
+  Value cy_name = account_text("cy");
+  Value no_items = {.kind = VALUE_ITEMS, .items = NULL};
+  Value d_ref, zz_ref, subjects, hash_values[7];
+  Attrs d_fields[2], zz_fields[2];
+  Tagged accounts[2], actors[2];
+  AccountEntry entries[5];
+  Values subject_cells[1], cells[7];
+  Text hashes[7];
+  QueryTwo merges[4];
+  WriteTwo writes[4];
+  const Value *n = &storage.none;
+  const char *const party_names[5] = {"kind", "displayName", "identifiers", "lastEvent", "deletedBy"};
+  const char *const member_names[3] = {"person", "org", "endedBy"};
+  const char *const commercial_names[2] = {"party", "lastEvent"};
+  const char *const assign_names[3] = {"subject", "assignee", "endedBy"};
+  const char *const artifact_names[1] = {"subjects"};
+  assign_ref(d_fields, &d_ref, &storage.kind_party, &hash_values[2]);
+  assign_ref(zz_fields, &zz_ref, &storage.kind_party, &zz);
+  subject_cells[0] = (Values){tagged(&accounts[1], "accountParty", "party", &d_ref), NULL};
+  subjects = (Value){.kind = VALUE_ITEMS, .items = &subject_cells[0]};
+  const Value *log_entries[7] = {
+      &storage.party_entry, &storage.policy.entry,
+      account_entry(&entries[0], "createsParty", "party", 5, party_names,
+                    (const Value *const[]){&storage.org, &d_name, &no_items, n, n}),
+      account_entry(&entries[1], "createsMembership", "membership", 3, member_names,
+                    (const Value *const[]){&d_ref, &storage.ref, n}),
+      account_entry(&entries[2], "createsCommercial", "commercial", 2, commercial_names,
+                    (const Value *const[]){&d_ref, n}),
+      account_entry(&entries[3], "createsAssignment", "assignment", 3, assign_names,
+                    (const Value *const[]){tagged(&accounts[0], "accountParty", "party", &d_ref), &d_ref, n}),
+      account_entry(&entries[4], "createsArtifact", "artifact", 1, artifact_names, (const Value *const[]){&subjects})};
+  left = 100;
+  for (Nat at = 0; at < 7; at++) {
+    assert(entry_hash(1000, 1, 0, log_entries[at], &hashes[at], &left, &failure));
+    hash_values[at] = (Value){.kind = VALUE_TEXT, .text = hashes[at]};
+    cells[at] = (Values){log_entries[at], at + 1 < 7 ? &cells[at + 1] : NULL};
+  }
+  Value log = {.kind = VALUE_ITEMS, .items = &cells[0]};
+  const Value *an = tagged(&actors[0], "actorAgent", "name", &storage.an);
+  const Value *cy = tagged(&actors[1], "actorAgent", "name", &cy_name);
+  const Value *step = NULL;
+  /* No keep record, then no drop record (MB-10). */
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[0], an, query_two(&merges[0], "commandMergeParties", "keep", &zz_ref, "drop", &d_ref)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1);
+  assert(missing_is(missing->head, "missingField", "field", "keep") == 1);
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[1], an,
+                             query_two(&merges[1], "commandMergeParties", "keep", &storage.ref, "drop", &zz_ref)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1);
+  assert(missing_is(missing->head, "missingField", "field", "drop") == 1);
+  /* cy has no rule: the ask on keep denies first (A-6). */
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[2], cy,
+                             query_two(&merges[2], "commandMergeParties", "keep", &storage.ref, "drop", &d_ref)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", &hashes[1]) == 1);
+  assert(pipeline_field(outcome, "missing")->items == NULL && read_count(pipeline_field(step, "log")->items) == 7);
+  /* The Merge by an. */
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[3], an,
+                             query_two(&merges[3], "commandMergeParties", "keep", &storage.ref, "drop", &d_ref)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  const Value *logged = pipeline_field(step, "log");
+  const Value *event = pipeline_field(pipeline_field(pipeline_at(logged, 7), "body"), "event");
+  assert(left == 3 && verdict_is(outcome, "outcomeAppended", &hashes[1]) == 1 && read_count(logged->items) == 8);
+  assert(same_text(pipeline_field(pipeline_field(event, "payload"), "mergedInto")->text, acme) == 1);
+  assert(same_text(pipeline_field(pipeline_field(party_state(step, hashes[2]), "deletedBy"), "hash")->text,
+                   appended_hash(step)) == 1);
+  const Value *member = party_state(step, hashes[3]);
+  const Value *assignment = party_state(step, hashes[5]);
+  const Value *artifact = party_state(step, hashes[6]);
+  assert(account_ref_is(pipeline_field(member, "person"), "kindParty", acme) == 1);
+  assert(account_ref_is(pipeline_field(member, "org"), "kindParty", acme) == 1);
+  assert(account_ref_is(pipeline_field(party_state(step, hashes[4]), "party"), "kindParty", acme) == 1);
+  assert(account_ref_is(pipeline_field(assignment, "assignee"), "kindParty", acme) == 1);
+  assert(account_ref_is(pipeline_field(pipeline_field(assignment, "subject"), "party"), "kindParty", acme) == 1);
+  assert(account_ref_is(pipeline_field(pipeline_field(artifact, "subjects")->items->head, "party"), "kindParty", acme) ==
+         1);
+  assert(account_ref_is(pipeline_field(pipeline_field(party_state(step, appended_hash(step)), "subject"), "party"),
+                        "kindParty", hashes[2]) == 1);
+}
+
 /* M7 part B2a (design item 8, delta MB-9, ruling Q-M7-18 (a)):
    commandSplitParty on the PartyLog. Split acme with moved [crm c-1] gives
    two entries: entry 1 creates the new Party (the kind and the displayName
@@ -7551,6 +7659,7 @@ int main(void) {
   test_m7_stage_payload();
   test_m7_find();
   test_m7_identity();
+  test_m7_merge();
   test_m7_many();
   test_m7_split_add();
   test_m7_identifier_payload();
