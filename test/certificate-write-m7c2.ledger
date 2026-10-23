@@ -1,0 +1,16 @@
+-- M7 part C2: the Commercial writes. s1 changes the amount of the Commercial
+-- d1 to 7: it appends one eventAmountChanged event (payload before 1000, after
+-- 7). s2 sets its status to statusWon: it appends one eventFieldsChanged event
+-- (status = statusWon). s3 names a Commercial that is not in the log:
+-- missingField "commercial". There is no ChangeAmount none here (the block
+-- probe gives 26 hash blocks with it, above the cap of 24). Its certificate
+-- checks in the kernel (make certificate-check).
+def p : Ref kindParty := refTo (hashOf "p")
+def d1 : Commercial := makeCommercial commercialDeal "D" p "q" (some 1000) "U" none statusOpen attrsEnd none
+def e1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1)
+def log1 : Log := cons e1 nil
+def r : Ref kindCommercial := refTo (hashOf "de2d7a24ea98d442661b40acc265b15fb56fba12fd2c9c6cafbeab1f5080cc89")
+def z : Ref kindCommercial := refTo (hashOf "z")
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandChangeAmount r (some 7)))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandSetStatus r statusWon))
+def s3 : Step := write log1 (makeWrite (actorAgent "a") none (commandChangeAmount z (some 7)))

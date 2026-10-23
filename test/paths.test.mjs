@@ -1356,3 +1356,62 @@ test('m7 commandSetPrimary and commandEndMembership write their events and proje
     [sha256(e4), human, 'eventEnded', { tag: 'subjectMembership', membership: memberRef(e2) }]);
   assert.deepEqual(membership(ended.records, e2).endedBy, { kind: 'kindEvent', hash: sha256(ee) });
 });
+
+// M7 part C2: commandChangeAmount writes eventAmountChanged with the payload {"before", "after"} on the
+// Commercial, and the projection sets its amountCents. commandSetStatus then writes eventFieldsChanged with
+// {"status": the CommercialStatus tag}, and the projection sets its status (the amount stays).
+test('m7 commandChangeAmount and commandSetStatus write their events and project the Commercial', () => {
+  const dealLog = 'def d1 : Commercial := makeCommercial commercialDeal "D" acme "q" (some 1000) "U" none statusOpen ' +
+    'attrsEnd none def e1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1) ';
+  const { e1 } = named(`${actors}${dealLog}`);
+  const ref = `(refTo (hashOf "${sha256(e1)}"))`;
+  const subject = { tag: 'subjectCommercial', commercial: { kind: 'kindCommercial', hash: sha256(e1) } };
+  const deal = records => records.find(item => item.ref === sha256(e1)).value;
+  const amount = projected(`${actors}${dealLog}` + m7Edit('(cons e1 nil)', `commandChangeAmount ${ref} (some 7)`));
+  const ae = amount.s.log[1];
+  assert.deepEqual(amount.s, appended([e1, ae], ae));
+  assert.deepEqual([ae.prev, ae.actor, ae.body.event.type, ae.body.event.subject, ae.body.event.payload,
+    ae.body.event.policy], [sha256(e1), human, 'eventAmountChanged', subject, { before: 1000, after: 7 }, null]);
+  assert.deepEqual([deal(amount.records).amountCents, deal(amount.records).status], [7, 'statusOpen']);
+  const amountEntry = `def ae : Entry := makeEntry (some (hashOf "${sha256(e1)}")) (actorHuman acme) (createsEvent ` +
+    `(makeEvent eventAmountChanged (subjectCommercial ${ref}) none none (attrsField "before" (valueNat 1000) ` +
+    '(attrsField "after" (valueNat 7) attrsEnd)) none)) ';
+  const status = projected(`${actors}${dealLog}${amountEntry}` +
+    m7Edit('(cons e1 (cons ae nil))', `commandSetStatus ${ref} statusWon`));
+  assert.deepEqual(status.ae, ae);
+  const se = status.s.log[2];
+  assert.deepEqual(status.s, appended([e1, ae, se], se));
+  assert.deepEqual([se.prev, se.actor, se.body.event.type, se.body.event.subject, se.body.event.payload],
+    [sha256(ae), human, 'eventFieldsChanged', subject, { status: 'statusWon' }]);
+  assert.deepEqual([deal(status.records).amountCents, deal(status.records).status, deal(status.records).lastEvent],
+    [7, 'statusWon', { kind: 'kindEvent', hash: sha256(se) }]);
+});
+
+test('m7 commandRecord sets the Commercial status only to the text of a CommercialStatus tag', () => {
+  const dealLog = 'def d1 : Commercial := makeCommercial commercialDeal "D" acme "q" (some 1000) "U" none statusOpen ' +
+    'attrsEnd none def e1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1) ';
+  const { e1 } = named(`${actors}${dealLog}`);
+  const ref = `(refTo (hashOf "${sha256(e1)}"))`;
+  const deal = records => records.find(item => item.ref === sha256(e1)).value;
+  const recorded = text => projected(`${actors}${dealLog}` + m7Edit('(cons e1 nil)', 'commandRecord (makeEvent ' +
+    `eventFieldsChanged (subjectCommercial ${ref}) none none (attrsField "status" (valueText "${text}") attrsEnd) none)`));
+  const [lost, bogus] = ['statusLost', 'bogus'].map(text => recorded(text));
+  assert.deepEqual([lost.s.outcome.tag, deal(lost.records).status], ['outcomeAppended', 'statusLost']);
+  assert.deepEqual([bogus.s.outcome.tag, deal(bogus.records).status], ['outcomeAppended', 'statusOpen']);
+});
+
+test('m7 commandAgree writes eventCommitmentSet and projects the Commitment agreed', () => {
+  const termLog = 'def k1 : Commitment := makeCommitment (refTo (hashOf "c")) commitmentPrice "t" (valueNat 9) none ' +
+    'commitmentProposed none (makeProvenance none none none) def e1 : Entry := makeEntry none (actorAgent "a") ' +
+    '(createsCommitment k1) ';
+  const { e1 } = named(`${actors}${termLog}`);
+  const subject = { tag: 'subjectCommitment', commitment: { kind: 'kindCommitment', hash: sha256(e1) } };
+  const term = records => records.find(item => item.ref === sha256(e1)).value;
+  const agree = projected(`${actors}${termLog}` +
+    m7Edit('(cons e1 nil)', `commandAgree (refTo (hashOf "${sha256(e1)}"))`));
+  const ce = agree.s.log[1];
+  assert.deepEqual(agree.s, appended([e1, ce], ce));
+  assert.deepEqual([ce.prev, ce.actor, ce.body.event.type, ce.body.event.subject, ce.body.event.payload,
+    ce.body.event.policy], [sha256(e1), human, 'eventCommitmentSet', subject, { status: 'commitmentAgreed' }, null]);
+  assert.equal(term(agree.records).status, 'commitmentAgreed');
+});

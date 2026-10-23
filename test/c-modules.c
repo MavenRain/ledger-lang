@@ -7460,6 +7460,211 @@ static void test_m7_membership(void) {
   assert(pipeline_field(outcome, "missing")->items == NULL && read_count(pipeline_field(step, "log")->items) == 6);
 }
 
+/* M7 part C2 (design item 18, deltas MC-2, MC-3 and MC-6, Q-C-2 (a)):
+   commandChangeAmount and commandSetStatus on the PartyLog with a
+   Commercial c (amountCents 1000, status statusOpen). an: ChangeAmount some
+   7 appends one eventAmountChanged [before = 1000, after = 7] and amountCents
+   is 7; ChangeAmount none then gives [before = 7, after = null] and
+   amountCents null; SetStatus statusWon gives one eventFieldsChanged [status
+   = "statusWon"] and the projected status is the text statusWon (R30). bo
+   may write the field title only: the deny of amountCents and of status
+   gives the policy. A missing ref gives missingField "commercial". */
+static void test_m7_commercial(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PartyLog storage;
+  party_test_log(&storage, &left, &failure);
+  Value kind_commercial = account_text("kindCommercial");
+  Value party_hash = account_text("party-p");
+  Value zz = account_text("zz");
+  Value stage = account_text("q");
+  Value open = account_text("statusOpen");
+  Value won = account_text("statusWon");
+  Value cents = {.kind = VALUE_NAT, .number = 1000};
+  Value seven = {.kind = VALUE_NAT, .number = 7};
+  Value party, zz_ref, commercial, hash_values[3];
+  Attrs party_fields[2], zz_fields[2], commercial_fields[2];
+  assign_ref(party_fields, &party, &storage.kind_party, &party_hash);
+  assign_ref(zz_fields, &zz_ref, &kind_commercial, &zz);
+  AccountEntry entry;
+  Values cells[3];
+  Text hashes[3];
+  const char *const commercial_keys[5] = {"party", "stage", "amountCents", "status", "lastEvent"};
+  const Value *log_entries[3] = {&storage.party_entry, &storage.policy.entry,
+                                 account_entry(&entry, "createsCommercial", "commercial", 5, commercial_keys,
+                                               (const Value *const[]){&party, &stage, &cents, &open, &storage.none})};
+  left = 100;
+  for (Nat at = 0; at < 3; at++) {
+    assert(entry_hash(1000, 1, 0, log_entries[at], &hashes[at], &left, &failure));
+    hash_values[at] = (Value){.kind = VALUE_TEXT, .text = hashes[at]};
+    cells[at] = (Values){log_entries[at], at + 1 < 3 ? &cells[at + 1] : NULL};
+  }
+  assign_ref(commercial_fields, &commercial, &kind_commercial, &hash_values[2]);
+  Value log = {.kind = VALUE_ITEMS, .items = &cells[0]};
+  Tagged actors[2];
+  QueryTwo commands[6];
+  WriteTwo writes[6];
+  const Value *an = tagged(&actors[0], "actorAgent", "name", &storage.an);
+  const Value *bo = tagged(&actors[1], "actorAgent", "name", &storage.bo);
+  const Value *steps[3] = {NULL, NULL, NULL};
+  const Value *const amounts[2] = {&seven, &storage.none};
+  const Nat befores[2] = {1000, 7};
+  const Value *from = &log;
+  /* ChangeAmount some 7, then none (Q-C-2 (a)), by an. */
+  for (Nat at = 0; at < 2; at++) {
+    assert(write_step(1000, 5, 3, from,
+                      write_of(&writes[at], an,
+                               query_two(&commands[at], "commandChangeAmount", "commercial", &commercial,
+                                         "amountCents", amounts[at])),
+                      &steps[at], &left, &failure));
+    from = pipeline_field(steps[at], "log");
+    assert(left == 3 && verdict_is(pipeline_field(steps[at], "outcome"), "outcomeAppended", &hashes[1]) == 1 &&
+           read_count(from->items) == 4 + at);
+    const Value *event = pipeline_field(pipeline_field(pipeline_at(from, 3 + at), "body"), "event");
+    const Value *before = pipeline_field(pipeline_field(event, "payload"), "before");
+    const Value *after = pipeline_field(pipeline_field(event, "payload"), "after");
+    const Value *amount = pipeline_field(party_state(steps[at], hashes[2]), "amountCents");
+    assert(same_text(pipeline_field(event, "type")->text, text("eventAmountChanged")) == 1);
+    assert(before->kind == VALUE_NAT && before->number == befores[at]);
+    assert(after->kind == amounts[at]->kind && amount->kind == amounts[at]->kind);
+    assert(at == 1 || (after->number == 7 && amount->number == 7));
+  }
+  /* SetStatus statusWon by an: the projected status is the text (R30). */
+  assert(write_step(1000, 5, 3, from,
+                    write_of(&writes[2], an,
+                             query_two(&commands[2], "commandSetStatus", "commercial", &commercial, "status", &won)),
+                    &steps[2], &left, &failure));
+  from = pipeline_field(steps[2], "log");
+  assert(left == 3 && verdict_is(pipeline_field(steps[2], "outcome"), "outcomeAppended", &hashes[1]) == 1 &&
+         read_count(from->items) == 6);
+  const Value *event = pipeline_field(pipeline_field(pipeline_at(from, 5), "body"), "event");
+  const Value *status = pipeline_field(pipeline_field(event, "payload"), "status");
+  const Value *state = party_state(steps[2], hashes[2]);
+  assert(same_text(pipeline_field(event, "type")->text, text("eventFieldsChanged")) == 1);
+  assert(status->kind == VALUE_TEXT && same_text(status->text, won.text) == 1);
+  assert(pipeline_field(state, "status")->kind == VALUE_TEXT &&
+         same_text(pipeline_field(state, "status")->text, won.text) == 1);
+  assert(pipeline_field(state, "amountCents")->kind == VALUE_NULL);
+  /* bo may write the field title only: the deny gives the policy. */
+  const Value *const denied[2] = {
+      query_two(&commands[3], "commandChangeAmount", "commercial", &commercial, "amountCents", &seven),
+      query_two(&commands[4], "commandSetStatus", "commercial", &commercial, "status", &won)};
+  for (Nat at = 0; at < 2; at++) {
+    const Value *step = NULL;
+    assert(write_step(1000, 5, 3, &log, write_of(&writes[3 + at], bo, denied[at]), &step, &left, &failure));
+    const Value *outcome = pipeline_field(step, "outcome");
+    assert(left == 4 && verdict_is(outcome, "outcomeDenied", &hashes[1]) == 1);
+    assert(pipeline_field(outcome, "missing")->items == NULL && read_count(pipeline_field(step, "log")->items) == 3);
+  }
+  /* A missing ref gives missingField "commercial". */
+  const Value *step = NULL;
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[5], an,
+                             query_two(&commands[5], "commandChangeAmount", "commercial", &zz_ref, "amountCents",
+                                       &seven)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1);
+  assert(missing_is(missing->head, "missingField", "field", "commercial") == 1);
+}
+
+/* M7 part C2 (PLAN item 18, ruling Q-C-s17-1 (a)): commandAgree on the
+   RuleLog plus a proposed commitmentPrice of c1 (entry 5). Agree appends an
+   eventCommitmentSet entry with the payload [status = "commitmentAgreed"] and
+   projects the status commitmentAgreed (R39). The dry run of c1 to w then has
+   no missingCommitment (dry_agreed, R40). A commandRecord eventCommitmentSet
+   with the status "bogus" keeps commitmentProposed (R41). A missing ref gives
+   missingField "commitment". */
+static void test_m7_commitment(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  RuleLog storage;
+  rule_test_log(&storage, &left, &failure);
+  Value kind_commitment = account_text("kindCommitment");
+  Value proposed = account_text("commitmentProposed");
+  Value agreed = account_text("commitmentAgreed");
+  Value commitment_set = account_text("eventCommitmentSet");
+  Value bogus = account_text("bogus");
+  Value zz = account_text("zz");
+  const char *const commitment_keys[3] = {"commercial", "kind", "status"};
+  AccountEntry extra;
+  Values cell = {account_entry(&extra, "createsCommitment", "commitment", 3, commitment_keys,
+                               (const Value *const[]){&storage.c1_ref, &storage.price, &proposed}),
+                 NULL};
+  Text commitment_hash;
+  left = 100;
+  assert(entry_hash(1000, 1, 0, cell.head, &commitment_hash, &left, &failure));
+  storage.cells[3].tail = &cell;
+  Value hash_value = {.kind = VALUE_TEXT, .text = commitment_hash};
+  Value commitment, zz_ref;
+  Attrs commitment_fields[2], zz_fields[2];
+  assign_ref(commitment_fields, &commitment, &kind_commitment, &hash_value);
+  assign_ref(zz_fields, &zz_ref, &kind_commitment, &zz);
+  Tagged actor_storage, commands[3];
+  WriteTwo writes[3];
+  QueryTwo queries[2];
+  const Value *an = tagged(&actor_storage, "actorAgent", "name", &storage.an);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  /* Before the Agree the dry run of c1 to w wants the commitmentPrice. */
+  assert(read_step(1000, 20, 7, answer, &storage.log,
+                   query_two(&queries[0], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &value, &left, &failure));
+  assert(value->kind == VALUE_ITEMS && read_count(value->items) == 3);
+  assert(missing_is(value->items->tail->head, "missingCommitment", "kind", "commitmentPrice") == 1);
+  /* Agree by an: the event and the projected status (R39). */
+  const Value *step = NULL;
+  assert(write_step(1000, 5, 3, &storage.log,
+                    write_of(&writes[0], an, tagged(&commands[0], "commandAgree", "commitment", &commitment)), &step,
+                    &left, &failure));
+  const Value *from = pipeline_field(step, "log");
+  assert(left == 3 && verdict_is(pipeline_field(step, "outcome"), "outcomeAppended", &storage.hashes[2]) == 1 &&
+         read_count(from->items) == 6);
+  const Value *event = pipeline_field(pipeline_field(pipeline_at(from, 5), "body"), "event");
+  const Value *status = pipeline_field(pipeline_field(event, "payload"), "status");
+  const Value *state = party_state(step, commitment_hash);
+  assert(same_text(pipeline_field(event, "type")->text, commitment_set.text) == 1);
+  assert(status->kind == VALUE_TEXT && same_text(status->text, agreed.text) == 1);
+  assert(pipeline_field(state, "status")->kind == VALUE_TEXT &&
+         same_text(pipeline_field(state, "status")->text, agreed.text) == 1);
+  /* dry_agreed sees the Agree (R40): the field z and the role o only. */
+  assert(read_step(1000, 20, 7, answer, from,
+                   query_two(&queries[1], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &value, &left, &failure));
+  assert(value->kind == VALUE_ITEMS && read_count(value->items) == 2);
+  assert(missing_is(value->items->head, "missingField", "field", "z") == 1);
+  assert(missing_is(value->items->tail->head, "missingApproval", "role", "o") == 1);
+  /* R41: a commandRecord eventCommitmentSet with the status "bogus" keeps
+     commitmentProposed (only the text commitmentAgreed sets the status). */
+  Attrs payload_field = {text("status"), &bogus, NULL};
+  Value payload = {.kind = VALUE_ATTRS, .attrs = &payload_field};
+  Tagged subject_storage;
+  const Value *subject = tagged(&subject_storage, "subjectCommitment", "commitment", &commitment);
+  Attrs event_fields[6] = {{text("type"), &commitment_set, &event_fields[1]},
+                           {text("subject"), subject, &event_fields[2]},
+                           {text("artifact"), &storage.none, &event_fields[3]},
+                           {text("parent"), &storage.none, &event_fields[4]},
+                           {text("payload"), &payload, &event_fields[5]},
+                           {text("policy"), &storage.none, NULL}};
+  Value event_value = {.kind = VALUE_ATTRS, .attrs = event_fields};
+  const Value *recorded = NULL;
+  assert(write_step(1000, 5, 3, &storage.log,
+                    write_of(&writes[1], an, tagged(&commands[1], "commandRecord", "event", &event_value)), &recorded,
+                    &left, &failure));
+  assert(verdict_is(pipeline_field(recorded, "outcome"), "outcomeAppended", &storage.hashes[2]) == 1);
+  assert(same_text(pipeline_field(party_state(recorded, commitment_hash), "status")->text, proposed.text) == 1);
+  /* A missing ref gives missingField "commitment". */
+  const Value *missed = NULL;
+  assert(write_step(1000, 5, 3, &storage.log,
+                    write_of(&writes[2], an, tagged(&commands[2], "commandAgree", "commitment", &zz_ref)), &missed,
+                    &left, &failure));
+  const Value *outcome = pipeline_field(missed, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1);
+  assert(missing_is(missing->head, "missingField", "field", "commitment") == 1);
+}
+
 /* M7 part B2a (design item 8, delta MB-9, ruling Q-M7-18 (a)):
    commandSplitParty on the PartyLog. Split acme with moved [crm c-1] gives
    two entries: entry 1 creates the new Party (the kind and the displayName
@@ -7837,6 +8042,8 @@ int main(void) {
   test_m7_identifier_payload();
   test_m7_membership();
   test_m7_primary_wrong_family();
+  test_m7_commercial();
+  test_m7_commitment();
   puts("C module tests passed");
   return 0;
 }

@@ -1,0 +1,14 @@
+-- M7 part C3: the Commitment write. s1 agrees the Commitment k1 (a proposed
+-- commitmentPrice on the Commercial "c", a short ref that is not in the log):
+-- it appends one eventCommitmentSet event (status = commitmentAgreed). s2
+-- names a Commitment that is not in the log: missingField "commitment". The
+-- block probe gives 13 hash blocks (cap 24). Its certificate checks in
+-- the kernel (make certificate-check).
+def c : Ref kindCommercial := refTo (hashOf "c")
+def k1 : Commitment := makeCommitment c commitmentPrice "t" (valueNat 9) none commitmentProposed none (makeProvenance none none none)
+def e1 : Entry := makeEntry none (actorAgent "a") (createsCommitment k1)
+def log1 : Log := cons e1 nil
+def r : Ref kindCommitment := refTo (hashOf "47b4658c9f8350369a623fd83777d297f42ff459c83e482b37a7d7b01faa2bd6")
+def z : Ref kindCommitment := refTo (hashOf "z")
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandAgree r))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandAgree z))

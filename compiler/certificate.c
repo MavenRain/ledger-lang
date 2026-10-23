@@ -801,8 +801,13 @@ static const char last_event[] =
     " | createsCommercial (m : Commercial) => createsCommercial (case m as s2 in Commercial return Commercial with"
     " | makeCommercial (x0 : KindCommercial) (x1 : Text) (x2 : Ref kindParty) (x3 : Text) (x4 : Option Nat) (x5 : Text)"
     " (x6 : Option Text) (x7 : CommercialStatus) (x8 : Attrs) (x9 : Option (Ref kindEvent))"
-    " => makeCommercial x0 x1 x2 (stageAfter e x3) x4 x5 x6 x7 x8 (some (refTo (hashOf h))))"
-    " | createsCommitment (m : Commitment) => createsCommitment m | createsArtifact (m : Artifact) => createsArtifact m"
+    " => makeCommercial x0 x1 x2 (stageAfter e x3) (amountAfter e x4) x5 x6 (statusAfter e x7) x8"
+    " (some (refTo (hashOf h))))"
+    " | createsCommitment (m : Commitment) => createsCommitment (case m as s2 in Commitment return Commitment with"
+    " | makeCommitment (x0 : Ref kindCommercial) (x1 : CommitmentKind) (x2 : Text) (x3 : Value) (x4 : Option Text)"
+    " (x5 : CommitmentStatus) (x6 : Option (Ref kindCommitment)) (x7 : Provenance)"
+    " => makeCommitment x0 x1 x2 x3 x4 (agreedAfter e x5) x6 x7)"
+    " | createsArtifact (m : Artifact) => createsArtifact m"
     " | createsEvent (m : Event) => createsEvent m | createsAssignment (m : Assignment) => createsAssignment m"
     " | createsPolicy (m : Policy) => createsPolicy m\n";
 

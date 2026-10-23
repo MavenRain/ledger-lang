@@ -4202,7 +4202,7 @@ typedef struct {
   WriteAskForm form;
 } WriteAsk;
 
-enum { WRITE_ASKS = 19 };
+enum { WRITE_ASKS = 22 };
 
 static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandResolveParty", "permissionWrite", "", "", ASK_NONE},
@@ -4223,7 +4223,10 @@ static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandMergeParties", "permissionWrite", "keep", "", ASK_PARTY},
     {"commandMergeParties", "permissionWrite", "drop", "", ASK_PARTY},
     {"commandEndMembership", "permissionWrite", "membership", "", ASK_MEMBERSHIP},
-    {"commandSetPrimary", "permissionWrite", "membership", "", ASK_MEMBERSHIP}};
+    {"commandSetPrimary", "permissionWrite", "membership", "", ASK_MEMBERSHIP},
+    {"commandChangeAmount", "permissionWrite", "commercial", "", ASK_COMMERCIAL},
+    {"commandSetStatus", "permissionWrite", "commercial", "", ASK_COMMERCIAL},
+    {"commandAgree", "permissionWrite", "commitment", "", ASK_COMMITMENT}};
 
 /* The row of write_asks that names the Command tag, from at on; WRITE_ASKS
    when no row names it. */
@@ -4390,7 +4393,7 @@ typedef struct {
   const char *family;
 } WriteRecord;
 
-enum { WRITE_RECORDS = 12 };
+enum { WRITE_RECORDS = 15 };
 
 static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandTransition", "commercial", "Commercial"}, {"commandAddIdentifier", "party", "Party"},
@@ -4398,7 +4401,9 @@ static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandDeleteParty", "party", "Party"},          {"commandRestoreParty", "party", "Party"},
     {"commandSplitParty", "party", "Party"},           {"commandEraseParty", "party", "Party"},
     {"commandMergeParties", "keep", "Party"},          {"commandMergeParties", "drop", "Party"},
-    {"commandEndMembership", "membership", "Membership"}, {"commandSetPrimary", "membership", "Membership"}};
+    {"commandEndMembership", "membership", "Membership"}, {"commandSetPrimary", "membership", "Membership"},
+    {"commandChangeAmount", "commercial", "Commercial"},  {"commandSetStatus", "commercial", "Commercial"},
+    {"commandAgree", "commitment", "Commitment"}};
 
 /* The row of write_records that names the Command tag, from at on;
    WRITE_RECORDS when no row names it. */
@@ -4516,23 +4521,61 @@ static int write_party_event(const Value *party, const char *type, const Attrs *
 }
 
 /* M7 part C (delta MC-2): 1 when the Command tag has its body made by
-   write_record_change: in part C1 commandEndMembership and
-   commandSetPrimary. */
+   write_record_change: commandEndMembership and commandSetPrimary (part
+   C1), commandChangeAmount, commandSetStatus and commandAgree (part C2). */
 static Nat write_record_command(Text tag) {
   return same_text(tag, text_of_cstring("commandEndMembership")) == 1 ||
-         same_text(tag, text_of_cstring("commandSetPrimary")) == 1;
+         same_text(tag, text_of_cstring("commandSetPrimary")) == 1 ||
+         same_text(tag, text_of_cstring("commandChangeAmount")) == 1 ||
+         same_text(tag, text_of_cstring("commandSetStatus")) == 1 ||
+         same_text(tag, text_of_cstring("commandAgree")) == 1;
+}
+
+/* Delta MC-2: the payload of a part C Command: none for
+   commandEndMembership, [before = the amountCents of the record current,
+   after = the amountCents of the Command] (null for none) for
+   commandChangeAmount, [status = the tag of the CommercialStatus as text]
+   for commandSetStatus, [status = "commitmentAgreed"] for commandAgree, and
+   [isPrimary = flagYes] for commandSetPrimary. */
+static const Attrs *write_record_payload(Text tag, const Value *command, const Value *current) {
+  Nat amount = same_text(tag, text_of_cstring("commandChangeAmount"));
+  Nat status = same_text(tag, text_of_cstring("commandSetStatus"));
+  const Value *yes = make_value((Value){.kind = VALUE_FLAG, .flag = FLAG_YES});
+  return same_text(tag, text_of_cstring("commandEndMembership")) == 1 ? NULL
+         : amount == 1
+             ? write_attr_item("before", commitment_field(current, "amountCents"),
+                               write_attr_item("after", write_field(text_of_cstring("amountCents"), command), NULL))
+         : status == 1
+             ? write_attr_item("status", text_value(commitment_tag(write_field(text_of_cstring("status"), command))),
+                               NULL)
+         : same_text(tag, text_of_cstring("commandAgree")) == 1
+             ? write_attr_item("status", text_value(text_of_cstring("commitmentAgreed")), NULL)
+             : write_attr_item("isPrimary", yes, NULL);
 }
 
 /* Deltas MC-2 and MC-7 (Q-C-1 (a)): the createsEvent Body of a part C
-   Command on subject (the Subject of its Ref) with the allowing policy (null
-   for none): commandEndMembership gives eventEnded with no payload, and
-   commandSetPrimary gives eventFieldsChanged [isPrimary = flagYes]. */
-static int write_record_change(Text tag, const Value *subject, const Value *policy, const Value **body,
-                               Failure *failure) {
-  Nat end = same_text(tag, text_of_cstring("commandEndMembership"));
-  const Value *yes = make_value((Value){.kind = VALUE_FLAG, .flag = FLAG_YES});
-  return write_record_event(end == 1 ? "eventEnded" : "eventFieldsChanged", subject,
-                            end == 1 ? NULL : write_attr_item("isPrimary", yes, NULL), policy, body, failure);
+   Command on subject (the Subject of its Ref) with the payload of
+   write_record_payload and the allowing policy (null for none):
+   commandEndMembership gives eventEnded, commandChangeAmount gives
+   eventAmountChanged, commandAgree gives eventCommitmentSet, and
+   commandSetPrimary and commandSetStatus give eventFieldsChanged. */
+static int write_record_change(Text tag, const Value *command, const Value *current, const Value *subject,
+                               const Value *policy, const Value **body, Failure *failure) {
+  const char *type = same_text(tag, text_of_cstring("commandEndMembership")) == 1  ? "eventEnded"
+                     : same_text(tag, text_of_cstring("commandChangeAmount")) == 1 ? "eventAmountChanged"
+                     : same_text(tag, text_of_cstring("commandAgree")) == 1        ? "eventCommitmentSet"
+                                                                                   : "eventFieldsChanged";
+  return write_record_event(type, subject, write_record_payload(tag, command, current), policy, body, failure);
+}
+
+/* Delta MC-3: the fields of the PolicyAsk of a part C Command: [amountCents]
+   for commandChangeAmount, [status] for commandSetStatus, and null (none)
+   for the others. */
+static const Value *write_record_fields(Text tag) {
+  Nat amount = same_text(tag, text_of_cstring("commandChangeAmount"));
+  return amount == 1 || same_text(tag, text_of_cstring("commandSetStatus")) == 1
+             ? items_value(values_item(text_value(text_of_cstring(amount == 1 ? "amountCents" : "status")), NULL))
+             : &null_value;
 }
 
 /* Delta MB-9: 1 when each Identifier of moved matches an Identifier of items. */
@@ -4659,16 +4702,17 @@ static int write_entries(Fuel hash_fuel, Nat ready, Nat position, const Value *p
    deny gives outcomeDenied (some p) nil. commandTransition then checks the
    guard (a Missing list gives outcomeDenied (some g) missing) and makes its
    Body with Event.policy the allowing policy (Q-M7-11 (a)), and so do
-   commandEndMembership and commandSetPrimary (delta MC-2, Q-C-1 (a)): they
-   skip the party change and the no-body denial. An expect on an empty log:
-   outcomeDenied none nil. An expect that is not the hash of the
-   last entry: outcomeConflict with that hash. Else the Entries of the
-   Command go at the end of the log (outcomeAppended with their hashes in
-   order and the allowing policy; M7 design item 8): 2 for
-   commandSplitParty, 1 for each other Command. Each Entry has prev the hash
-   of the entry before it, and each hash takes one more work step; a budget
-   short of them gives eBudget before any append (Q-M7-18 (a)). The hash of
-   the last entry takes no work step (delta B-5). */
+   commandEndMembership, commandSetPrimary, commandChangeAmount,
+   commandSetStatus and commandAgree (delta MC-2, Q-C-1 (a)): they skip the party change and
+   the no-body denial. An expect on an empty log: outcomeDenied none nil. An
+   expect that is not the hash of the last entry: outcomeConflict with that
+   hash. Else the Entries of the Command go at the end of the log
+   (outcomeAppended with their hashes in order and the allowing policy; M7
+   design item 8): 2 for commandSplitParty, 1 for each other Command. Each
+   Entry has prev the hash of the entry before it, and each hash takes one
+   more work step; a budget short of them gives eBudget before any append
+   (Q-M7-18 (a)). The hash of the last entry takes no work step (delta
+   B-5). */
 int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const Value *write, const Value **value,
                Nat *left, Failure *failure) {
   if (budget == 0) {
@@ -4713,7 +4757,7 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
                    text_of_cstring(at < WRITE_ASKS ? write_asks[at].action : "permissionWrite"), &null_value,
                    same_text(tag, text_of_cstring("commandEnrichParty")) == 1
                        ? items_value(write_attr_keys(enrich->kind == VALUE_ATTRS ? enrich->attrs : NULL))
-                       : &null_value};
+                       : write_record_fields(tag)};
   const Value *deny;
   const Value *allow;
   write_verdict(subjects, &ask, ordered, records, &deny, &allow);
@@ -4731,7 +4775,7 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
     if (wanted != NULL) return write_refused(log, guard != NULL ? policy_ref(guard) : &null_value, wanted, value, failure);
     if (!write_transition_body(subjects->head, current, stage, allow, &body, failure)) return 0;
   }
-  if (member == 1 && !write_record_change(tag, subjects->head, allow, &body, failure)) return 0;
+  if (member == 1 && !write_record_change(tag, command, current, subjects->head, allow, &body, failure)) return 0;
   if (last == NULL && expect->kind == VALUE_TEXT) return write_denied(log, value, failure);
   Text head = {NULL, 0};
   Nat unused;

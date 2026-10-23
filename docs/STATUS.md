@@ -252,7 +252,8 @@ M2 is the read path (parts A, B and C).
   merge key of `commandResolveParty` (M7 part B1: see `## M7`),
   `commandExtract` with more than one entry for each write, and the 21
   Commands with no body (after M7 part A, 20; after part B1, 15;
-  after part B2a, 13; after part B2b, 12; after part C1, 10).
+  after part B2a, 13; after part B2b, 12; after part C1, 10; after
+  part C, 7).
 
 ## M3
 
@@ -905,7 +906,62 @@ projection set the stage (`projection_rows` in compiler/program.c).
 - Tests of part C1: `test_m7_membership` in test/c-modules.c and 1 m7
   row in test/paths.test.mjs. The tests have the SetPrimary flip, the
   End and the second End, the missing ref, and the deny row.
-- Part C2 (Commercial) and part C3 (Commitment) are not done.
+- Part C2, the Commercial writes. `commandChangeAmount c n` and
+  `commandSetStatus c s` change the Commercial record `c`. If `c`
+  names no Commercial record, the write gives `outcomeDenied none
+  [missingField "commercial"]`. The write makes one ask of
+  `permissionWrite` on `subjectCommercial c`, with the field
+  `amountCents` for `commandChangeAmount` or `status` for
+  `commandSetStatus` (delta MC-3). Then it appends one entry, a
+  `createsEvent` of an Event on
+  `c` with the allowing policy (delta MC-2).
+  `commandChangeAmount` appends an `eventAmountChanged` Event with the
+  payload `before` (the old `amountCents`) and `after` (`n`). The
+  value of `none` is null. `commandSetStatus` appends an
+  `eventFieldsChanged` Event with the payload `status`, the tag of `s`
+  as text (for example "statusWon").
+- The projection of part C2 (delta MC-6). An `eventAmountChanged`
+  Event sets `amountCents` of the Commercial to its `after` value. A
+  null `after` sets `none`. An Event with no `after` key does not
+  change `amountCents` (ruling Q-C-2 (a)). An `eventFieldsChanged`
+  Event sets `status` of the Commercial only when its `status` value
+  is the text of a `CommercialStatus` tag (`statusOpen`, `statusWon`,
+  `statusLost` or `statusPaused`; ruling Q-C-s15-1 (b)). A different
+  text, for example "bogus", does not change the status.
+- Part C3, the Commitment write. `commandAgree k` changes the
+  Commitment record `k`. If `k` names no Commitment record, the write
+  gives `outcomeDenied none [missingField "commitment"]`. The write
+  makes one ask of `permissionWrite` with no fields on
+  `subjectCommitment k`. The entry is as in part C2. The write
+  appends an `eventCommitmentSet` Event with the payload `status`, the
+  text "commitmentAgreed".
+- The projection of part C3. An `eventCommitmentSet` Event sets
+  `status` of the Commitment to `commitmentAgreed` only when its
+  `status` value is the text "commitmentAgreed" (`agreedAfter`, ruling
+  Q-C-s17-1 (a)). A different text, for example "bogus", does not
+  change the status. `queryDryRun` sees the Agree: after the Agree,
+  the `missingCommitment` item of that Commitment is not in the
+  result.
+- The certificate of part C2 and part C3. `amountKey`, `statusKey`,
+  `commitmentKey`, `agreedText`, `statusText`, `natValue`,
+  `etAmount`, `statusOf`, `amountAfter`, `statusAfter`, `etAgreed`,
+  `agreedAfter`, `amountBody`, `statusBody`, `agreeBody`,
+  `writeAmount`, `writeStatus` and `writeAgree`; and the
+  `commandChangeAmount`, `commandSetStatus` and `commandAgree` arms of
+  `writeGo` (core/certificate.def). In compiler/certificate.c, the
+  Commercial arm of `ledgerLastEvent` sets `amountCents` by
+  `amountAfter` and `status` by `statusAfter`, and the Commitment arm
+  sets `status` by `agreedAfter`. CERT_PROGRAMS has three more
+  programs, with the kernel fc80b5d: test/certificate-write-m7c2.ledger
+  and test/certificate-write-m7c2b.ledger (the Commercial writes), and
+  test/certificate-write-m7c3.ledger (an Agree, then an Agree on a ref
+  that is not in the log).
+- Tests of part C2 and part C3: `test_m7_commercial` and
+  `test_m7_commitment` in test/c-modules.c, and 3 m7 rows in
+  test/paths.test.mjs. The tests have the amount change, the status
+  change, the Agree, the dry run before and after the Agree, a missing
+  ref, and a `commandRecord` with the status text "bogus" on a
+  Commercial and on a Commitment.
 
 ## Remaining M0 work
 

@@ -1,0 +1,13 @@
+-- M7 part C2b (Q-C-s15-2 (a)): the ChangeAmount none write. s1 changes the
+-- amount of the Commercial d1 to none: it appends one eventAmountChanged event
+-- (payload before 1000, after null). s2 names a Commercial that is not in the
+-- log: missingField "commercial". The block probe gives 12 hash blocks (cap
+-- 24). Its certificate checks in the kernel (make certificate-check).
+def p : Ref kindParty := refTo (hashOf "p")
+def d1 : Commercial := makeCommercial commercialDeal "D" p "q" (some 1000) "U" none statusOpen attrsEnd none
+def e1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1)
+def log1 : Log := cons e1 nil
+def r : Ref kindCommercial := refTo (hashOf "de2d7a24ea98d442661b40acc265b15fb56fba12fd2c9c6cafbeab1f5080cc89")
+def z : Ref kindCommercial := refTo (hashOf "z")
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandChangeAmount r none))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandChangeAmount z none))

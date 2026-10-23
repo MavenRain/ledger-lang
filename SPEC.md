@@ -319,8 +319,16 @@ Encoding rules:
   projection then sets `isPrimary` to no on the other current
   Memberships of the person) and to `commandEndMembership` (an
   `eventEnded` Event; the projection sets `endedBy` to the Event).
-  The certificate covers part A, part B1, part B2a, part B2b and part
-  C1 (docs/STATUS.md `## M7`).
+  Part C2 gives a Body to `commandChangeAmount` (an
+  `eventAmountChanged` Event with the amounts `before` and `after`;
+  the projection sets `amountCents` to `after`) and to
+  `commandSetStatus` (an `eventFieldsChanged` Event with the
+  `CommercialStatus` tag as text; the projection sets `status` only
+  from the text of a `CommercialStatus` tag). Part C3 gives a Body to
+  `commandAgree` (an `eventCommitmentSet` Event with the `status` text
+  "commitmentAgreed"; the projection sets `status` of the Commitment
+  to `commitmentAgreed`). The certificate covers part A, part B1, part
+  B2a, part B2b and part C (docs/STATUS.md `## M7`).
 
 ## 7. Milestones
 
