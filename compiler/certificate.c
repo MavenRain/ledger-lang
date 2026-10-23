@@ -783,14 +783,21 @@ static const char *const bodies[] = {"Party", "Membership", "Commercial", "Commi
    partyIdents, partyAttrs and partyDeleted, as program.c projection_party).
    M7 part B2b (MB-11): this setter changes the subject record only. The
    Merge repoint of the other records is recordsMerged (certificate.def),
-   which recordsAdd runs after this setter. */
+   which recordsAdd runs after this setter. M7 part C (deltas MC-4 and
+   MC-6): on a Membership, isPrimary and endedBy after e (primaryAfter and
+   endedAfter, as program.c projection_moved and projection_ended), and no
+   lastEvent. The MC-5 flip of the other Memberships is recordsPrimary
+   (certificate.def), which recordsAdd runs after this setter. */
 static const char last_event[] =
     "\ndef ledgerLastEvent : Text -> Body -> Body -> Body := fun (h : Text) (e : Body) (b : Body) => case b as s1 in Body return Body with"
     " | createsParty (m : Party) => createsParty (case m as s2 in Party return Party with | makeParty (x0 : KindParty)"
     " (x1 : Text) (x2 : Option Text) (x3 : List Identifier) (x4 : Attrs) (x5 : Option (Ref kindEvent))"
     " (x6 : Option (Ref kindEvent)) => makeParty x0 (partyName e x1) (partyLegal e x2) (partyIdents h e x3) (partyAttrs e x4)"
     " (some (refTo (hashOf h))) (partyDeleted h e x6))"
-    " | createsMembership (m : Membership) => createsMembership m"
+    " | createsMembership (m : Membership) => createsMembership (case m as s2 in Membership return Membership with"
+    " | makeMembership (x0 : Ref kindParty) (x1 : Ref kindParty) (x2 : Option Text) (x3 : Flag)"
+    " (x4 : Option (Ref kindEvent)) (x5 : Provenance) (x6 : Attrs)"
+    " => makeMembership x0 x1 x2 (primaryAfter e x3) (endedAfter h e x4) x5 x6)"
     " | createsCommercial (m : Commercial) => createsCommercial (case m as s2 in Commercial return Commercial with"
     " | makeCommercial (x0 : KindCommercial) (x1 : Text) (x2 : Ref kindParty) (x3 : Text) (x4 : Option Nat) (x5 : Text)"
     " (x6 : Option Text) (x7 : CommercialStatus) (x8 : Attrs) (x9 : Option (Ref kindEvent))"

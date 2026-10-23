@@ -1331,3 +1331,28 @@ test('m7 commandSplitParty writes the new Party, then splitTo on the party', () 
   assert.deepEqual(denied, { log: [pe], outcome: { tag: 'outcomeDenied', policy: null,
     missing: [{ tag: 'missingField', field: 'moved' }] } });
 });
+
+// M7 part C1: commandSetPrimary writes eventFieldsChanged with {"isPrimary": true} on the Membership, and the
+// projection sets isPrimary = false on each other current Membership of the same person (an ended one keeps
+// its flag). commandEndMembership writes eventEnded on the Membership and the projection sets its endedBy.
+test('m7 commandSetPrimary and commandEndMembership write their events and project the Membership', () => {
+  const { e1, e2, e3, e4 } = named(`${actors}${memberLog}`);
+  const book = '(cons e1 (cons e2 (cons e3 (cons e4 nil))))';
+  const ref = entry => `(refTo (hashOf "${sha256(entry)}"))`;
+  const membership = (records, entry) => records.find(item => item.ref === sha256(entry)).value;
+  const primary = projected(`${actors}${memberLog}` + m7Edit(book, `commandSetPrimary ${ref(e1)}`));
+  const pe = primary.s.log[4];
+  assert.deepEqual(primary.s, appended([e1, e2, e3, e4, pe], pe));
+  assert.deepEqual([pe.prev, pe.actor, pe.body.event.type, pe.body.event.subject, pe.body.event.payload,
+    pe.body.event.policy],
+    [sha256(e4), human, 'eventFieldsChanged', { tag: 'subjectMembership', membership: memberRef(e1) },
+      { isPrimary: true }, null]);
+  assert.deepEqual([e1, e2, e3, e4].map(entry => membership(primary.records, entry).isPrimary),
+    [true, false, false, false]);
+  const ended = projected(`${actors}${memberLog}` + m7Edit(book, `commandEndMembership ${ref(e2)}`));
+  const ee = ended.s.log[4];
+  assert.deepEqual(ended.s, appended([e1, e2, e3, e4, ee], ee));
+  assert.deepEqual([ee.prev, ee.actor, ee.body.event.type, ee.body.event.subject],
+    [sha256(e4), human, 'eventEnded', { tag: 'subjectMembership', membership: memberRef(e2) }]);
+  assert.deepEqual(membership(ended.records, e2).endedBy, { kind: 'kindEvent', hash: sha256(ee) });
+});

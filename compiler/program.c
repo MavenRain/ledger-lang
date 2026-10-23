@@ -1065,21 +1065,35 @@ static Text projection_tag(const Value *value) {
   return value->kind == VALUE_TEXT ? value->text : projection_field(kSchemaTag(), value)->text;
 }
 
-/* M7 design item 5: the projection table. An Event of the EventType (row
-   item 0) on a record of the family (item 1) sets the field (item 2) to the
-   payload value of the key (item 3). */
-static const char *const projection_rows[1][4] = {{"eventStageChanged", "Commercial", "stage", "after"}};
+/* M7 design item 5 (delta MC-6): the projection table. An Event of the
+   EventType (row item 0) on a record of the family (item 1) sets the field
+   (item 2) to the payload value of the key (item 3) when that value has the
+   kind of item 4 (text or flag). */
+enum { PROJECTION_ROWS = 2 };
+
+static const char *const projection_rows[PROJECTION_ROWS][5] = {
+    {"eventStageChanged", "Commercial", "stage", "after", "text"},
+    {"eventFieldsChanged", "Membership", "isPrimary", "isPrimary", "flag"}};
+
+/* Delta MC-6: 1 when value has the kind of a row: text is a VALUE_TEXT and
+   flag is a VALUE_FLAG. */
+static Nat projection_kind(const char *kind, const Value *value) {
+  return same_text(text_of_cstring(kind), text_of_cstring("text")) == 1 ? value->kind == VALUE_TEXT
+                                                                         : value->kind == VALUE_FLAG;
+}
 
 /* The state attrs after the Event event, by the rows of projection_rows
-   from at on. A missing or non-text stage payload gives no change. */
+   from at on. A missing payload value or a value of another kind gives no
+   change. */
 static const Attrs *projection_moved(Text family, const Value *event, const Attrs *attrs, Nat at) {
-  if (at >= 1) return attrs;
+  if (at >= PROJECTION_ROWS) return attrs;
   const Value *type = projection_field(text_of_cstring("type"), event);
   Text tag = projection_tag(type);
   const Value *moved = projection_field(text_of_cstring(projection_rows[at][3]),
                                         projection_field(text_of_cstring("payload"), event));
   Nat row = same_text(tag, text_of_cstring(projection_rows[at][0])) == 1 &&
-            same_text(family, text_of_cstring(projection_rows[at][1])) == 1 && moved->kind == VALUE_TEXT;
+            same_text(family, text_of_cstring(projection_rows[at][1])) == 1 &&
+            projection_kind(projection_rows[at][4], moved) == 1;
   return projection_moved(
       family, event, row == 1 ? projection_replace(text_of_cstring(projection_rows[at][2]), moved, attrs) : attrs,
       at + 1);
@@ -1249,20 +1263,34 @@ static const Attrs *projection_party(const Value *event, const Value *state, con
              : enriched;
 }
 
+/* M7 part C (delta MC-4, Q-M7-20 (a)): an eventEnded on a Membership sets
+   endedBy to the event (a later End sets the later event). */
+static const Attrs *projection_ended(const Value *event, const Value *state, const Attrs *attrs) {
+  return same_text(projection_tag(projection_field(text_of_cstring("type"), state)), text_of_cstring("eventEnded")) == 1
+             ? projection_replace(text_of_cstring("endedBy"), event, attrs)
+             : attrs;
+}
+
 /* Item 11: the Party or Commercial record with the identity subject gets
    lastEvent = some (refTo h). The value of some x is the value of x. M7
    design item 5: first the rows of projection_rows for the Event state;
-   then, for a Party, the arm projection_party (delta MB-6). */
+   then, for a Party, the arm projection_party (delta MB-6). M7 part C
+   (deltas MC-4 and MC-6): a Membership record gets the rows and the arm
+   projection_ended, and no lastEvent (a Membership has no lastEvent field). */
 static const Value *projection_updated(Text subject, const Value *event, const Value *state, const Value *record) {
   Text family = projection_field(kType, record)->text;
+  Nat membership = same_text(family, text_of_cstring("Membership"));
   if (same_text(projection_field(kRef, record)->text, subject) != 1) return record;
-  if (same_text(family, kParty) != 1 && same_text(family, kCommercial) != 1) return record;
+  if (same_text(family, kParty) != 1 && same_text(family, kCommercial) != 1 && membership != 1) return record;
   const Value *was = projection_field(kValue, record);
   const Attrs *moved = projection_moved(family, state, was->attrs, 0);
   return projection_record(
       subject, family,
-      projection_attrs(projection_replace(
-          kLastEvent, event, same_text(family, kParty) == 1 ? projection_party(event, state, moved) : moved)));
+      projection_attrs(membership == 1 ? projection_ended(event, state, moved)
+                                       : projection_replace(kLastEvent, event,
+                                                            same_text(family, kParty) == 1
+                                                                ? projection_party(event, state, moved)
+                                                                : moved)));
 }
 
 /* M5 items 2, 3 and 3b (delta A-7): -1, 0 or 1 when a is below, equal to or
@@ -1441,6 +1469,27 @@ static void projection_repoint_slots(Text drop, Text keep, ProjectionSlot *slots
   projection_repoint_slots(drop, keep, slots, at + 1, end);
 }
 
+/* M7 part C (delta MC-5): each current Membership record (endedBy none) of
+   slots from at to end with the person Ref person and a ref other than
+   primary gets isPrimary = flagNo. */
+static void projection_primary_slots(Text person, Text primary, ProjectionSlot *slots, Nat at, Nat end) {
+  if (at >= end) return;
+  const Value *record = slots[at].value;
+  const Value *was = record != NULL ? projection_field(kValue, record) : &projection_null;
+  Nat other = record != NULL && same_text(projection_field(kType, record)->text, text_of_cstring("Membership")) == 1 &&
+              same_text(projection_field(kRef, record)->text, primary) != 1 &&
+              same_text(projection_field(kHash, projection_field(text_of_cstring("person"), was))->text, person) == 1 &&
+              projection_field(text_of_cstring("endedBy"), was)->kind == VALUE_NULL;
+  if (other == 1) {
+    Value *no = arena_alloc(sizeof *no);
+    *no = (Value){.kind = VALUE_FLAG, .flag = FLAG_NO};
+    slots[at].value =
+        projection_record(projection_field(kRef, record)->text, text_of_cstring("Membership"),
+                          projection_attrs(projection_replace(text_of_cstring("isPrimary"), no, was->attrs)));
+  }
+  projection_primary_slots(person, primary, slots, at + 1, end);
+}
+
 /* Items 10, 11 and 13 (item 3b, pass 2): entry k of entries. An entry with
    a known hash (an incoming record, or the hash of an entry below k) changes
    nothing. Else a createsEvent entry first updates the record of its
@@ -1469,6 +1518,22 @@ static void projection_entry(Nat position, Text name, Nat k, const Keyed *entrie
                   text_of_cstring("subjectParty")) == 1 &&
         into->kind == VALUE_TEXT)
       projection_repoint_slots(subject, into->text, slots, 0, m + k);
+    /* Delta MC-5: an eventFieldsChanged with isPrimary yes on a Membership
+       sets isPrimary no on each other current Membership of its person. */
+    const Value *primary =
+        projection_field(text_of_cstring("isPrimary"), projection_field(text_of_cstring("payload"), state));
+    const Value *target =
+        slot < m + k && slots[slot].value != NULL ? slots[slot].value : &projection_null;
+    const Value *member = projection_field(kValue, target);
+    if (same_text(projection_tag(projection_field(text_of_cstring("type"), state)),
+                  text_of_cstring("eventFieldsChanged")) == 1 &&
+        same_text(projection_field(kSchemaTag(), projection_field(kSubject, state))->text,
+                  text_of_cstring("subjectMembership")) == 1 &&
+        primary->kind == VALUE_FLAG && primary->flag == FLAG_YES &&
+        same_text(projection_field(kType, target)->text, text_of_cstring("Membership")) == 1 &&
+        member->kind == VALUE_ATTRS)
+      projection_primary_slots(projection_field(kHash, projection_field(text_of_cstring("person"), member))->text,
+                               subject, slots, 0, m + k);
   }
   slots[m + k] = (ProjectionSlot){position, name, projection_record(hash, text_drop(tag, 7), state)};
 }

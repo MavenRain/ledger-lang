@@ -7199,12 +7199,12 @@ static void test_m7_merge(void) {
   Value zz = account_text("zz");
   Value cy_name = account_text("cy");
   Value no_items = {.kind = VALUE_ITEMS, .items = NULL};
-  Value d_ref, zz_ref, subjects, hash_values[7];
+  Value d_ref, zz_ref, subjects, hash_values[8];
   Attrs d_fields[2], zz_fields[2];
   Tagged accounts[2], actors[2];
-  AccountEntry entries[5];
-  Values subject_cells[1], cells[7];
-  Text hashes[7];
+  AccountEntry entries[6];
+  Values subject_cells[1], cells[8];
+  Text hashes[8];
   QueryTwo merges[4];
   WriteTwo writes[4];
   const Value *n = &storage.none;
@@ -7217,7 +7217,7 @@ static void test_m7_merge(void) {
   assign_ref(zz_fields, &zz_ref, &storage.kind_party, &zz);
   subject_cells[0] = (Values){tagged(&accounts[1], "accountParty", "party", &d_ref), NULL};
   subjects = (Value){.kind = VALUE_ITEMS, .items = &subject_cells[0]};
-  const Value *log_entries[7] = {
+  const Value *log_entries[8] = {
       &storage.party_entry, &storage.policy.entry,
       account_entry(&entries[0], "createsParty", "party", 5, party_names,
                     (const Value *const[]){&storage.org, &d_name, &no_items, n, n}),
@@ -7227,12 +7227,14 @@ static void test_m7_merge(void) {
                     (const Value *const[]){&d_ref, n}),
       account_entry(&entries[3], "createsAssignment", "assignment", 3, assign_names,
                     (const Value *const[]){tagged(&accounts[0], "accountParty", "party", &d_ref), &d_ref, n}),
-      account_entry(&entries[4], "createsArtifact", "artifact", 1, artifact_names, (const Value *const[]){&subjects})};
+      account_entry(&entries[4], "createsArtifact", "artifact", 1, artifact_names, (const Value *const[]){&subjects}),
+      account_entry(&entries[5], "createsMembership", "membership", 3, member_names,
+                    (const Value *const[]){&storage.ref, &d_ref, n})};
   left = 100;
-  for (Nat at = 0; at < 7; at++) {
+  for (Nat at = 0; at < 8; at++) {
     assert(entry_hash(1000, 1, 0, log_entries[at], &hashes[at], &left, &failure));
     hash_values[at] = (Value){.kind = VALUE_TEXT, .text = hashes[at]};
-    cells[at] = (Values){log_entries[at], at + 1 < 7 ? &cells[at + 1] : NULL};
+    cells[at] = (Values){log_entries[at], at + 1 < 8 ? &cells[at + 1] : NULL};
   }
   Value log = {.kind = VALUE_ITEMS, .items = &cells[0]};
   const Value *an = tagged(&actors[0], "actorAgent", "name", &storage.an);
@@ -7261,7 +7263,7 @@ static void test_m7_merge(void) {
                     &step, &left, &failure));
   outcome = pipeline_field(step, "outcome");
   assert(left == 4 && verdict_is(outcome, "outcomeDenied", &hashes[1]) == 1);
-  assert(pipeline_field(outcome, "missing")->items == NULL && read_count(pipeline_field(step, "log")->items) == 7);
+  assert(pipeline_field(outcome, "missing")->items == NULL && read_count(pipeline_field(step, "log")->items) == 8);
   /* The Merge by an. */
   assert(write_step(1000, 5, 3, &log,
                     write_of(&writes[3], an,
@@ -7269,8 +7271,8 @@ static void test_m7_merge(void) {
                     &step, &left, &failure));
   outcome = pipeline_field(step, "outcome");
   const Value *logged = pipeline_field(step, "log");
-  const Value *event = pipeline_field(pipeline_field(pipeline_at(logged, 7), "body"), "event");
-  assert(left == 3 && verdict_is(outcome, "outcomeAppended", &hashes[1]) == 1 && read_count(logged->items) == 8);
+  const Value *event = pipeline_field(pipeline_field(pipeline_at(logged, 8), "body"), "event");
+  assert(left == 3 && verdict_is(outcome, "outcomeAppended", &hashes[1]) == 1 && read_count(logged->items) == 9);
   assert(same_text(pipeline_field(pipeline_field(event, "payload"), "mergedInto")->text, acme) == 1);
   assert(same_text(pipeline_field(pipeline_field(party_state(step, hashes[2]), "deletedBy"), "hash")->text,
                    appended_hash(step)) == 1);
@@ -7279,6 +7281,8 @@ static void test_m7_merge(void) {
   const Value *artifact = party_state(step, hashes[6]);
   assert(account_ref_is(pipeline_field(member, "person"), "kindParty", acme) == 1);
   assert(account_ref_is(pipeline_field(member, "org"), "kindParty", acme) == 1);
+  /* A Membership with org = the dropped Party gets org = keep (B2b item 3). */
+  assert(account_ref_is(pipeline_field(party_state(step, hashes[7]), "org"), "kindParty", acme) == 1);
   assert(account_ref_is(pipeline_field(party_state(step, hashes[4]), "party"), "kindParty", acme) == 1);
   assert(account_ref_is(pipeline_field(assignment, "assignee"), "kindParty", acme) == 1);
   assert(account_ref_is(pipeline_field(pipeline_field(assignment, "subject"), "party"), "kindParty", acme) == 1);
@@ -7286,6 +7290,174 @@ static void test_m7_merge(void) {
          1);
   assert(account_ref_is(pipeline_field(pipeline_field(party_state(step, appended_hash(step)), "subject"), "party"),
                         "kindParty", hashes[2]) == 1);
+}
+
+/* A primary event must resolve to a Membership before it changes its peers. */
+static void test_m7_primary_wrong_family(void) {
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  Value nothing = {.kind = VALUE_NULL};
+  Value yes = {.kind = VALUE_FLAG, .flag = FLAG_YES};
+  Value kind_party = account_text("kindParty");
+  Value kind_member = account_text("kindMembership");
+  Value empty = account_text("");
+  Value name = account_text("Org");
+  Value person, target_ref, target_hash;
+  Attrs person_fields[2], target_fields[2];
+  assign_ref(person_fields, &person, &kind_party, &empty);
+  AccountEntry entries[3];
+  const char *const member_names[] = {"person", "org", "role", "isPrimary", "endedBy"};
+  const char *const party_names[] = {"displayName"};
+  const Value *member =
+      account_entry(&entries[0], "createsMembership", "membership", 5, member_names,
+                    (const Value *const[]){&person, &person, &nothing, &yes, &nothing});
+  const Value *party =
+      account_entry(&entries[1], "createsParty", "party", 1, party_names, (const Value *const[]){&name});
+  Nat budget = 10;
+  Text member_hash, party_hash;
+  assert(entry_hash(1000, 1, 0, member, &member_hash, &budget, &failure));
+  assert(entry_hash(1000, 1, 0, party, &party_hash, &budget, &failure));
+  target_hash = (Value){.kind = VALUE_TEXT, .text = party_hash};
+  assign_ref(target_fields, &target_ref, &kind_member, &target_hash);
+  Tagged subject;
+  Value event_type = account_text("eventFieldsChanged");
+  Attrs payload_field = {text("isPrimary"), &yes, NULL};
+  Value payload = {.kind = VALUE_ATTRS, .attrs = &payload_field};
+  const char *const event_names[] = {"type", "subject", "payload"};
+  const Value *event = account_entry(
+      &entries[2], "createsEvent", "event", 3, event_names,
+      (const Value *const[]){&event_type, tagged(&subject, "subjectMembership", "membership", &target_ref), &payload});
+  Values tail = {event, NULL};
+  Values middle = {party, &tail};
+  Values head = {member, &middle};
+  const Located *records = NULL;
+  Nat found = 0;
+  budget = 3;
+  assert(project_entries(1000, 7, text("log"), &head, text(""), &records, &found, &budget, &failure));
+  const Value *record = project_find(member_hash, records);
+  assert(record != NULL);
+  const Value *primary = pipeline_field(pipeline_field(record, "value"), "isPrimary");
+  /* A Membership ref to a Party cannot clear a Membership of the empty person ref. */
+  assert(primary->kind == VALUE_FLAG && primary->flag == FLAG_YES);
+}
+
+/* M7 part C1 (deltas MC-2, MC-4 and MC-5, Q-C-1 (a)): commandSetPrimary and
+   commandEndMembership on the PartyLog and four Memberships: m1 (p at o1,
+   primary), m2 (p at o2), m3 (q at o1, primary) and m4 (p at o3, primary,
+   ended). SetPrimary m2 by an appends one eventFieldsChanged [isPrimary =
+   flagYes] entry whose Event.policy is the allowing policy. m2 gets
+   isPrimary yes and m1 no; m3 (another person) and m4 (ended) keep the flag,
+   and queryEmployer p gives o2 (mutant C-M1 kills this row). End sets
+   endedBy to the eventEnded Event; a second End moves endedBy to the later
+   Event. A ref not in the log gives missingField "membership"; cy (no rule)
+   gives outcomeDenied with the policy. */
+static void test_m7_membership(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  PartyLog storage;
+  party_test_log(&storage, &left, &failure);
+  Value kind_member = account_text("kindMembership");
+  Value kind_event = account_text("kindEvent");
+  Value party_hashes[5] = {account_text("party-p"), account_text("party-q"), account_text("party-o1"),
+                           account_text("party-o2"), account_text("party-o3")};
+  Value event_hash = account_text("event-x");
+  Value zz = account_text("zz");
+  Value cy_name = account_text("cy");
+  Value no = {.kind = VALUE_FLAG, .flag = FLAG_NO};
+  Value parties[5], ended, zz_ref, hash_values[6], member_refs[4];
+  Attrs party_fields[5][2], ended_fields[2], zz_fields[2], member_fields[4][2];
+  for (Nat at = 0; at < 5; at++) assign_ref(party_fields[at], &parties[at], &storage.kind_party, &party_hashes[at]);
+  assign_ref(ended_fields, &ended, &kind_event, &event_hash);
+  assign_ref(zz_fields, &zz_ref, &kind_member, &zz);
+  AccountEntry entries[4];
+  Values cells[6];
+  Text hashes[6];
+  const Value *n = &storage.none;
+  const Value *yes = &storage.flag_yes;
+  const char *const member_names[5] = {"person", "org", "role", "isPrimary", "endedBy"};
+  const Value *log_entries[6] = {
+      &storage.party_entry, &storage.policy.entry,
+      account_entry(&entries[0], "createsMembership", "membership", 5, member_names,
+                    (const Value *const[]){&parties[0], &parties[2], n, yes, n}),
+      account_entry(&entries[1], "createsMembership", "membership", 5, member_names,
+                    (const Value *const[]){&parties[0], &parties[3], n, &no, n}),
+      account_entry(&entries[2], "createsMembership", "membership", 5, member_names,
+                    (const Value *const[]){&parties[1], &parties[2], n, yes, n}),
+      account_entry(&entries[3], "createsMembership", "membership", 5, member_names,
+                    (const Value *const[]){&parties[0], &parties[4], n, yes, &ended})};
+  left = 100;
+  for (Nat at = 0; at < 6; at++) {
+    assert(entry_hash(1000, 1, 0, log_entries[at], &hashes[at], &left, &failure));
+    hash_values[at] = (Value){.kind = VALUE_TEXT, .text = hashes[at]};
+    cells[at] = (Values){log_entries[at], at + 1 < 6 ? &cells[at + 1] : NULL};
+  }
+  for (Nat at = 0; at < 4; at++) assign_ref(member_fields[at], &member_refs[at], &kind_member, &hash_values[at + 2]);
+  Value log = {.kind = VALUE_ITEMS, .items = &cells[0]};
+  Tagged actors[2], commands[5], now_storage;
+  WriteTwo writes[5];
+  Paired employer_storage;
+  const Value *an = tagged(&actors[0], "actorAgent", "name", &storage.an);
+  const Value *cy = tagged(&actors[1], "actorAgent", "name", &cy_name);
+  const Value *step = NULL;
+  /* SetPrimary m2 by an. */
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[0], an, tagged(&commands[0], "commandSetPrimary", "membership", &member_refs[1])),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Value *logged = pipeline_field(step, "log");
+  assert(left == 3 && verdict_is(outcome, "outcomeAppended", &hashes[1]) == 1 && read_count(logged->items) == 7);
+  const Value *event = pipeline_field(pipeline_field(pipeline_at(logged, 6), "body"), "event");
+  const Value *type = pipeline_field(event, "type");
+  const Value *flag = pipeline_field(pipeline_field(event, "payload"), "isPrimary");
+  assert(type->kind == VALUE_TEXT && same_text(type->text, text("eventFieldsChanged")) == 1);
+  assert(flag->kind == VALUE_FLAG && flag->flag == FLAG_YES);
+  assert(account_ref_is(pipeline_field(pipeline_field(event, "subject"), "membership"), "kindMembership", hashes[3]) ==
+         1);
+  assert(account_ref_is(pipeline_field(event, "policy"), "kindPolicy", hashes[1]) == 1);
+  const Nat want_yes[4] = {0, 1, 1, 1};
+  for (Nat at = 0; at < 4; at++) {
+    const Value *primary = pipeline_field(party_state(step, hashes[at + 2]), "isPrimary");
+    assert(primary->kind == VALUE_FLAG && (primary->flag == FLAG_YES) == want_yes[at]);
+  }
+  const LType *answer = arrow_result(read_path_type());
+  const Value *now = tagged(&now_storage, "momentNow", NULL, NULL);
+  const Value *employer = NULL;
+  assert(read_step(1000, 9, 7, answer, logged,
+                   paired(&employer_storage, "queryEmployer", "person", &parties[0], "moment", now), &employer, &left,
+                   &failure));
+  assert(account_ref_is(employer, "kindParty", party_hashes[3].text) == 1);
+  /* End m1, then End m1 again: endedBy moves to the later Event. */
+  const Value *first_end = NULL;
+  const Value *second_end = NULL;
+  assert(write_step(1000, 5, 3, logged,
+                    write_of(&writes[1], an, tagged(&commands[1], "commandEndMembership", "membership", &member_refs[0])),
+                    &first_end, &left, &failure));
+  assert(left == 3 && verdict_is(pipeline_field(first_end, "outcome"), "outcomeAppended", &hashes[1]) == 1);
+  event = pipeline_field(pipeline_field(pipeline_at(pipeline_field(first_end, "log"), 7), "body"), "event");
+  assert(same_text(pipeline_field(event, "type")->text, text("eventEnded")) == 1);
+  assert(account_ref_is(pipeline_field(party_state(first_end, hashes[2]), "endedBy"), "kindEvent",
+                        appended_hash(first_end)) == 1);
+  assert(write_step(1000, 5, 3, pipeline_field(first_end, "log"),
+                    write_of(&writes[2], an, tagged(&commands[2], "commandEndMembership", "membership", &member_refs[0])),
+                    &second_end, &left, &failure));
+  assert(left == 3 && read_count(pipeline_field(second_end, "log")->items) == 9);
+  assert(same_text(appended_hash(first_end), appended_hash(second_end)) == 0);
+  assert(account_ref_is(pipeline_field(party_state(second_end, hashes[2]), "endedBy"), "kindEvent",
+                        appended_hash(second_end)) == 1);
+  /* A ref not in the log. */
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[3], an, tagged(&commands[3], "commandSetPrimary", "membership", &zz_ref)), &step,
+                    &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  const Values *missing = pipeline_field(outcome, "missing")->items;
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1);
+  assert(missing_is(missing->head, "missingField", "field", "membership") == 1);
+  /* cy has no rule: the deny gives the policy. */
+  assert(write_step(1000, 5, 3, &log,
+                    write_of(&writes[4], cy, tagged(&commands[4], "commandSetPrimary", "membership", &member_refs[1])),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  assert(left == 4 && verdict_is(outcome, "outcomeDenied", &hashes[1]) == 1);
+  assert(pipeline_field(outcome, "missing")->items == NULL && read_count(pipeline_field(step, "log")->items) == 6);
 }
 
 /* M7 part B2a (design item 8, delta MB-9, ruling Q-M7-18 (a)):
@@ -7663,6 +7835,8 @@ int main(void) {
   test_m7_many();
   test_m7_split_add();
   test_m7_identifier_payload();
+  test_m7_membership();
+  test_m7_primary_wrong_family();
   puts("C module tests passed");
   return 0;
 }

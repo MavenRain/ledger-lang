@@ -314,8 +314,13 @@ Encoding rules:
   text). Part B2b gives a Body to `commandMergeParties` (an
   `eventDeleted` Event on `drop` with the payload `mergedInto`; the
   projection then moves the Party references of the other records
-  from `drop` to `keep`). The certificate covers part A, part B1,
-  part B2a and part B2b (docs/STATUS.md `## M7`).
+  from `drop` to `keep`). Part C1 gives a Body to `commandSetPrimary`
+  (an `eventFieldsChanged` Event with `isPrimary = flagYes`; the
+  projection then sets `isPrimary` to no on the other current
+  Memberships of the person) and to `commandEndMembership` (an
+  `eventEnded` Event; the projection sets `endedBy` to the Event).
+  The certificate covers part A, part B1, part B2a, part B2b and part
+  C1 (docs/STATUS.md `## M7`).
 
 ## 7. Milestones
 

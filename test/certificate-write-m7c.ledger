@@ -1,0 +1,24 @@
+-- M7 part C1: the Membership writes. s1 sets the Membership of p at o2 as
+-- primary: it appends one eventFieldsChanged event (isPrimary = flagYes), and
+-- the projection sets isPrimary no on the other current Membership of p. pe is
+-- the entry that s1 writes, thus queryEmployer of p gives o2. s2 ends the
+-- Membership of p at o1 (one eventEnded event). s3 names a Membership that is
+-- not in the log: missingField "membership". Its certificate checks in the
+-- kernel (make certificate-check).
+def p : Ref kindParty := refTo (hashOf "p")
+def o1 : Ref kindParty := refTo (hashOf "o1")
+def o2 : Ref kindParty := refTo (hashOf "o2")
+def j1 : Membership := makeMembership p o1 none flagYes none (makeProvenance none none none) attrsEnd
+def j2 : Membership := makeMembership p o2 none flagNo none (makeProvenance none none none) attrsEnd
+def e1 : Entry := makeEntry none (actorAgent "a") (createsMembership j1)
+def e2 : Entry := makeEntry none (actorAgent "a") (createsMembership j2)
+def log1 : Log := cons e1 (cons e2 nil)
+def r1 : Ref kindMembership := refTo (hashOf "b3a65c7da1c374ad30f471d61f84fe994c7d3b3e6a769192cb35fd85cc343ed9")
+def r2 : Ref kindMembership := refTo (hashOf "b973b52ca1d7365895f234241f24f8833e064d55f5526c0cb4138700fed54cc2")
+def z : Ref kindMembership := refTo (hashOf "z")
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandSetPrimary r2))
+def pe : Entry := makeEntry (some (hashOf "b973b52ca1d7365895f234241f24f8833e064d55f5526c0cb4138700fed54cc2")) (actorAgent "a") (createsEvent (makeEvent eventFieldsChanged (subjectMembership r2) none none (attrsField "isPrimary" (valueFlag flagYes) attrsEnd) none))
+def log2 : Log := cons e1 (cons e2 (cons pe nil))
+def employer : Option (Ref kindParty) := read (Option (Ref kindParty)) log2 (queryEmployer p momentNow)
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandEndMembership r1))
+def s3 : Step := write log1 (makeWrite (actorAgent "a") none (commandEndMembership z))

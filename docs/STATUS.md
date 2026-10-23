@@ -252,7 +252,7 @@ M2 is the read path (parts A, B and C).
   merge key of `commandResolveParty` (M7 part B1: see `## M7`),
   `commandExtract` with more than one entry for each write, and the 21
   Commands with no body (after M7 part A, 20; after part B1, 15;
-  after part B2a, 13; after part B2b, 12).
+  after part B2a, 13; after part B2b, 12; after part C1, 10).
 
 ## M3
 
@@ -857,6 +857,55 @@ projection set the stage (`projection_rows` in compiler/program.c).
   missing `keep` and missing `drop` rows, the deny row, and the merge,
   with one moved record for each of Membership, Commercial,
   Assignment and Artifact.
+
+### Part C
+
+- Part C1, the Membership writes. `commandSetPrimary m` and
+  `commandEndMembership m` change the Membership record `m`. If `m`
+  names no Membership record, the write gives `outcomeDenied none
+  [missingField "membership"]`. The write makes one ask of
+  `permissionWrite` with no fields on `subjectMembership m` (delta
+  MC-3). Then it appends one entry, a `createsEvent` of an Event on
+  `m` with the allowing policy (delta MC-2, ruling Q-C-1 (a)).
+  `commandSetPrimary` appends an `eventFieldsChanged` Event with the
+  payload `isPrimary = flagYes`. `commandEndMembership` appends an
+  `eventEnded` Event with no payload.
+- The projection of part C1 (deltas MC-4 to MC-6). An
+  `eventFieldsChanged` Event with a flag value for `isPrimary` sets
+  `isPrimary` of the Membership to that flag (a new row of the
+  projection table). When the flag is yes, each other Membership of
+  the same person with no `endedBy` gets `isPrimary = flagNo` (MC-5).
+  An `eventEnded` Event sets `endedBy` of the Membership to the Event.
+  A second End sets `endedBy` to the later Event. A Membership has no
+  `lastEvent` field, so the projection does not set one. The reads of
+  the current Membership (for example `queryEmployer`) use the
+  projected `isPrimary` and `endedBy`.
+- The certificate of part C1. `membershipKey`, `primaryKey`,
+  `flagAnd`, `flagOr`, `flagNot`, `etPrimary`, `membershipUnprimary`,
+  `bodyUnprimary`, `recordsPrimaryFor` and `recordsPrimary`;
+  `recordsAdd`, which runs `recordsPrimary` after the subject update;
+  `recMembership`, `primaryAfter`, `endedAfter`, `writeAllowBy`,
+  `endedBody`, `primaryBody` and `writeMembership`; and the
+  `commandEndMembership` and `commandSetPrimary` arms of `writeGo`
+  (core/certificate.def). In compiler/certificate.c, the Membership
+  arm of `ledgerLastEvent` sets `isPrimary` by `primaryAfter` and
+  `endedBy` by `endedAfter`. CERT_PROGRAMS has one more program,
+  test/certificate-write-m7c.ledger (SetPrimary, then `queryEmployer`
+  gives the org of the new primary Membership; an End; a ref that is
+  not in the log; max RSS 2083782656 B, footprint 3420048600 B), with
+  the kernel fc80b5d.
+- The d3 cases of part C1. The oracle cases 117-membership-primary
+  and 118-membership-primary-end are in the certificate list of the
+  gate also. Ruling Q-C-s9-1 (a) split one case into these two cases
+  at the def `s2`: 117 has the lines up to `s2`, and 118 has the later
+  defs (`pe`, `ee`, `log3`, `employer3` and `s3`) and the defs that
+  they use. In the gate of record, 117 has max RSS 1955037184 B and
+  footprint 2226080288 B, and 118 has max RSS 1744109568 B and
+  footprint 866485376 B.
+- Tests of part C1: `test_m7_membership` in test/c-modules.c and 1 m7
+  row in test/paths.test.mjs. The tests have the SetPrimary flip, the
+  End and the second End, the missing ref, and the deny row.
+- Part C2 (Commercial) and part C3 (Commitment) are not done.
 
 ## Remaining M0 work
 
