@@ -101,6 +101,29 @@ int main(int argc, char **argv) {
     check_module(argv[1], module, row, 0);
   }
 
+  /* Reassign and BulkReassign put complete Party Refs in their payloads.
+     Check the shared model directly without an expensive log hash proof. */
+  {
+    Text source = text(
+        "def body : Body := createsEvent (makeEvent eventAssignmentChanged "
+        "(subjectAssignment (refTo (hashOf \"\"))) none none "
+        "(attrsField \"before\" (valueAttrs (attrsField \"kind\" (valueText \"kindParty\") "
+        "(attrsField \"hash\" (valueText \"\") attrsEnd))) "
+        "(attrsField \"after\" (valueAttrs (attrsField \"kind\" (valueText \"kindParty\") "
+        "(attrsField \"hash\" (valueText \"\") attrsEnd))) attrsEnd)) none)\n");
+    Text output, module, refusal;
+    Failure failure;
+    assert(compile_program(source, &output, &failure));
+    assert(certificate_module(source, output, NULL, &module, &refusal));
+    TextBuilder checked = builder_new();
+    builder_append(&checked, module);
+    builder_append(&checked, text(
+        "\ndef ledgerReassignPayload : MechEq Body "
+        "(reassignBody (refTo (hashOf textEnd)) (refTo (hashOf textEnd)) (refTo (hashOf textEnd)) none) "
+        "ledgerUser_body := mechRefl Body ledgerUser_body\n"));
+    check_module(argv[1], builder_text(&checked), count++, 0);
+  }
+
   /* A non-text stage payload leaves the projected Commercial stage intact
      in both the evaluator and the certificate. */
   {

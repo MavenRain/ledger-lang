@@ -1,0 +1,17 @@
+-- M7 part D1 (D81): the Route and End writes. s1 routes the Account of p to
+-- "west": it appends one eventAssignmentChanged event (territory). s2 routes an
+-- Account with no Assignment: appended, no entries. s3 ends g1: it appends one
+-- eventEnded event. s4 names an Assignment that is not in the log: missingField
+-- "assignment". The block probe gives 20 hash blocks (cap 24). Its certificate
+-- checks in the kernel (make certificate-check).
+def p : Ref kindParty := refTo (hashOf "p")
+def o : Ref kindParty := refTo (hashOf "o")
+def g1 : Assignment := makeAssignment (accountParty p) p roleOwner none none (makeProvenance none none none)
+def g1e : Entry := makeEntry none (actorAgent "a") (createsAssignment g1)
+def r : Ref kindAssignment := refTo (hashOf "eb5f9f22a4f768db87f4944e163de399e50d9378c44b5282d91fd184983230cd")
+def z : Ref kindAssignment := refTo (hashOf "z")
+def log1 : Log := (cons g1e nil)
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandRouteTerritory (accountParty p) "west"))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandRouteTerritory (accountParty o) "west"))
+def s3 : Step := write log1 (makeWrite (actorAgent "a") none (commandEndAssignment r))
+def s4 : Step := write log1 (makeWrite (actorAgent "a") none (commandEndAssignment z))

@@ -1068,15 +1068,19 @@ static Text projection_tag(const Value *value) {
 /* M7 design item 5 (delta MC-6): the projection table. An Event of the
    EventType (row item 0) on a record of the family (item 1) sets the field
    (item 2) to the payload value of the key (item 3) when that value has the
-   kind of item 4 (text, status, agreed, flag or nat-or-null). */
-enum { PROJECTION_ROWS = 5 };
+   kind of item 4 (text, status, agreed, flag, nat-or-null, ref or some-text).
+   Delta MD-6: two eventAssignmentChanged rows on an Assignment; the held key
+   tells commandReassign (after) from commandRouteTerritory (territory). */
+enum { PROJECTION_ROWS = 7 };
 
 static const char *const projection_rows[PROJECTION_ROWS][5] = {
     {"eventStageChanged", "Commercial", "stage", "after", "text"},
     {"eventAmountChanged", "Commercial", "amountCents", "after", "nat-or-null"},
     {"eventFieldsChanged", "Commercial", "status", "status", "status"},
     {"eventFieldsChanged", "Membership", "isPrimary", "isPrimary", "flag"},
-    {"eventCommitmentSet", "Commitment", "status", "status", "agreed"}};
+    {"eventCommitmentSet", "Commitment", "status", "status", "agreed"},
+    {"eventAssignmentChanged", "Assignment", "assignee", "after", "ref"},
+    {"eventAssignmentChanged", "Assignment", "territory", "territory", "some-text"}};
 
 /* Q-C-2 (a): 1 when attrs hold the field key. */
 static Nat projection_held(Text key, const Attrs *attrs) {
@@ -1099,7 +1103,9 @@ static Nat projection_status(Text text, Nat at) {
    is a VALUE_TEXT with a CommercialStatus tag text (Q-C-s15-1 (b)), agreed is
    the VALUE_TEXT "commitmentAgreed" (agreedAfter, Q-C-s17-1 (a)), flag is a
    VALUE_FLAG, and nat-or-null is a VALUE_NAT, or a VALUE_NULL when the
-   payload holds the key (held = 1, Q-C-2 (a)). */
+   payload holds the key (held = 1, Q-C-2 (a)). Delta MD-6: ref is a
+   VALUE_ATTRS with a hash text (a Ref), and some-text is a VALUE_TEXT (the
+   value of some x is the value of x). */
 static Nat projection_kind(const char *kind, const Value *value, Nat held) {
   Text name = text_of_cstring(kind);
   return same_text(name, text_of_cstring("text")) == 1 ? value->kind == VALUE_TEXT
@@ -1109,6 +1115,10 @@ static Nat projection_kind(const char *kind, const Value *value, Nat held) {
              ? value->kind == VALUE_TEXT && same_text(value->text, text_of_cstring("commitmentAgreed")) == 1
          : same_text(name, text_of_cstring("flag")) == 1
              ? value->kind == VALUE_FLAG
+         : same_text(name, text_of_cstring("ref")) == 1
+             ? value->kind == VALUE_ATTRS && projection_field(kRefHash(), value)->kind == VALUE_TEXT
+         : same_text(name, text_of_cstring("some-text")) == 1
+             ? value->kind == VALUE_TEXT
              : value->kind == VALUE_NAT || (value->kind == VALUE_NULL && held == 1);
 }
 
@@ -1126,6 +1136,9 @@ static const Attrs *projection_moved(Text family, const Value *event, const Attr
   Nat row = same_text(tag, text_of_cstring(projection_rows[at][0])) == 1 &&
             same_text(family, text_of_cstring(projection_rows[at][1])) == 1 &&
             projection_kind(projection_rows[at][4], moved, held) == 1;
+  /* assigneeAfter reconstructs a Party Ref from the free payload hash. */
+  if (row == 1 && same_text(text_of_cstring(projection_rows[at][4]), text_of_cstring("ref")) == 1)
+    moved = object_two(kKind, text_value(text_of_cstring("kindParty")), kHash, projection_field(kRefHash(), moved));
   return projection_moved(
       family, event, row == 1 ? projection_replace(text_of_cstring(projection_rows[at][2]), moved, attrs) : attrs,
       at + 1);
@@ -1295,8 +1308,9 @@ static const Attrs *projection_party(const Value *event, const Value *state, con
              : enriched;
 }
 
-/* M7 part C (delta MC-4, Q-M7-20 (a)): an eventEnded on a Membership sets
-   endedBy to the event (a later End sets the later event). */
+/* M7 part C (delta MC-4, Q-M7-20 (a)): an eventEnded on a Membership (or an
+   Assignment, delta MD-7) sets endedBy to the event (a later End sets the
+   later event). */
 static const Attrs *projection_ended(const Value *event, const Value *state, const Attrs *attrs) {
   return same_text(projection_tag(projection_field(text_of_cstring("type"), state)), text_of_cstring("eventEnded")) == 1
              ? projection_replace(text_of_cstring("endedBy"), event, attrs)
@@ -1309,20 +1323,23 @@ static const Attrs *projection_ended(const Value *event, const Value *state, con
    then, for a Party, the arm projection_party (delta MB-6). M7 part C
    (deltas MC-4 and MC-6): a Membership record gets the rows and the arm
    projection_ended, and no lastEvent (a Membership has no lastEvent field). A
-   Commitment record gets the rows only (item 9, Agree). */
+   Commitment record gets the rows only (item 9, Agree). Delta MD-7: an
+   Assignment record gets the rows and projection_ended, and no lastEvent. */
 static const Value *projection_updated(Text subject, const Value *event, const Value *state, const Value *record) {
   Text family = projection_field(kType, record)->text;
   Nat membership = same_text(family, text_of_cstring("Membership"));
   Nat commitment = same_text(family, text_of_cstring("Commitment"));
+  Nat assignment = same_text(family, text_of_cstring("Assignment"));
   if (same_text(projection_field(kRef, record)->text, subject) != 1) return record;
-  if (same_text(family, kParty) != 1 && same_text(family, kCommercial) != 1 && membership != 1 && commitment != 1)
+  if (same_text(family, kParty) != 1 && same_text(family, kCommercial) != 1 && membership != 1 && commitment != 1 &&
+      assignment != 1)
     return record;
   const Value *was = projection_field(kValue, record);
   const Attrs *moved = projection_moved(family, state, was->attrs, 0);
   return projection_record(
       subject, family,
       projection_attrs(commitment == 1   ? moved
-                       : membership == 1 ? projection_ended(event, state, moved)
+                       : membership == 1 || assignment == 1 ? projection_ended(event, state, moved)
                                          : projection_replace(kLastEvent, event,
                                                               same_text(family, kParty) == 1
                                                                   ? projection_party(event, state, moved)

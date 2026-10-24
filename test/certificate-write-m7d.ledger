@@ -1,0 +1,20 @@
+-- M7 part D1 (Q-D-s11-2 (a)): the Extract write. s1 extracts 2 createsEvent
+-- facts from the Artifact ap: it appends 2 entries, each with artifact ap (the
+-- 2-entry chain, R79). s2 has a createsPolicy fact: missingField "facts". s3
+-- has no facts: appended, no entries. s4 names an Artifact that is not in the
+-- log: missingField "artifact". The block probe gives 17 hash blocks (3 + 7 +
+-- 7; cap 24). Its certificate checks in the kernel (make certificate-check).
+def ap : Artifact := makeArtifact artifactEmail "s" "u" "m" nil attrsEnd
+def ae : Entry := makeEntry none (actorAgent "a") (createsArtifact ap)
+def ar : Ref kindArtifact := refTo (hashOf "5df3e12b454d7c6e685391466f5d11ad08c94245217996619259eed1c3354bb1")
+def zr : Ref kindArtifact := refTo (hashOf "z")
+def p : Ref kindParty := refTo (hashOf "p")
+def note : Event := makeEvent eventNoteAdded (subjectParty p) none none attrsEnd none
+def rule : AclRule := makeAclRule "a" (cons permissionTransition nil) none
+def need : Requirement := makeRequirement (some (cons "po" nil)) none none none
+def pol : Policy := makePolicy "o" (scopeCommercial commercialDeal) none none need (cons rule nil) flagYes
+def log1 : Log := (cons ae nil)
+def s1 : Step := write log1 (makeWrite (actorAgent "a") none (commandExtract ar (cons (createsEvent note) (cons (createsEvent note) nil))))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandExtract ar (cons (createsPolicy pol) nil)))
+def s3 : Step := write log1 (makeWrite (actorAgent "a") none (commandExtract ar nil))
+def s4 : Step := write log1 (makeWrite (actorAgent "a") none (commandExtract zr nil))

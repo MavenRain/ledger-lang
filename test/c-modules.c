@@ -7665,6 +7665,228 @@ static void test_m7_commitment(void) {
   assert(missing_is(missing->head, "missingField", "field", "commitment") == 1);
 }
 
+/* M7 part D (D1, delta MD-2): the commandExtract row of paths.test.mjs on
+   the C checker. The log is artifact_log (the Artifact record is entry 2).
+   2 createsEvent facts with artifact none give 2 entries in order: each has
+   the Ref of the Command as artifact and prev the hash of the entry before
+   it (R79). A createsPolicy fact gives missingField "facts" (delta MD-5), no
+   fact gives outcomeAppended with the log unchanged, and a Ref that is not a
+   record gives missingField "artifact" (delta MD-3). */
+static void test_m7_extract(void) {
+  Nat left = 100;
+  Nat spare = 100;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  ArtifactLog storage;
+  const Value *log = artifact_log(&storage, &left, &failure);
+  Value kind_party = account_text("kindParty");
+  Value party_hash = account_text("p");
+  Value note = account_text("eventNoteAdded");
+  Value name = account_text("a");
+  Value none = {.kind = VALUE_NULL};
+  Value empty = {.kind = VALUE_ATTRS, .attrs = NULL};
+  Value artifact, party;
+  Attrs artifact_fields[2], party_fields[2], event_fields[6];
+  assign_ref(artifact_fields, &artifact, &storage.art_kind, &storage.hash_texts[2]);
+  assign_ref(party_fields, &party, &kind_party, &party_hash);
+  Tagged subject_tag, fact_tags[2], policy_tag, agent_tag;
+  const Value *agent = tagged(&agent_tag, "actorAgent", "name", &name);
+  const char *const event_keys[6] = {"type", "subject", "artifact", "parent", "payload", "policy"};
+  const Value *const event_values[6] = {&note, tagged(&subject_tag, "subjectParty", "party", &party), &none, &none,
+                                        &empty, &none};
+  for (Nat at = 6; at > 0; at--)
+    event_fields[at - 1] = (Attrs){text(event_keys[at - 1]), event_values[at - 1], at < 6 ? &event_fields[at] : NULL};
+  Value event = {.kind = VALUE_ATTRS, .attrs = &event_fields[0]};
+  Values fact_cells[2], policy_cell;
+  fact_cells[1] = (Values){tagged(&fact_tags[1], "createsEvent", "event", &event), NULL};
+  fact_cells[0] = (Values){tagged(&fact_tags[0], "createsEvent", "event", &event), &fact_cells[1]};
+  policy_cell = (Values){tagged(&policy_tag, "createsPolicy", "policy", &empty), NULL};
+  Value facts = {.kind = VALUE_ITEMS, .items = &fact_cells[0]};
+  Value policy_facts = {.kind = VALUE_ITEMS, .items = &policy_cell};
+  Value no_facts = {.kind = VALUE_ITEMS, .items = NULL};
+  QueryTwo commands[4];
+  WriteTwo writes[4];
+  const Value *step = NULL;
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[0], agent,
+                             query_two(&commands[0], "commandExtract", "artifact", &artifact, "facts", &facts)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Value *logged = pipeline_field(step, "log");
+  const Values *entries = pipeline_field(outcome, "entries")->items;
+  assert(left == 2 && verdict_is(outcome, "outcomeAppended", NULL) == 1 && read_count(entries) == 2 &&
+         read_count(logged->items) == 5);
+  const Text hashes[2] = {entries->head->text, entries->tail->head->text};
+  for (Nat at = 0; at < 2; at++) {
+    const Value *entry = pipeline_at(logged, 3 + at);
+    const Value *ref = pipeline_field(pipeline_field(pipeline_field(entry, "body"), "event"), "artifact");
+    Text made;
+    assert(entry_hash(1000, 1, 0, entry, &made, &spare, &failure) && same_text(made, hashes[at]) == 1);
+    assert(same_text(pipeline_field(entry, "prev")->text, at == 0 ? storage.hashes[2] : hashes[0]) == 1);
+    assert(same_text(pipeline_field(ref, "kind")->text, text("kindArtifact")) == 1 &&
+           same_text(pipeline_field(ref, "hash")->text, storage.hashes[2]) == 1);
+  }
+  /* No fact: outcomeAppended with no entry and the log unchanged. */
+  assert(write_step(1000, 5, 3, log,
+                    write_of(&writes[1], agent,
+                             query_two(&commands[1], "commandExtract", "artifact", &artifact, "facts", &no_facts)),
+                    &step, &left, &failure));
+  outcome = pipeline_field(step, "outcome");
+  assert(verdict_is(outcome, "outcomeAppended", NULL) == 1 && pipeline_field(outcome, "entries")->items == NULL &&
+         read_count(pipeline_field(step, "log")->items) == 3);
+  const Value *const denied[2] = {
+      query_two(&commands[2], "commandExtract", "artifact", &artifact, "facts", &policy_facts),
+      query_two(&commands[3], "commandExtract", "artifact", &storage.art_ref, "facts", &no_facts)};
+  const char *const fields[2] = {"facts", "artifact"};
+  for (Nat at = 0; at < 2; at++) {
+    assert(write_step(1000, 5, 3, log, write_of(&writes[2 + at], agent, denied[at]), &step, &left, &failure));
+    outcome = pipeline_field(step, "outcome");
+    const Values *missing = pipeline_field(outcome, "missing")->items;
+    assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1 &&
+           read_count(pipeline_field(step, "log")->items) == 3);
+    assert(missing_is(missing->head, "missingField", "field", fields[at]) == 1);
+  }
+}
+
+/* M7 part D (D1, deltas MD-2 and MD-3): the Assignment rows of
+   paths.test.mjs on the C checker. Entries 0 and 1 create the Parties a and
+   b. g1 (entry 2, the Account of a), g2 and g3 (entries 3 and 4, the Account
+   of b) are Assignments of a; g3 has endedBy. Reassign moves g1 to b. Bulk a
+   to b moves g1 and g2 in log order and not the ended g3 (D-M2). Route of
+   the Account of b moves g2 only: not g1 of a (D-M7) and not the ended g3.
+   End sets the endedBy of g1 to the new entry (D-M6). A Ref that is not a
+   record gives missingField. */
+static void test_m7_assignment(void) {
+  Nat left = 100;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  Value kind_party = account_text("kindParty");
+  Value kind_assignment = account_text("kindAssignment");
+  Value kind_event = account_text("kindEvent");
+  Value org = account_text("partyOrg");
+  Value names[2] = {account_text("a"), account_text("b")};
+  Value end_hash = account_text("x");
+  Value zz = account_text("zz");
+  Value west = account_text("west");
+  Value none = {.kind = VALUE_NULL};
+  const char *const party_keys[2] = {"kind", "displayName"};
+  const char *const keys[5] = {"subject", "assignee", "role", "territory", "endedBy"};
+  AccountEntry storage[5];
+  Values cells[5];
+  Text hashes[5];
+  Value hash_texts[5], parties[2], assignments[3], end_ref, zz_party, zz_assignment;
+  Attrs party_fields[2][2], assignment_fields[3][2], end_fields[2], zz_fields[2][2];
+  Tagged accounts[2], owner_tag, agent_tag, ends[2];
+  const Value *owner = tagged(&owner_tag, "roleOwner", NULL, NULL);
+  const Value *agent = tagged(&agent_tag, "actorAgent", "name", &names[0]);
+  assign_ref(end_fields, &end_ref, &kind_event, &end_hash);
+  assign_ref(zz_fields[0], &zz_party, &kind_party, &zz);
+  assign_ref(zz_fields[1], &zz_assignment, &kind_assignment, &zz);
+  for (Nat at = 0; at < 2; at++) {
+    const Value *entry = account_entry(&storage[at], "createsParty", "party", 2, party_keys,
+                                       (const Value *const[]){&org, &names[at]});
+    assert(entry_hash(1000, 1, 0, entry, &hashes[at], &left, &failure));
+    hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = hashes[at]};
+    assign_ref(party_fields[at], &parties[at], &kind_party, &hash_texts[at]);
+  }
+  const Value *of_a = tagged(&accounts[0], "accountParty", "party", &parties[0]);
+  const Value *of_b = tagged(&accounts[1], "accountParty", "party", &parties[1]);
+  for (Nat at = 2; at < 5; at++) {
+    const Value *entry =
+        account_entry(&storage[at], "createsAssignment", "assignment", 5, keys,
+                      (const Value *const[]){at == 2 ? of_a : of_b, &parties[0], owner, &none, at == 4 ? &end_ref : &none});
+    assert(entry_hash(1000, 1, 0, entry, &hashes[at], &left, &failure));
+    hash_texts[at] = (Value){.kind = VALUE_TEXT, .text = hashes[at]};
+    assign_ref(assignment_fields[at - 2], &assignments[at - 2], &kind_assignment, &hash_texts[at]);
+  }
+  for (Nat at = 0; at < 5; at++) cells[at] = (Values){&storage[at].entry, at + 1 < 5 ? &cells[at + 1] : NULL};
+  Value log = {.kind = VALUE_ITEMS, .items = &cells[0]};
+  QueryTwo commands[5];
+  WriteTwo writes[7];
+  const Value *steps[4] = {NULL, NULL, NULL, NULL};
+  const Value *const appends[4] = {
+      query_two(&commands[0], "commandReassign", "assignment", &assignments[0], "assignee", &parties[1]),
+      query_two(&commands[1], "commandBulkReassign", "source", &parties[0], "target", &parties[1]),
+      query_two(&commands[2], "commandRouteTerritory", "subject", of_b, "territory", &west),
+      tagged(&ends[0], "commandEndAssignment", "assignment", &assignments[0])};
+  /* The moved Assignments of each append (entries 2 and 3 for Bulk). */
+  const Nat firsts[4] = {2, 2, 3, 2};
+  const Nat counts[4] = {1, 2, 1, 1};
+  const char *const types[4] = {"eventAssignmentChanged", "eventAssignmentChanged", "eventAssignmentChanged",
+                                "eventEnded"};
+  for (Nat at = 0; at < 4; at++) {
+    assert(write_step(1000, 5, 3, &log, write_of(&writes[at], agent, appends[at]), &steps[at], &left, &failure));
+    const Value *outcome = pipeline_field(steps[at], "outcome");
+    const Value *logged = pipeline_field(steps[at], "log");
+    assert(left == 3 - (counts[at] - 1) && verdict_is(outcome, "outcomeAppended", NULL) == 1 &&
+           read_count(pipeline_field(outcome, "entries")->items) == counts[at] &&
+           read_count(logged->items) == 5 + counts[at]);
+    for (Nat moved = 0; moved < counts[at]; moved++) {
+      const Value *event = pipeline_field(pipeline_field(pipeline_at(logged, 5 + moved), "body"), "event");
+      const Value *subject = pipeline_field(pipeline_field(event, "subject"), "assignment");
+      assert(same_text(pipeline_field(event, "type")->text, text(types[at])) == 1);
+      assert(same_text(pipeline_field(subject, "hash")->text, hashes[firsts[at] + moved]) == 1);
+    }
+  }
+  /* Reassign and Bulk: the assignee of g1 (and g2) is b; g3 stays with a. */
+  const Value *const assignees[4] = {
+      pipeline_field(party_state(steps[0], hashes[2]), "assignee"), pipeline_field(party_state(steps[1], hashes[2]), "assignee"),
+      pipeline_field(party_state(steps[1], hashes[3]), "assignee"), pipeline_field(party_state(steps[1], hashes[4]), "assignee")};
+  const Nat owners[4] = {1, 1, 1, 0};
+  for (Nat at = 0; at < 4; at++) assert(same_text(pipeline_field(assignees[at], "hash")->text, hashes[owners[at]]) == 1);
+  /* Route: the territory of g2 is west, g1 has none. */
+  const Value *territory = pipeline_field(party_state(steps[2], hashes[3]), "territory");
+  const Value *payload = pipeline_field(pipeline_field(pipeline_at(pipeline_field(steps[2], "log"), 5), "body"), "event");
+  assert(territory->kind == VALUE_TEXT && same_text(territory->text, west.text) == 1);
+  assert(same_text(pipeline_field(pipeline_field(payload, "payload"), "territory")->text, west.text) == 1);
+  assert(pipeline_field(party_state(steps[2], hashes[2]), "territory")->kind == VALUE_NULL);
+  /* End: the endedBy of g1 is the Ref kindEvent of the new entry. */
+  const Value *ended = pipeline_field(party_state(steps[3], hashes[2]), "endedBy");
+  assert(same_text(pipeline_field(ended, "kind")->text, kind_event.text) == 1 &&
+         same_text(pipeline_field(ended, "hash")->text,
+                   pipeline_field(pipeline_field(steps[3], "outcome"), "entries")->items->head->text) == 1);
+  const Value *const denied[3] = {
+      query_two(&commands[3], "commandReassign", "assignment", &zz_assignment, "assignee", &parties[1]),
+      query_two(&commands[4], "commandReassign", "assignment", &assignments[0], "assignee", &zz_party),
+      tagged(&ends[1], "commandEndAssignment", "assignment", &zz_assignment)};
+  const char *const fields[3] = {"assignment", "assignee", "assignment"};
+  for (Nat at = 0; at < 3; at++) {
+    const Value *step = NULL;
+    assert(write_step(1000, 5, 3, &log, write_of(&writes[4 + at], agent, denied[at]), &step, &left, &failure));
+    const Value *outcome = pipeline_field(step, "outcome");
+    const Values *missing = pipeline_field(outcome, "missing")->items;
+    assert(left == 4 && verdict_is(outcome, "outcomeDenied", NULL) == 1 && read_count(missing) == 1 &&
+           read_count(pipeline_field(step, "log")->items) == 5);
+    assert(missing_is(missing->head, "missingField", "field", fields[at]) == 1);
+  }
+
+  /* A free payload Ref has only a hash. Reconstruct its Party kind, as
+     assigneeAfter does, and discard unrelated fields. Invalid hashes leave
+     the original assignee in place. */
+  Value changed = account_text("eventAssignmentChanged");
+  Value number = {.kind = VALUE_NAT, .number = 7};
+  const Value *const afters[5] = {
+      object_one(kHash, &hash_texts[1]),
+      object_two(kKind, &kind_event, kHash, &hash_texts[1]),
+      object_two(kHash, &hash_texts[1], text("extra"), &west),
+      object_one(kHash, &number), &west};
+  for (Nat at = 0; at < 5; at++) {
+    AccountEntry changed_storage;
+    Tagged subject_storage;
+    const char *const event_keys[3] = {"type", "subject", "payload"};
+    const Value *const event_values[3] = {
+        &changed, tagged(&subject_storage, "subjectAssignment", "assignment", &assignments[0]),
+        object_one(text("after"), afters[at])};
+    const Value *event = account_entry(&changed_storage, "createsEvent", "event", 3, event_keys, event_values);
+    Values event_cell = {event, NULL};
+    Values assignment_cell = {&storage[2].entry, &event_cell};
+    Value logged = {.kind = VALUE_ITEMS, .items = &assignment_cell};
+    const Value *record = party_state(object_one(text("log"), &logged), hashes[2]);
+    const Value *assignee = pipeline_field(record, "assignee");
+    assert(same_text(pipeline_field(assignee, "kind")->text, kind_party.text) == 1);
+    assert(same_text(pipeline_field(assignee, "hash")->text, hashes[at < 3 ? 1 : 0]) == 1);
+    assert(assignee->attrs != NULL && assignee->attrs->rest != NULL && assignee->attrs->rest->rest == NULL);
+  }
+}
+
 /* M7 part B2a (design item 8, delta MB-9, ruling Q-M7-18 (a)):
    commandSplitParty on the PartyLog. Split acme with moved [crm c-1] gives
    two entries: entry 1 creates the new Party (the kind and the displayName
@@ -8044,6 +8266,8 @@ int main(void) {
   test_m7_primary_wrong_family();
   test_m7_commercial();
   test_m7_commitment();
+  test_m7_extract();
+  test_m7_assignment();
   puts("C module tests passed");
   return 0;
 }

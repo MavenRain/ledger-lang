@@ -4179,7 +4179,10 @@ static Text actor_text(const Value *actor) {
 /* M7 design item 2 (Q-M7-8, delta A-6): the form of the subject of an ask:
    no subject, a Party ref, a Commercial ref, a Subject, an Account, or a
    List Account. M7 part C (delta MC-3): a Membership ref or a Commitment
-   ref. */
+   ref. Delta MD-4: an Assignment ref. Delta MD-3: the current Assignments
+   of a Party ref (ASK_MOVED, commandBulkReassign). Delta MD-4: the facts
+   of commandExtract (ASK_FACTS: each fact by the ask form of the Command
+   whose Body is that fact). */
 typedef enum {
   ASK_NONE,
   ASK_PARTY,
@@ -4188,7 +4191,10 @@ typedef enum {
   ASK_ACCOUNT,
   ASK_ACCOUNTS,
   ASK_MEMBERSHIP,
-  ASK_COMMITMENT
+  ASK_COMMITMENT,
+  ASK_ASSIGNMENT,
+  ASK_MOVED,
+  ASK_FACTS
 } WriteAskForm;
 
 /* One row of the ask table: the Command, the Permission tag, the field of
@@ -4202,7 +4208,7 @@ typedef struct {
   WriteAskForm form;
 } WriteAsk;
 
-enum { WRITE_ASKS = 22 };
+enum { WRITE_ASKS = 27 };
 
 static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandResolveParty", "permissionWrite", "", "", ASK_NONE},
@@ -4226,7 +4232,12 @@ static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandSetPrimary", "permissionWrite", "membership", "", ASK_MEMBERSHIP},
     {"commandChangeAmount", "permissionWrite", "commercial", "", ASK_COMMERCIAL},
     {"commandSetStatus", "permissionWrite", "commercial", "", ASK_COMMERCIAL},
-    {"commandAgree", "permissionWrite", "commitment", "", ASK_COMMITMENT}};
+    {"commandAgree", "permissionWrite", "commitment", "", ASK_COMMITMENT},
+    {"commandReassign", "permissionAssign", "assignment", "", ASK_ASSIGNMENT},
+    {"commandEndAssignment", "permissionAssign", "assignment", "", ASK_ASSIGNMENT},
+    {"commandRouteTerritory", "permissionAssign", "subject", "", ASK_ACCOUNT},
+    {"commandBulkReassign", "permissionAssign", "source", "", ASK_MOVED},
+    {"commandExtract", "permissionWrite", "facts", "", ASK_FACTS}};
 
 /* The row of write_asks that names the Command tag, from at on; WRITE_ASKS
    when no row names it. */
@@ -4237,11 +4248,16 @@ static Nat write_ask_at(Text tag, Nat at) {
 
 /* The Subject of value in the form: subjectParty of a Party ref,
    subjectCommercial of a Commercial ref, subjectMembership of a Membership
-   ref, subjectCommitment of a Commitment ref (delta MC-3), the Subject
-   itself, or the Subject
+   ref, subjectCommitment of a Commitment ref (delta MC-3), subjectAssignment
+   of an Assignment ref (delta MD-4) or of the refTo ref of an Assignment
+   record (ASK_MOVED, delta MD-3), the Subject itself, or the Subject
    of an Account (accountParty p: subjectParty p; accountCommercial c:
    subjectCommercial c). */
 static int write_subject(const Value *value, WriteAskForm form, const Value **subject, Failure *failure) {
+  /* R76: Ref is not a schema family (write_value gives eTerm). account_item
+     makes the refTo value of the record ref (the evaluate.c form). */
+  if (form == ASK_MOVED)
+    return write_subject(account_item(value, "kindAssignment"), ASK_ASSIGNMENT, subject, failure);
   if (form == ASK_SUBJECT) {
     *subject = value;
     return 1;
@@ -4253,41 +4269,71 @@ static int write_subject(const Value *value, WriteAskForm form, const Value **su
       form == ASK_ACCOUNT ? write_field(text_of_cstring(party == 1 ? "party" : "commercial"), value) : value;
   const char *tag = form == ASK_MEMBERSHIP   ? "subjectMembership"
                     : form == ASK_COMMITMENT ? "subjectCommitment"
+                    : form == ASK_ASSIGNMENT ? "subjectAssignment"
                     : party == 1             ? "subjectParty"
                                              : "subjectCommercial";
   return write_value("Subject", tag, values_item(ref, NULL), subject, failure);
 }
 
-/* The Subjects of the List Account items, in order. */
-static int write_subjects(const Values *accounts, const Values **subjects, Failure *failure) {
-  if (accounts == NULL) {
+/* The Subjects of items in the form, in order: the Accounts of a List
+   Account (ASK_ACCOUNT), or the Assignment records of ASK_MOVED (delta
+   MD-3). */
+static int write_subjects(const Values *items, WriteAskForm form, const Values **subjects, Failure *failure) {
+  if (items == NULL) {
     *subjects = NULL;
     return 1;
   }
   const Values *rest;
   const Value *subject;
-  if (!write_subjects(accounts->tail, &rest, failure) || !write_subject(accounts->head, ASK_ACCOUNT, &subject, failure))
+  if (!write_subjects(items->tail, form, &rest, failure) || !write_subject(items->head, form, &subject, failure))
     return 0;
   *subjects = values_item(subject, rest);
   return 1;
 }
 
+/* Delta MD-3 (commandBulkReassign): the current Assignment records of
+   ordered (log order) whose assignee is the Party of the Ref source (the
+   same hash). The asks (ASK_MOVED) and the Bodies (write_bulk_bodies) use
+   these records. */
+static const Values *write_moved_assignments(const Values *ordered, const Value *source) {
+  if (ordered == NULL) return NULL;
+  const Value *record = ordered->head;
+  const Values *rest = write_moved_assignments(ordered->tail, source);
+  Nat moved = record_is(record, "Assignment") == 1 && assignment_current(record) == 1 &&
+              same_text(write_field(kRefHash(), commitment_field(record, "assignee"))->text,
+                        write_field(kRefHash(), source)->text) == 1;
+  return moved == 1 ? values_item(record, rest) : rest;
+}
+
+/* Delta MD-4: write_fact_subjects is after write_values_join; write_ask_list
+   uses it for ASK_FACTS. */
+static int write_fact_subjects(const Values *facts, const Values *ordered, const Values **subjects, Failure *failure);
+
 /* Delta A-6: the subjects that the Command of row at asks for: one Subject,
    the Subjects of the Account list of commandIngest, or one null (no
    subject: a Command with no row, commandResolveParty, and commandIngest
-   with no subjects). */
-static int write_ask_list(const Value *command, Nat at, const Values **subjects, Failure *failure) {
+   with no subjects). Delta MD-3 (R54): for commandBulkReassign, the Subject
+   of each record of write_moved_assignments (ordered is the records in log
+   order), or one null when there is none (Q-D-s4-1 (a)). Delta MD-4: for
+   commandExtract (ASK_FACTS), the subjects of each fact in order
+   (write_fact_subjects), or one null when there is no fact. */
+static int write_ask_list(const Value *command, Nat at, const Values *ordered, const Values **subjects,
+                          Failure *failure) {
   WriteAskForm form = at < WRITE_ASKS ? write_asks[at].form : ASK_NONE;
   const Value *field = at < WRITE_ASKS ? write_field(text_of_cstring(write_asks[at].field), command) : &null_value;
   const Value *value = at < WRITE_ASKS && write_asks[at].inner[0] != '\0'
                            ? write_field(text_of_cstring(write_asks[at].inner), field)
                            : field;
+  const Values *moved = form == ASK_MOVED ? write_moved_assignments(ordered, value) : NULL;
   const Value *subject;
-  if (form == ASK_NONE || (form == ASK_ACCOUNTS && items_of(value) == NULL)) {
+  if (form == ASK_NONE || ((form == ASK_ACCOUNTS || form == ASK_FACTS) && items_of(value) == NULL) ||
+      (form == ASK_MOVED && moved == NULL)) {
     *subjects = values_item(&null_value, NULL);
     return 1;
   }
-  if (form == ASK_ACCOUNTS) return write_subjects(items_of(value), subjects, failure);
+  if (form == ASK_ACCOUNTS) return write_subjects(items_of(value), ASK_ACCOUNT, subjects, failure);
+  if (form == ASK_MOVED) return write_subjects(moved, ASK_MOVED, subjects, failure);
+  if (form == ASK_FACTS) return write_fact_subjects(items_of(value), ordered, subjects, failure);
   if (!write_subject(value, form, &subject, failure)) return 0;
   *subjects = values_item(subject, NULL);
   return 1;
@@ -4298,19 +4344,50 @@ static const Values *write_values_join(const Values *first, const Values *rest) 
   return first == NULL ? rest : values_item(first->head, write_values_join(first->tail, rest));
 }
 
+/* Delta MD-4 (ASK_FACTS): the row of write_asks of the Command whose Body has
+   the constructor of fact (the rows of write_bodies from at on); WRITE_ASKS
+   when no row names it (createsParty: the ask of commandResolveParty has no
+   subject too). */
+static Nat write_fact_ask(const Value *fact, Nat at) {
+  if (at >= 6) return WRITE_ASKS;
+  return same_text(write_field(kSchemaTag(), fact)->text, text_of_cstring(write_bodies[at][2])) == 1
+             ? write_ask_at(text_of_cstring(write_bodies[at][0]), 0)
+             : write_fact_ask(fact, at + 1);
+}
+
+/* Delta MD-4 (commandExtract): the subjects of each fact of facts in order,
+   each by the ask form of the Command whose Body is that fact
+   (write_fact_ask; the Body field has the name of the Command field).
+   ordered is the records in log order. */
+static int write_fact_subjects(const Values *facts, const Values *ordered, const Values **subjects, Failure *failure) {
+  if (facts == NULL) {
+    *subjects = NULL;
+    return 1;
+  }
+  const Values *these;
+  const Values *rest;
+  if (!write_ask_list(facts->head, write_fact_ask(facts->head, 0), ordered, &these, failure) ||
+      !write_fact_subjects(facts->tail, ordered, &rest, failure))
+    return 0;
+  *subjects = write_values_join(these, rest);
+  return 1;
+}
+
 /* Delta A-6 (MB-10): the subjects of row at and of each next row of
    write_asks that names the Command tag, in row order (commandMergeParties:
-   keep, then drop). */
-static int write_ask_rows(const Value *command, Text tag, Nat at, const Values **subjects, Failure *failure) {
+   keep, then drop). ordered (the records in log order) goes to
+   write_ask_list (delta MD-3). */
+static int write_ask_rows(const Value *command, Text tag, Nat at, const Values *ordered, const Values **subjects,
+                          Failure *failure) {
   Nat next = at < WRITE_ASKS ? write_ask_at(tag, at + 1) : WRITE_ASKS;
   const Values *these;
   const Values *rest;
-  if (!write_ask_list(command, at, &these, failure)) return 0;
+  if (!write_ask_list(command, at, ordered, &these, failure)) return 0;
   if (next >= WRITE_ASKS) {
     *subjects = these;
     return 1;
   }
-  if (!write_ask_rows(command, tag, next, &rest, failure)) return 0;
+  if (!write_ask_rows(command, tag, next, ordered, &rest, failure)) return 0;
   *subjects = write_values_join(these, rest);
   return 1;
 }
@@ -4357,19 +4434,28 @@ static int write_guard(const Values *policies, const Located *all, const DryAsk 
   return write_guard(policies->tail, all, ask, stage, current, guard, failure);
 }
 
-/* M7 part C (deltas MC-2 and MC-7): the createsEvent Body of makeEvent type
-   subject none none payload policy. */
-static int write_record_event(const char *type, const Value *subject, const Attrs *payload, const Value *policy,
-                              const Value **body, Failure *failure) {
-  const Value *made;
+/* Delta MD-2 (N5, R55): the createsEvent Body of makeEvent made subject
+   artifact parent attrs policy (an Option value is null for none). The
+   record Commands of parts C and D and the facts of commandExtract (some
+   artifact) make their Events here. */
+static int write_event_body(const Value *made, const Value *subject, const Value *artifact, const Value *parent,
+                            const Value *attrs, const Value *policy, const Value **body, Failure *failure) {
   const Value *event;
-  const Value *attrs = make_value((Value){.kind = VALUE_ATTRS, .attrs = payload});
-  return write_value("EventType", type, NULL, &made, failure) &&
-         write_value("Event", "makeEvent",
-                     values_item(made, values_item(subject, values_item(&null_value, values_item(&null_value,
+  return write_value("Event", "makeEvent",
+                     values_item(made, values_item(subject, values_item(artifact, values_item(parent,
                                  values_item(attrs, values_item(policy, NULL)))))),
                      &event, failure) &&
          write_value("Body", "createsEvent", values_item(event, NULL), body, failure);
+}
+
+/* M7 part C (deltas MC-2 and MC-7): the createsEvent Body of makeEvent type
+   subject none none payload policy (write_event_body, N5). */
+static int write_record_event(const char *type, const Value *subject, const Attrs *payload, const Value *policy,
+                              const Value **body, Failure *failure) {
+  const Value *made;
+  const Value *attrs = make_value((Value){.kind = VALUE_ATTRS, .attrs = payload});
+  return write_value("EventType", type, NULL, &made, failure) &&
+         write_event_body(made, subject, &null_value, &null_value, attrs, policy, body, failure);
 }
 
 /* M7 design item 4: the Body of commandTransition c stage on the Commercial
@@ -4386,14 +4472,16 @@ static int write_transition_body(const Value *subject, const Value *current, con
 }
 
 /* M7 delta MB-4 (A-2): the Commands that change a record: the Command, its
-   Ref field, and the family of the record that the Ref names. */
+   Ref field, and the family of the record that the Ref names. Delta MD-3:
+   commandExtract needs the Artifact record of its field "artifact" (R56:
+   record_is "Artifact"). */
 typedef struct {
   const char *command;
   const char *field;
   const char *family;
 } WriteRecord;
 
-enum { WRITE_RECORDS = 15 };
+enum { WRITE_RECORDS = 21 };
 
 static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandTransition", "commercial", "Commercial"}, {"commandAddIdentifier", "party", "Party"},
@@ -4403,7 +4491,13 @@ static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandMergeParties", "keep", "Party"},          {"commandMergeParties", "drop", "Party"},
     {"commandEndMembership", "membership", "Membership"}, {"commandSetPrimary", "membership", "Membership"},
     {"commandChangeAmount", "commercial", "Commercial"},  {"commandSetStatus", "commercial", "Commercial"},
-    {"commandAgree", "commitment", "Commitment"}};
+    {"commandAgree", "commitment", "Commitment"},
+    {"commandReassign", "assignment", "Assignment"},
+    {"commandReassign", "assignee", "Party"},
+    {"commandEndAssignment", "assignment", "Assignment"},
+    {"commandBulkReassign", "source", "Party"},
+    {"commandBulkReassign", "target", "Party"},
+    {"commandExtract", "artifact", "Artifact"}};
 
 /* The row of write_records that names the Command tag, from at on;
    WRITE_RECORDS when no row names it. */
@@ -4522,13 +4616,16 @@ static int write_party_event(const Value *party, const char *type, const Attrs *
 
 /* M7 part C (delta MC-2): 1 when the Command tag has its body made by
    write_record_change: commandEndMembership and commandSetPrimary (part
-   C1), commandChangeAmount, commandSetStatus and commandAgree (part C2). */
+   C1), commandChangeAmount, commandSetStatus and commandAgree (part C2),
+   commandReassign and commandEndAssignment (delta MD-2). */
 static Nat write_record_command(Text tag) {
   return same_text(tag, text_of_cstring("commandEndMembership")) == 1 ||
          same_text(tag, text_of_cstring("commandSetPrimary")) == 1 ||
          same_text(tag, text_of_cstring("commandChangeAmount")) == 1 ||
          same_text(tag, text_of_cstring("commandSetStatus")) == 1 ||
-         same_text(tag, text_of_cstring("commandAgree")) == 1;
+         same_text(tag, text_of_cstring("commandAgree")) == 1 ||
+         same_text(tag, text_of_cstring("commandReassign")) == 1 ||
+         same_text(tag, text_of_cstring("commandEndAssignment")) == 1;
 }
 
 /* Delta MC-2: the payload of a part C Command: none for
@@ -4536,12 +4633,18 @@ static Nat write_record_command(Text tag) {
    after = the amountCents of the Command] (null for none) for
    commandChangeAmount, [status = the tag of the CommercialStatus as text]
    for commandSetStatus, [status = "commitmentAgreed"] for commandAgree, and
-   [isPrimary = flagYes] for commandSetPrimary. */
+   [isPrimary = flagYes] for commandSetPrimary. Delta MD-2: none for
+   commandEndAssignment, and [before = the assignee of the record current,
+   after = the assignee of the Command] for commandReassign. */
 static const Attrs *write_record_payload(Text tag, const Value *command, const Value *current) {
   Nat amount = same_text(tag, text_of_cstring("commandChangeAmount"));
   Nat status = same_text(tag, text_of_cstring("commandSetStatus"));
   const Value *yes = make_value((Value){.kind = VALUE_FLAG, .flag = FLAG_YES});
-  return same_text(tag, text_of_cstring("commandEndMembership")) == 1 ? NULL
+  /* Delta MD-2: commandEndAssignment has no payload; commandReassign moves
+     the assignee of the Assignment record to the assignee of the Command. */
+  return same_text(tag, text_of_cstring("commandEndMembership")) == 1 ||
+                 same_text(tag, text_of_cstring("commandEndAssignment")) == 1
+             ? NULL
          : amount == 1
              ? write_attr_item("before", commitment_field(current, "amountCents"),
                                write_attr_item("after", write_field(text_of_cstring("amountCents"), command), NULL))
@@ -4550,6 +4653,9 @@ static const Attrs *write_record_payload(Text tag, const Value *command, const V
                                NULL)
          : same_text(tag, text_of_cstring("commandAgree")) == 1
              ? write_attr_item("status", text_value(text_of_cstring("commitmentAgreed")), NULL)
+         : same_text(tag, text_of_cstring("commandReassign")) == 1
+             ? write_attr_item("before", commitment_field(current, "assignee"),
+                               write_attr_item("after", write_field(text_of_cstring("assignee"), command), NULL))
              : write_attr_item("isPrimary", yes, NULL);
 }
 
@@ -4558,10 +4664,15 @@ static const Attrs *write_record_payload(Text tag, const Value *command, const V
    write_record_payload and the allowing policy (null for none):
    commandEndMembership gives eventEnded, commandChangeAmount gives
    eventAmountChanged, commandAgree gives eventCommitmentSet, and
-   commandSetPrimary and commandSetStatus give eventFieldsChanged. */
+   commandSetPrimary and commandSetStatus give eventFieldsChanged. Delta
+   MD-2: commandEndAssignment gives eventEnded and commandReassign gives
+   eventAssignmentChanged. */
 static int write_record_change(Text tag, const Value *command, const Value *current, const Value *subject,
                                const Value *policy, const Value **body, Failure *failure) {
-  const char *type = same_text(tag, text_of_cstring("commandEndMembership")) == 1  ? "eventEnded"
+  const char *type = same_text(tag, text_of_cstring("commandEndMembership")) == 1 ||
+                             same_text(tag, text_of_cstring("commandEndAssignment")) == 1
+                         ? "eventEnded"
+                     : same_text(tag, text_of_cstring("commandReassign")) == 1 ? "eventAssignmentChanged"
                      : same_text(tag, text_of_cstring("commandChangeAmount")) == 1 ? "eventAmountChanged"
                      : same_text(tag, text_of_cstring("commandAgree")) == 1        ? "eventCommitmentSet"
                                                                                    : "eventFieldsChanged";
@@ -4664,6 +4775,93 @@ static int write_party_change(const Value *command, Text tag, const Value *curre
                            failure);
 }
 
+/* Delta MD-2 (commandRouteTerritory): the createsEvent Bodies of the
+   Command, one for each current Assignment record of ordered (log order)
+   whose subject is the Account of the Command: eventAssignmentChanged on
+   subjectAssignment (refTo the record ref) with [territory = the territory
+   of the Command] and the allowing policy (null for none). */
+static int write_route_bodies(const Values *ordered, const Value *command, const Value *policy, const Values **bodies,
+                              Failure *failure) {
+  if (ordered == NULL) {
+    *bodies = NULL;
+    return 1;
+  }
+  const Value *record = ordered->head;
+  const Values *rest;
+  const Value *subject;
+  const Value *body;
+  Nat moved = record_is(record, "Assignment") == 1 && assignment_current(record) == 1 &&
+              account_same(commitment_field(record, "subject"), write_field(text_of_cstring("subject"), command)) == 1;
+  if (!write_route_bodies(ordered->tail, command, policy, &rest, failure)) return 0;
+  if (moved != 1) {
+    *bodies = rest;
+    return 1;
+  }
+  if (!write_subject(record, ASK_MOVED, &subject, failure) ||
+      !write_record_event("eventAssignmentChanged", subject,
+                          write_attr_item("territory", write_field(text_of_cstring("territory"), command), NULL),
+                          policy, &body, failure))
+    return 0;
+  *bodies = values_item(body, rest);
+  return 1;
+}
+
+/* Delta MD-3 (commandBulkReassign): the createsEvent Bodies of the Command,
+   one for each record of moved (write_moved_assignments, log order):
+   eventAssignmentChanged on subjectAssignment (refTo the record ref) with
+   [before = the source of the Command, after = the target of the Command]
+   and the allowing policy (null for none). */
+static int write_bulk_bodies(const Values *moved, const Value *command, const Value *policy, const Values **bodies,
+                             Failure *failure) {
+  if (moved == NULL) {
+    *bodies = NULL;
+    return 1;
+  }
+  const Values *rest;
+  const Value *subject;
+  const Value *body;
+  const Attrs *payload =
+      write_attr_item("before", write_field(text_of_cstring("source"), command),
+                      write_attr_item("after", write_field(text_of_cstring("target"), command), NULL));
+  if (!write_bulk_bodies(moved->tail, command, policy, &rest, failure) ||
+      !write_subject(moved->head, ASK_MOVED, &subject, failure) ||
+      !write_record_event("eventAssignmentChanged", subject, payload, policy, &body, failure))
+    return 0;
+  *bodies = values_item(body, rest);
+  return 1;
+}
+
+/* Delta MD-2 (Q-D-1 (a), N5): the Bodies of commandExtract: the facts of
+   facts in order, each as given, but a createsEvent fact whose Event has
+   artifact none gets artifact (the Ref of the Command: some artifact). */
+static int write_fact_bodies(const Values *facts, const Value *artifact, const Values **bodies, Failure *failure) {
+  if (facts == NULL) {
+    *bodies = NULL;
+    return 1;
+  }
+  const Values *rest;
+  const Value *body = facts->head;
+  const Value *event = write_field(text_of_cstring("event"), body);
+  Nat fill = same_text(write_field(kSchemaTag(), body)->text, text_of_cstring("createsEvent")) == 1 &&
+             write_field(text_of_cstring("artifact"), event)->kind == VALUE_NULL;
+  if (!write_fact_bodies(facts->tail, artifact, &rest, failure) ||
+      (fill == 1 && !write_event_body(write_field(text_of_cstring("type"), event),
+                                      write_field(text_of_cstring("subject"), event), artifact,
+                                      write_field(text_of_cstring("parent"), event),
+                                      write_field(text_of_cstring("payload"), event),
+                                      write_field(text_of_cstring("policy"), event), &body, failure)))
+    return 0;
+  *bodies = values_item(body, rest);
+  return 1;
+}
+
+/* Delta MD-5 (Q-D-1 (a)): 1 when a fact of facts is a createsPolicy Body. */
+static Nat write_facts_policy(const Values *facts) {
+  return facts != NULL &&
+         (same_text(write_field(kSchemaTag(), facts->head)->text, text_of_cstring("createsPolicy")) == 1 ||
+          write_facts_policy(facts->tail) == 1);
+}
+
 /* M7 design item 8: the Body of the next Entry from the hash of the Entry
    before it. */
 typedef int (*WriteNext)(const Value *command, Text hash, const Value **body, Failure *failure);
@@ -4693,6 +4891,33 @@ static int write_entries(Fuel hash_fuel, Nat ready, Nat position, const Value *p
   return 1;
 }
 
+/* Delta MD-2 (N8): the Entries of the Bodies bodies in order, each through
+   write_entries with count 1: the first has prev; each next one has prev the
+   hash of the Entry before it. Each hash takes one work step of ready. No
+   Body gives no Entry. */
+static int write_list_entries(Fuel hash_fuel, Nat ready, Nat position, const Value *prev, const Value *actor,
+                              const Values *bodies, const Value *command, const Values **entries,
+                              const Values **hashes, Nat *left, Failure *failure) {
+  const Values *one;
+  const Values *hash;
+  const Values *more;
+  const Values *rest;
+  if (bodies == NULL) {
+    *entries = NULL;
+    *hashes = NULL;
+    *left = ready;
+    return 1;
+  }
+  if (!write_entries(hash_fuel, ready, position, prev, actor, bodies->head, 1, command, NULL, &one, &hash, left,
+                     failure) ||
+      !write_list_entries(hash_fuel, *left, position, hash->head, actor, bodies->tail, command, &more, &rest, left,
+                          failure))
+    return 0;
+  *entries = values_item(one->head, more);
+  *hashes = values_item(hash->head, rest);
+  return 1;
+}
+
 /* write log w (M1 design items 7 and 8; M7 design items 1 to 4, deltas A-1
    to A-7). The apply takes one work step. The check projects the log on a
    private budget: the walk takes no work step (delta A-1). No Body:
@@ -4703,12 +4928,22 @@ static int write_entries(Fuel hash_fuel, Nat ready, Nat position, const Value *p
    guard (a Missing list gives outcomeDenied (some g) missing) and makes its
    Body with Event.policy the allowing policy (Q-M7-11 (a)), and so do
    commandEndMembership, commandSetPrimary, commandChangeAmount,
-   commandSetStatus and commandAgree (delta MC-2, Q-C-1 (a)): they skip the party change and
-   the no-body denial. An expect on an empty log: outcomeDenied none nil. An
+   commandSetStatus, commandAgree (delta MC-2, Q-C-1 (a)), commandReassign and
+   commandEndAssignment (delta MD-2): they skip the party change and
+   the no-body denial. commandRouteTerritory (delta MD-2),
+   commandBulkReassign (delta MD-3) and commandExtract (delta MD-2) skip the
+   party change and the no-body denial too and make their Bodies after the
+   asks. A createsPolicy fact of commandExtract gives outcomeDenied none
+   [missingField "facts"] before the asks (delta MD-5). An expect on an
+   empty log: outcomeDenied none nil. An
    expect that is not the hash of the last entry: outcomeConflict with that
    hash. Else the Entries of the Command go at the end of the log
    (outcomeAppended with their hashes in order and the allowing policy; M7
-   design item 8): 2 for commandSplitParty, 1 for each other Command. Each
+   design item 8): 2 for commandSplitParty, one for each current Assignment
+   of the Account for commandRouteTerritory (delta MD-2) and of the source
+   Party for commandBulkReassign (delta MD-3), in log order, one for each
+   fact of commandExtract, in order (none gives outcomeAppended nil with the
+   log unchanged, delta MD-5), 1 for each other Command. Each
    Entry has prev the hash of the entry before it, and each hash takes one
    more work step; a budget short of them gives eBudget before any append
    (Q-M7-18 (a)). The hash of the last entry takes no work step (delta
@@ -4736,6 +4971,9 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
   Nat row = write_record_at(tag, 0);
   Nat transition = same_text(tag, text_of_cstring("commandTransition"));
   Nat member = write_record_command(tag);
+  Nat bulk = same_text(tag, text_of_cstring("commandBulkReassign"));
+  Nat extract = same_text(tag, text_of_cstring("commandExtract"));
+  Nat list = same_text(tag, text_of_cstring("commandRouteTerritory")) == 1 || bulk == 1 || extract == 1;
   const Value *commercial = write_field(text_of_cstring("commercial"), command);
   const Value *current = write_record(records, command, row);
   const Value *resolved =
@@ -4744,14 +4982,18 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
   Text missed = none;
   Nat gap = write_record_gap(records, command, tag, 0);
   if (gap < WRITE_RECORDS) return write_missing(log, text_of_cstring(write_records[gap].field), value, failure);
-  if (row < WRITE_RECORDS && transition != 1 && member != 1 &&
+  const Values *facts = extract == 1 ? items_of(write_field(text_of_cstring("facts"), command)) : NULL;
+  if (write_facts_policy(facts) == 1) return write_missing(log, text_of_cstring("facts"), value, failure);
+  if (row < WRITE_RECORDS && transition != 1 && member != 1 && list != 1 &&
       !write_party_change(command, tag, current, &body, &missed, failure))
     return 0;
   if (missed.size > 0) return write_missing(log, missed, value, failure);
-  if (row == WRITE_RECORDS && resolved == NULL && !write_command_body(command, tag, 0, &body, failure)) return 0;
-  if (transition != 1 && member != 1 && resolved == NULL && body == NULL) return write_denied(log, value, failure);
+  if (row == WRITE_RECORDS && resolved == NULL && list != 1 && !write_command_body(command, tag, 0, &body, failure))
+    return 0;
+  if (transition != 1 && member != 1 && list != 1 && resolved == NULL && body == NULL)
+    return write_denied(log, value, failure);
   const Values *subjects;
-  if (!write_ask_rows(command, tag, at, &subjects, failure)) return 0;
+  if (!write_ask_rows(command, tag, at, ordered, &subjects, failure)) return 0;
   const Value *enrich = write_field(text_of_cstring("attrs"), command);
   PolicyAsk ask = {actor_text(write_field(text_of_cstring("actor"), write)),
                    text_of_cstring(at < WRITE_ASKS ? write_asks[at].action : "permissionWrite"), &null_value,
@@ -4776,6 +5018,14 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
     if (!write_transition_body(subjects->head, current, stage, allow, &body, failure)) return 0;
   }
   if (member == 1 && !write_record_change(tag, command, current, subjects->head, allow, &body, failure)) return 0;
+  const Values *bodies = NULL;
+  const Values *moved =
+      bulk == 1 ? write_moved_assignments(ordered, write_field(text_of_cstring("source"), command)) : NULL;
+  const Value *artifact = write_field(text_of_cstring("artifact"), command);
+  if (list == 1 && !(bulk == 1      ? write_bulk_bodies(moved, command, allow, &bodies, failure)
+                     : extract == 1 ? write_fact_bodies(facts, artifact, &bodies, failure)
+                                    : write_route_bodies(ordered, command, allow, &bodies, failure)))
+    return 0;
   if (last == NULL && expect->kind == VALUE_TEXT) return write_denied(log, value, failure);
   Text head = {NULL, 0};
   Nat unused;
@@ -4787,17 +5037,23 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
                         values_item(items_value(values_item(write_field(text_of_cstring("ref"), resolved), NULL)),
                                     values_item(allow, NULL)),
                         value, failure);
+  if (list == 1 && bodies == NULL)
+    return write_answer(log, "outcomeAppended", values_item(items_value(NULL), values_item(allow, NULL)), value,
+                        failure);
   Nat split = same_text(tag, text_of_cstring("commandSplitParty"));
-  Nat count = split == 1 ? 2 : 1;
+  Nat count = split == 1 ? 2 : list == 1 ? read_count(bodies) : 1;
   const Values *entries;
   const Values *hashes;
   if (ready < count) {
     *left = ready;
     return fail_at(failure, position, eBudget);
   }
-  if (!write_entries(hash_fuel, ready, position, last != NULL ? text_value(head) : &null_value,
-                     write_field(text_of_cstring("actor"), write), body, count, command,
-                     split == 1 ? write_split_next : NULL, &entries, &hashes, left, failure))
+  const Value *prev = last != NULL ? text_value(head) : &null_value;
+  const Value *actor = write_field(text_of_cstring("actor"), write);
+  if (list == 1 ? !write_list_entries(hash_fuel, ready, position, prev, actor, bodies, command, &entries, &hashes,
+                                      left, failure)
+                : !write_entries(hash_fuel, ready, position, prev, actor, body, count, command,
+                                 split == 1 ? write_split_next : NULL, &entries, &hashes, left, failure))
     return 0;
   return write_answer(items_value(append_values(items, entries)), "outcomeAppended",
                       values_item(items_value(hashes), values_item(allow, NULL)), value, failure);

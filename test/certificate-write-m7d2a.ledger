@@ -1,0 +1,11 @@
+-- A successful Reassign checks the complete Party Refs in both payload fields.
+-- Keeping only the final Step instance bounds the certificate witness size.
+-- The compact program checks below the 4 GB cap.
+def s : Step := write
+  (cons (makeEntry none (actorAgent "a") (createsParty (makeParty partyOrg "b" none nil attrsEnd none none)))
+    (cons (makeEntry none (actorAgent "a") (createsAssignment
+      (makeAssignment (accountParty (refTo (hashOf "p"))) (refTo (hashOf "p")) roleOwner none none
+        (makeProvenance none none none)))) nil))
+  (makeWrite (actorAgent "a") none (commandReassign
+    (refTo (hashOf "eb5f9f22a4f768db87f4944e163de399e50d9378c44b5282d91fd184983230cd"))
+    (refTo (hashOf "a24c712e08eeacdeaa13dffaad45509194c115cc71e11950428db64e0b640ce3"))))

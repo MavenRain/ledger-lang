@@ -1415,3 +1415,135 @@ test('m7 commandAgree writes eventCommitmentSet and projects the Commitment agre
     ce.body.event.policy], [sha256(e1), human, 'eventCommitmentSet', subject, { status: 'commitmentAgreed' }, null]);
   assert.equal(term(agree.records).status, 'commitmentAgreed');
 });
+
+// M7 part D1: commandExtract, commandReassign, commandBulkReassign, commandRouteTerritory and
+// commandEndAssignment. Each source is an s11 probe draft; d1Hash holds the hashes that the probe gave.
+const d1Defs = lines => lines.join(' ') + ' ';
+const d1Hash = {
+  extract1: '23d25c3ae3dc060065afdaa1a1c38f774ef71a16c5d2f69f17b510be77aaaaf2',
+  extract2: '20af417c852c7ef2a46525fcf083decbd19cc1ad9630342bd9ab02842dbf5ef1',
+  reassign: '18dce0b74888ab924dc3687c13a8ff17141b41a4cdfe480957ea2dcf53838e2b',
+  route: '07809d7dee49815ffe32e453ba7ff130293a432891bd875f81d42b332075f175',
+  end: '598d4ba0da362a8e84e6808fa42520cc6dcdff638a27fd41944d3281b2264bf0',
+  g1: 'eb5f9f22a4f768db87f4944e163de399e50d9378c44b5282d91fd184983230cd',
+  a: 'b6662ae5994c203d73db78c6383636b6cff48e9442dd66eadfc8920cbd7b317f',
+  b: 'a24c712e08eeacdeaa13dffaad45509194c115cc71e11950428db64e0b640ce3',
+};
+const d1Write = (name, command) => `def ${name} : Step := write log1 (makeWrite (actorAgent "a") none (${command})) `;
+const d1Missing = field => ({ tag: 'outcomeDenied', policy: null, missing: [{ tag: 'missingField', field }] });
+const d1Record = (records, hash) => records.find(item => item.ref === hash).value;
+const d1Assignment = hash => ({ tag: 'subjectAssignment', assignment: { kind: 'kindAssignment', hash } });
+const m7dDefs = d1Defs([
+  'def ap : Artifact := makeArtifact artifactEmail "s" "u" "m" nil attrsEnd',
+  'def ae : Entry := makeEntry none (actorAgent "a") (createsArtifact ap)',
+  'def ar : Ref kindArtifact := refTo (hashOf "5df3e12b454d7c6e685391466f5d11ad08c94245217996619259eed1c3354bb1")',
+  'def zr : Ref kindArtifact := refTo (hashOf "z")',
+  'def p : Ref kindParty := refTo (hashOf "p")',
+  'def note : Event := makeEvent eventNoteAdded (subjectParty p) none none attrsEnd none',
+  'def rule : AclRule := makeAclRule "a" (cons permissionTransition nil) none',
+  'def need : Requirement := makeRequirement (some (cons "po" nil)) none none none',
+  'def pol : Policy := makePolicy "o" (scopeCommercial commercialDeal) none none need (cons rule nil) flagYes',
+  'def log1 : Log := (cons ae nil)',
+]);
+const m7d2Defs = d1Defs([
+  'def bp : Party := makeParty partyOrg "b" none nil attrsEnd none none',
+  'def be : Entry := makeEntry none (actorAgent "a") (createsParty bp)',
+  'def p : Ref kindParty := refTo (hashOf "p")',
+  'def q : Ref kindParty := refTo (hashOf "a24c712e08eeacdeaa13dffaad45509194c115cc71e11950428db64e0b640ce3")',
+  'def g1 : Assignment := makeAssignment (accountParty p) p roleOwner none none (makeProvenance none none none)',
+  'def g1e : Entry := makeEntry none (actorAgent "a") (createsAssignment g1)',
+  'def r : Ref kindAssignment := refTo (hashOf "eb5f9f22a4f768db87f4944e163de399e50d9378c44b5282d91fd184983230cd")',
+  'def z : Ref kindAssignment := refTo (hashOf "z")',
+  'def log1 : Log := (cons be (cons g1e nil))',
+]);
+const m7d3Defs = d1Defs([
+  'def ap : Party := makeParty partyOrg "a" none nil attrsEnd none none',
+  'def ae : Entry := makeEntry none (actorAgent "a") (createsParty ap)',
+  'def bp : Party := makeParty partyOrg "b" none nil attrsEnd none none',
+  'def be : Entry := makeEntry none (actorAgent "a") (createsParty bp)',
+  'def pr : Ref kindParty := refTo (hashOf "b6662ae5994c203d73db78c6383636b6cff48e9442dd66eadfc8920cbd7b317f")',
+  'def qr : Ref kindParty := refTo (hashOf "a24c712e08eeacdeaa13dffaad45509194c115cc71e11950428db64e0b640ce3")',
+  'def g1 : Assignment := makeAssignment (accountParty pr) pr roleOwner none none (makeProvenance none none none)',
+  'def g1e : Entry := makeEntry none (actorAgent "a") (createsAssignment g1)',
+  'def g2 : Assignment := makeAssignment (accountParty qr) pr roleOwner none none (makeProvenance none none none)',
+  'def g2e : Entry := makeEntry none (actorAgent "a") (createsAssignment g2)',
+]);
+const m7d4Defs = d1Defs([
+  'def p : Ref kindParty := refTo (hashOf "p")',
+  'def o : Ref kindParty := refTo (hashOf "o")',
+  'def g1 : Assignment := makeAssignment (accountParty p) p roleOwner none none (makeProvenance none none none)',
+  'def g1e : Entry := makeEntry none (actorAgent "a") (createsAssignment g1)',
+  'def r : Ref kindAssignment := refTo (hashOf "eb5f9f22a4f768db87f4944e163de399e50d9378c44b5282d91fd184983230cd")',
+  'def z : Ref kindAssignment := refTo (hashOf "z")',
+  'def log1 : Log := (cons g1e nil)',
+]);
+
+// Each fact gets the artifact (factOne) and the prev of the entry before it (the 2-entry chain, R79).
+test('m7 commandExtract appends each fact with the artifact and denies a Policy fact', () => {
+  const { ae, s1 } = named(m7dDefs +
+    d1Write('s1', 'commandExtract ar (cons (createsEvent note) (cons (createsEvent note) nil))'));
+  const [, f1, f2] = s1.log;
+  const artifact = { kind: 'kindArtifact', hash: sha256(ae) };
+  assert.deepEqual(s1.outcome, { tag: 'outcomeAppended', entries: [d1Hash.extract1, d1Hash.extract2], policy: null });
+  assert.deepEqual([f1.prev, f2.prev, sha256(f1), sha256(f2)], [sha256(ae), sha256(f1), d1Hash.extract1, d1Hash.extract2]);
+  assert.deepEqual([f1, f2].map(entry => entry.body.event.artifact), [artifact, artifact]);
+  const { s2, s3, s4 } = named(m7dDefs + d1Write('s2', 'commandExtract ar (cons (createsPolicy pol) nil)') +
+    d1Write('s3', 'commandExtract ar nil') + d1Write('s4', 'commandExtract zr nil'));
+  assert.deepEqual([s2.outcome, s3.outcome, s4.outcome],
+    [d1Missing('facts'), { tag: 'outcomeAppended', entries: [], policy: null }, d1Missing('artifact')]);
+});
+
+// The assignee needs a Party record (D80).
+test('m7 commandReassign writes eventAssignmentChanged and projects the assignee', () => {
+  const { s1, records } = projected(m7d2Defs + d1Write('s1', 'commandReassign r q'));
+  const moved = s1.log[2];
+  assert.deepEqual(s1.outcome, { tag: 'outcomeAppended', entries: [d1Hash.reassign], policy: null });
+  assert.deepEqual([moved.prev, moved.body.event.type, moved.body.event.subject],
+    [d1Hash.g1, 'eventAssignmentChanged', d1Assignment(d1Hash.g1)]);
+  assert.deepEqual(d1Record(records, d1Hash.g1).assignee, { kind: 'kindParty', hash: d1Hash.b });
+  const { s2, s3 } = named(m7d2Defs + d1Write('s2', 'commandReassign z q') + d1Write('s3', 'commandReassign r p'));
+  assert.deepEqual([s2.outcome, s3.outcome], [d1Missing('assignment'), d1Missing('assignee')]);
+});
+
+// g1 and g2 of pr move to qr; g3 of pr has endedBy and stays (D-M2).
+test('m7 commandBulkReassign moves each current Assignment of the source and not an ended one', () => {
+  const ended = 'def g3 : Assignment := makeAssignment (accountParty qr) pr roleOwner none ' +
+    '(some (refTo (hashOf "x"))) (makeProvenance none none none) ' +
+    'def g3e : Entry := makeEntry none (actorAgent "a") (createsAssignment g3) ';
+  const { g1e, g2e, g3e, s1, records } = projected(m7d3Defs + ended +
+    'def log1 : Log := (cons ae (cons be (cons g1e (cons g2e (cons g3e nil))))) ' +
+    d1Write('s1', 'commandBulkReassign pr qr'));
+  const moved = s1.log.slice(5);
+  assert.deepEqual(s1.outcome, { tag: 'outcomeAppended', entries: moved.map(entry => sha256(entry)), policy: null });
+  assert.deepEqual(moved.map(entry => entry.body.event.subject), [g1e, g2e].map(entry => d1Assignment(sha256(entry))));
+  assert.deepEqual([g1e, g2e, g3e].map(entry => d1Record(records, sha256(entry)).assignee.hash),
+    [d1Hash.b, d1Hash.b, d1Hash.a]);
+});
+
+// Route moves only the Assignments of the Account (D-M7); End sets endedBy (D-M6).
+test('m7 commandRouteTerritory and commandEndAssignment project the territory and endedBy', () => {
+  const routed = projected(m7d4Defs + d1Write('s1', 'commandRouteTerritory (accountParty p) "west"'));
+  const re = routed.s1.log[1];
+  assert.deepEqual(routed.s1.outcome, { tag: 'outcomeAppended', entries: [d1Hash.route], policy: null });
+  assert.deepEqual([re.body.event.type, re.body.event.subject, re.body.event.payload],
+    ['eventAssignmentChanged', d1Assignment(d1Hash.g1), { territory: 'west' }]);
+  assert.equal(d1Record(routed.records, d1Hash.g1).territory, 'west');
+  const ended = projected(m7d4Defs + d1Write('s3', 'commandEndAssignment r'));
+  assert.deepEqual(ended.s3.outcome, { tag: 'outcomeAppended', entries: [d1Hash.end], policy: null });
+  assert.deepEqual([ended.s3.log[1].body.event.type, d1Record(ended.records, d1Hash.g1).endedBy],
+    ['eventEnded', { kind: 'kindEvent', hash: d1Hash.end }]);
+  const { s2, s4 } = named(m7d4Defs + d1Write('s2', 'commandRouteTerritory (accountParty o) "west"') +
+    d1Write('s4', 'commandEndAssignment z'));
+  assert.deepEqual([s2.outcome, s4.outcome], [{ tag: 'outcomeAppended', entries: [], policy: null },
+    d1Missing('assignment')]);
+});
+
+// The kernel check of the program stays in `make certificate-check`.
+test('m7 certificate of the extract write checks', () => {
+  const program = fileURLToPath(new URL('../test/certificate-write-m7d.ledger', import.meta.url));
+  const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],
+    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.equal(certified.status, 0, certified.stderr);
+  assert.match(certified.stdout, /writeExtract/);
+  assert.match(certified.stdout, /listNext/);
+});

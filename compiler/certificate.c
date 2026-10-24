@@ -787,7 +787,11 @@ static const char *const bodies[] = {"Party", "Membership", "Commercial", "Commi
    MC-6): on a Membership, isPrimary and endedBy after e (primaryAfter and
    endedAfter, as program.c projection_moved and projection_ended), and no
    lastEvent. The MC-5 flip of the other Memberships is recordsPrimary
-   (certificate.def), which recordsAdd runs after this setter. */
+   (certificate.def), which recordsAdd runs after this setter. M7 part D
+   (deltas MD-6 and MD-7): on an Assignment, assignee and territory after e
+   (assigneeAfter and territoryAfter: the after Ref and the territory text of
+   an eventAssignmentChanged, as program.c projection_moved) and endedBy after
+   e (endedAfter, as program.c projection_ended). */
 static const char last_event[] =
     "\ndef ledgerLastEvent : Text -> Body -> Body -> Body := fun (h : Text) (e : Body) (b : Body) => case b as s1 in Body return Body with"
     " | createsParty (m : Party) => createsParty (case m as s2 in Party return Party with | makeParty (x0 : KindParty)"
@@ -808,7 +812,11 @@ static const char last_event[] =
     " (x5 : CommitmentStatus) (x6 : Option (Ref kindCommitment)) (x7 : Provenance)"
     " => makeCommitment x0 x1 x2 x3 x4 (agreedAfter e x5) x6 x7)"
     " | createsArtifact (m : Artifact) => createsArtifact m"
-    " | createsEvent (m : Event) => createsEvent m | createsAssignment (m : Assignment) => createsAssignment m"
+    " | createsEvent (m : Event) => createsEvent m"
+    " | createsAssignment (m : Assignment) => createsAssignment (case m as s2 in Assignment return Assignment with"
+    " | makeAssignment (x0 : Account) (x1 : Ref kindParty) (x2 : AssignmentRole) (x3 : Option Text)"
+    " (x4 : Option (Ref kindEvent)) (x5 : Provenance)"
+    " => makeAssignment x0 (assigneeAfter e x1) x2 (territoryAfter e x3) (endedAfter h e x4) x5)"
     " | createsPolicy (m : Policy) => createsPolicy m\n";
 
 /* The rows that ledgerUser_write cites, before the lowered source: the rows
