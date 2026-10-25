@@ -253,7 +253,7 @@ M2 is the read path (parts A, B and C).
   `commandExtract` with more than one entry for each write, and the 21
   Commands with no body (after M7 part A, 20; after part B1, 15;
   after part B2a, 13; after part B2b, 12; after part C1, 10; after
-  part C, 7).
+  part C, 7; after part D1, 2; after part D2, 0).
 
 ## M3
 
@@ -661,6 +661,8 @@ M7 gives the Commands their bodies and checks the policy on the write
 path. Part A checks each write that has a Body (`write_step` in
 compiler/checker.c), gives `commandTransition` its Body, and lets the
 projection set the stage (`projection_rows` in compiler/program.c).
+Parts B1 to D2 give a Body to the other Commands. After part D2, each
+Command has a Body.
 
 - The order. `write log x` makes the Body, checks the policy, compares
   the `expect`, then appends (the default of Q-M7-7).
@@ -962,6 +964,114 @@ projection set the stage (`projection_rows` in compiler/program.c).
   change, the Agree, the dry run before and after the Agree, a missing
   ref, and a `commandRecord` with the status text "bogus" on a
   Commercial and on a Commitment.
+- Part D1, the Assignment writes. `commandReassign a p` changes the
+  Assignment record `a`. If `a` names no Assignment record, the write
+  gives `outcomeDenied none [missingField "assignment"]`. If `p` names
+  no Party record, the write gives `outcomeDenied none [missingField
+  "assignee"]`. The write makes one ask of `permissionAssign` with no
+  fields on `subjectAssignment a` (delta MD-4). Then it appends one
+  `eventAssignmentChanged` Event on `a` with the payload `before` (the
+  old assignee) and `after` (`p`), and with the allowing policy (delta
+  MD-2). `commandEndAssignment a` has the same record check and the same
+  ask. It appends one `eventEnded` Event on `a` with no payload.
+- Part D1, the moves. `commandBulkReassign s t` gives `missingField
+  "source"` or `missingField "target"` when `s` or `t` names no Party
+  record. It appends one Reassign entry (`before = s`, `after = t`) for
+  each current Assignment (`endedBy` is `none`) with the assignee `s`,
+  in log order. It makes one ask of `permissionAssign` for each moved
+  Assignment, and one deny denies the write. `commandRouteTerritory k t`
+  makes one ask of `permissionAssign` on the Account `k` (the ask form
+  of `commandAssign`). It appends one `eventAssignmentChanged` Event
+  with the payload `territory` (`t`) for each current Assignment of `k`,
+  in log order. With no matching Assignment, each of the two writes
+  gives `outcomeAppended nil`, and the log does not change (delta MD-5).
+- Part D1, the Extract write. `commandExtract r facts` appends the facts
+  in order, one entry for each fact (ruling Q-M7-17 (a)). If `r` names
+  no Artifact record, the write gives `missingField "artifact"`. A
+  `createsPolicy` fact gives `outcomeDenied none [missingField "facts"]`
+  before any ask (delta MD-5). The write makes one ask of
+  `permissionWrite` for each fact, on the subject of the ask form of the
+  Command of that Body (`ASK_FACTS`). A `createsEvent` fact with the
+  artifact `none` gets the artifact `some r`. With no facts, the write
+  gives `outcomeAppended nil`, and the log does not change.
+- The projection of part D1 (deltas MD-6 and MD-7). An
+  `eventAssignmentChanged` Event with the key `after` sets the assignee
+  of the Assignment to the `after` Ref. An `eventAssignmentChanged`
+  Event with the key `territory` sets `territory` to `some` of that
+  text. An `eventEnded` Event sets `endedBy` of the Assignment to the
+  Event. A second End sets `endedBy` to the later Event (ruling Q-M7-20
+  (a)).
+- The certificate of part D1. `assignmentKey`, `assigneeKey`,
+  `sourceKey`, `targetKey`, `artifactKey`, `factsKey`, `recAssignment`,
+  `recArtifact`, `assignSubjs`, `hashKey`, `kindKey`, `partyKind`,
+  `refValue`, `endedAssignBody`, `reassignBody`, `writeEndAssign`,
+  `writeReassign`, `movedOf`, `movedMap`, `movedSubjs`, `subjJoin`,
+  `factSubj`, `factWalk`, `factSubjs`, `territoryKey`, `valueRef`,
+  `assigneeAfter`, `territoryAfter`, `listNext`, `writeNone`,
+  `writeEndL`, `writeAllowL`, `bulkBodies`, `writeBulk`, `routeMatch`,
+  `routeBodies`, `writeRoute`, `factsPolicy`, `factOne`, `factFill` and
+  `writeExtract`; and the `commandExtract`, `commandReassign`,
+  `commandEndAssignment`, `commandBulkReassign` and
+  `commandRouteTerritory` arms of `writeGo` (core/certificate.def). In
+  compiler/certificate.c, the Assignment arm of `ledgerLastEvent` sets
+  the assignee by `assigneeAfter`, `territory` by `territoryAfter` and
+  `endedBy` by `endedAfter`. CERT_PROGRAMS has four more programs, with
+  the kernel fc80b5d: test/certificate-write-m7d.ledger (the Extract
+  writes), test/certificate-write-m7d2.ledger (a Reassign of an
+  Assignment that is not in the log),
+  test/certificate-write-m7d2a.ledger (a Reassign) and
+  test/certificate-write-m7d4.ledger (the Route and End writes).
+- Limits of part D1. No certificate program has a `commandBulkReassign`
+  write (ruling Q-D-s13-1 (a)). test/certificate-write-m7d2a.ledger
+  keeps only its final Step, so that its certificate checks below 4 GB.
+- Tests of part D1: `test_m7_extract` and `test_m7_assignment` in
+  test/c-modules.c, and 5 m7 rows in test/paths.test.mjs. The tests have
+  the facts in order, the artifact fill, the Policy fact deny, no facts,
+  a missing Artifact, the Reassign, the End, a second End, a bulk move
+  with one ended Assignment, the Route, no match, the missing records
+  and the asks that deny.
+- Part D2, the approval writes. `commandRequestApproval c s` asks for
+  the approval of the stage `s` on the Commercial record `c`. If `c`
+  names no Commercial record, the write gives `outcomeDenied none
+  [missingField "commercial"]`. The write makes one ask of
+  `permissionWrite` with no fields on `subjectCommercial c`. Then it
+  appends one `eventApproval` Event on `c` with no parent and the
+  payload `request` (`s`). The request is not an approval for
+  `queryDryRun`.
+- `commandGrantApproval r` grants the request `r`. If `r` names no Event
+  record, or an Event that is not a parentless `eventApproval` with the key
+  `request`, the write gives `outcomeDenied none [missingField
+  "request"]` (delta MD-8). The write makes one ask of `permissionWrite`
+  with no fields on the subject of the request (`ASK_REQUEST`). Then it
+  appends one `eventApproval` Event on that subject, with the parent
+  `some r` and one payload field: the key is the principal of the write,
+  and the value is the stage of the request. `dry_approved` in
+  compiler/checker.c excludes parentless request Events. A grant by a
+  principal named `request` still counts as an approval because it has a
+  parent, and cannot itself be granted.
+- After part D2, each Command has a Body. `write_command_body` keeps its
+  NULL branch as the total check (delta MD-9).
+- The certificate of part D2. `requestKey`, `approvalRequest`, `approvalHas`,
+  `requestBody`, `recEvent`,
+  `eventSubj`, `requestOf`, `grantBody`, `writeRequest` and
+  `writeGrant`; and the `commandRequestApproval` and
+  `commandGrantApproval` arms of `writeGo` (core/certificate.def).
+  CERT_PROGRAMS has one more program, with the kernel fc80b5d:
+  test/certificate-write-m7d5.ledger (the grant of a request, then a
+  grant of a Commercial entry: `missingField "request"`). The request
+  write is in the C and node rows only (ruling Q-D-s21-1 (a)).
+- Tests of part D2: `test_m7_approval` in test/c-modules.c, and 2 more
+  m7 rows in test/paths.test.mjs. The tests have the request, the grant,
+  the dry run before and after the grant, and the grants of a Commercial
+  entry, of a note Event and of a grant Event (no `request` key). They
+  also have a request on a note Event (`missingField "commercial"`).
+  Each of these denied writes gives the same log.
+  `test_m7_approval_request_key` also checks the role and principal
+  `request`: the request leaves `missingApproval`, the grant satisfies it,
+  and granting that grant gives `missingField "request"` and the same log.
+  The row "m7 each Command has a Body" checks that the `writeGo` arms are the Command
+  constructors of core/ops.def in order, and that no arm is
+  `outcomeDenied none nil`.
 
 ## Remaining M0 work
 

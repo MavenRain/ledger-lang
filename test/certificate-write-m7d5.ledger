@@ -1,0 +1,18 @@
+-- M7 part D2 (MD-2, MD-8): the approval writes. The head holds the Commercial
+-- cp (cr) and its request rq: one eventApproval [request = negotiation]. RequestApproval
+-- is in the C and node rows only (Q-D-s21-1 (a)). s2 grants the request rq (rr): one
+-- eventApproval, parent rr,
+-- [a = negotiation]. s3 grants the Commercial entry (nr, the record gap arm: no Event):
+-- outcomeDenied, missingField "request". The block probe gives 19 hash
+-- blocks (cap 24). Its certificate checks in the kernel (make certificate-check).
+def pr : Ref kindParty := refTo (hashOf "p")
+def cp : Commercial := makeCommercial commercialDeal "p" pr "negotiation" none "USD" none statusOpen attrsEnd none
+def ce : Entry := makeEntry none (actorAgent "a") (createsCommercial cp)
+def cr : Ref kindCommercial := refTo (hashOf "62cdd307f52fd4defaada70f3f0c6edc13c41e2ccdc18070bc714a6221f9931d")
+def rq : Event := makeEvent eventApproval (subjectCommercial cr) none none (attrsField "request" (valueText "negotiation") attrsEnd) none
+def rqe : Entry := makeEntry none (actorAgent "a") (createsEvent rq)
+def rr : Ref kindEvent := refTo (hashOf "a7f8f233f7420a607ccdc91bfde8a91fae1bdab2f9cdc05b33f8aa4e8f68b456")
+def nr : Ref kindEvent := refTo (hashOf "62cdd307f52fd4defaada70f3f0c6edc13c41e2ccdc18070bc714a6221f9931d")
+def log1 : Log := (cons ce (cons rqe nil))
+def s2 : Step := write log1 (makeWrite (actorAgent "a") none (commandGrantApproval rr))
+def s3 : Step := write log1 (makeWrite (actorAgent "a") none (commandGrantApproval nr))

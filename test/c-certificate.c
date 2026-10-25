@@ -51,6 +51,36 @@ static int holds_digest(Text module, const char *hex) {
   return 0;
 }
 
+/* Requests and grants remain distinct when "request" is a role or principal. */
+static void test_approval_requests(const char *kernel, unsigned row) {
+  Text source = text(
+      "def commercial : Ref kindCommercial := refTo (hashOf \"\")\n"
+      "def pending : Event := makeEvent eventApproval (subjectCommercial commercial) none none "
+      "(attrsField \"request\" (valueText \"q\") attrsEnd) none\n"
+      "def granted : Event := makeEvent eventApproval (subjectCommercial commercial) none "
+      "(some (refTo (hashOf \"\"))) (attrsField \"request\" (valueText \"q\") attrsEnd) none\n");
+  Text output, module, refusal;
+  Failure failure;
+  assert(compile_program(source, &output, &failure));
+  assert(certificate_module(source, output, NULL, &module, &refusal));
+  TextBuilder checked = builder_new();
+  builder_append(&checked, module);
+  builder_append(&checked, text(
+      "\ndef ledgerPendingApproval : MechEq Flag "
+      "(approvalHas (cons (makeRecord textEnd (createsEvent ledgerUser_pending)) nil) "
+      "(subjectCommercial ledgerUser_commercial) requestKey) flagNo := mechRefl Flag flagNo\n"
+      "def ledgerGrantedApproval : MechEq Flag "
+      "(approvalHas (cons (makeRecord textEnd (createsEvent ledgerUser_granted)) nil) "
+      "(subjectCommercial ledgerUser_commercial) requestKey) flagYes := mechRefl Flag flagYes\n"
+      "def ledgerNoRequest : Option Value := none\n"
+      "def ledgerSomeRequest : Option Value := some (valueText (textByte 113 textEnd))\n"
+      "def ledgerGrantNotRequest : MechEq (Option Value) (requestOf ledgerUser_granted) ledgerNoRequest "
+      ":= mechRefl (Option Value) ledgerNoRequest\n"
+      "def ledgerPendingRequest : MechEq (Option Value) (requestOf ledgerUser_pending) "
+      "ledgerSomeRequest := mechRefl (Option Value) ledgerSomeRequest\n"));
+  check_module(kernel, builder_text(&checked), row, 0);
+}
+
 int main(int argc, char **argv) {
   assert(argc == 2);
   static const char *const programs[] = {
@@ -123,6 +153,8 @@ int main(int argc, char **argv) {
         "ledgerUser_body := mechRefl Body ledgerUser_body\n"));
     check_module(argv[1], builder_text(&checked), count++, 0);
   }
+
+  test_approval_requests(argv[1], count++);
 
   /* A non-text stage payload leaves the projected Commercial stage intact
      in both the evaluator and the certificate. */

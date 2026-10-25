@@ -3983,7 +3983,7 @@ static void test_m1_write(void) {
   assert(left == 4);
   assert(same_text(printed(step), text("{\"log\":[{\"prev\":null,\"actor\":\"p1\",\"body\":{\"tag\":\"createsEvent\","
                                        "\"event\":\"e1\"}}],\"outcome\":{\"tag\":\"outcomeDenied\",\"policy\":null,"
-                                       "\"missing\":[]}}")));
+                                       "\"missing\":[{\"tag\":\"missingField\",\"field\":\"request\"}]}}")));
   assert(!write_step(1000, 1, 3, &empty_log, &append, &step, &left, &failure));
   assert(left == 0 && failure.position == 3 && same_text(failure.message, eBudget));
   assert(!write_step(1000, 0, 3, logged, &no_body, &step, &left, &failure));
@@ -8158,6 +8158,173 @@ static void test_m7_stage_payload(void) {
   }
 }
 
+/* M7 part D2 (PLAN edit 7; MD-2, MD-8, D109): the approvals on the
+   RuleLog. The policy of entry 1 wants the role an here: an is the principal
+   key of the grant by an. commandRequestApproval c1 w by an appends
+   eventApproval [request = w] on c1 with no parent, and the request is no
+   approval for the dry run. commandGrantApproval of that request appends
+   eventApproval with the parent request and [an = w]; dry_approved sees it,
+   so the dry run of c1 to w wants the field z and the commitmentPrice only.
+   A grant of the Commercial entry (the record gap), a grant of the note
+   Event entry 3 (MD-8: not eventApproval) and a grant of the grant Event
+   (MD-8: no "request" key; D-M9) give missingField "request" and the same
+   log. A request of the note Event entry 3 (a record, not a Commercial: the
+   record gap; D-M10) gives missingField "commercial" and the same log. */
+static void test_m7_approval(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  RuleLog storage;
+  rule_test_log(&storage, &left, &failure);
+  storage.role_cells[0].head = &storage.an;
+  Value kind_event = account_text("kindEvent");
+  Value approval = account_text("eventApproval");
+  Value commercial_hash = {.kind = VALUE_TEXT, .text = storage.hashes[0]};
+  Value note_hash = {.kind = VALUE_TEXT, .text = storage.hashes[3]};
+  Value request_hash, request_ref, commercial_ref, note_ref, grant_hash, grant_ref;
+  Attrs request_fields[2], commercial_fields[2], note_fields[2], grant_fields[2];
+  assign_ref(commercial_fields, &commercial_ref, &kind_event, &commercial_hash);
+  assign_ref(note_fields, &note_ref, &kind_event, &note_hash);
+  Tagged actor_storage, commands[4];
+  WriteTwo writes[6];
+  QueryTwo queries[4];
+  const Value *an = tagged(&actor_storage, "actorAgent", "name", &storage.an);
+  const LType *answer = arrow_result(read_path_type());
+  const Value *value = NULL;
+  const Value *steps[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
+  /* Request c1 w by an. */
+  assert(write_step(1000, 5, 3, &storage.log,
+                    write_of(&writes[0], an,
+                             query_two(&queries[0], "commandRequestApproval", "commercial", &storage.c1_ref, "stage",
+                                       &storage.stage)),
+                    &steps[0], &left, &failure));
+  const Value *requested = pipeline_field(steps[0], "log");
+  assert(left == 3 && verdict_is(pipeline_field(steps[0], "outcome"), "outcomeAppended", &storage.hashes[2]) == 1 &&
+         read_count(requested->items) == 5);
+  const Value *request = pipeline_field(pipeline_field(pipeline_at(requested, 4), "body"), "event");
+  const Value *stage = pipeline_field(pipeline_field(request, "payload"), "request");
+  assert(same_text(pipeline_field(request, "type")->text, approval.text) == 1);
+  assert(stage->kind == VALUE_TEXT && same_text(stage->text, storage.stage.text) == 1);
+  assert(pipeline_field(request, "parent")->kind == VALUE_NULL);
+  /* The request alone: the dry run of c1 to w still wants the role an. */
+  assert(read_step(1000, 20, 7, answer, requested,
+                   query_two(&queries[1], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &value, &left, &failure));
+  assert(value->kind == VALUE_ITEMS && read_count(value->items) == 3);
+  assert(missing_is(value->items->tail->tail->head, "missingApproval", "role", "an") == 1);
+  /* Grant the request by an: the parent and the payload [an = w]. */
+  Text hash;
+  left = 100;
+  assert(entry_hash(1000, 1, 0, pipeline_at(requested, 4), &hash, &left, &failure));
+  request_hash = (Value){.kind = VALUE_TEXT, .text = hash};
+  assign_ref(request_fields, &request_ref, &kind_event, &request_hash);
+  assert(write_step(1000, 5, 3, requested,
+                    write_of(&writes[1], an, tagged(&commands[0], "commandGrantApproval", "request", &request_ref)),
+                    &steps[1], &left, &failure));
+  const Value *granted = pipeline_field(steps[1], "log");
+  assert(left == 3 && verdict_is(pipeline_field(steps[1], "outcome"), "outcomeAppended", &storage.hashes[2]) == 1 &&
+         read_count(granted->items) == 6);
+  const Value *grant = pipeline_field(pipeline_field(pipeline_at(granted, 5), "body"), "event");
+  const Value *parent = pipeline_field(grant, "parent");
+  const Value *key = pipeline_field(pipeline_field(grant, "payload"), "an");
+  assert(same_text(pipeline_field(grant, "type")->text, approval.text) == 1);
+  assert(parent->kind == VALUE_ATTRS && same_text(pipeline_field(parent, "hash")->text, hash) == 1);
+  assert(key->kind == VALUE_TEXT && same_text(key->text, storage.stage.text) == 1);
+  /* dry_approved sees the grant: the field z and the commitmentPrice only. */
+  assert(read_step(1000, 20, 7, answer, granted,
+                   query_two(&queries[2], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &value, &left, &failure));
+  assert(value->kind == VALUE_ITEMS && read_count(value->items) == 2);
+  assert(missing_is(value->items->head, "missingField", "field", "z") == 1);
+  assert(missing_is(value->items->tail->head, "missingCommitment", "kind", "commitmentPrice") == 1);
+  /* The grant Event: eventApproval [an = w] with no "request" key. */
+  Text granted_hash;
+  left = 100;
+  assert(entry_hash(1000, 1, 0, pipeline_at(granted, 5), &granted_hash, &left, &failure));
+  grant_hash = (Value){.kind = VALUE_TEXT, .text = granted_hash};
+  assign_ref(grant_fields, &grant_ref, &kind_event, &grant_hash);
+  /* A grant of the Commercial entry, of the note Event and of the grant
+     Event: missingField "request". A request of the note Event: missingField
+     "commercial". Each gives the same log. */
+  const Value *const denied[4] = {
+      tagged(&commands[1], "commandGrantApproval", "request", &commercial_ref),
+      tagged(&commands[2], "commandGrantApproval", "request", &note_ref),
+      tagged(&commands[3], "commandGrantApproval", "request", &grant_ref),
+      query_two(&queries[3], "commandRequestApproval", "commercial", &note_ref, "stage", &storage.stage)};
+  const char *const fields[4] = {"request", "request", "request", "commercial"};
+  for (Nat at = 0; at < 4; at++) {
+    assert(write_step(1000, 5, 3, granted, write_of(&writes[2 + at], an, denied[at]), &steps[2 + at], &left, &failure));
+    const Value *outcome = pipeline_field(steps[2 + at], "outcome");
+    const Value *missing = pipeline_field(outcome, "missing");
+    assert(same_text(pipeline_field(outcome, "tag")->text, text("outcomeDenied")) == 1 &&
+           read_count(pipeline_field(steps[2 + at], "log")->items) == 6);
+    assert(missing->kind == VALUE_ITEMS && read_count(missing->items) == 1 &&
+           missing_is(missing->items->head, "missingField", "field", fields[at]) == 1);
+  }
+}
+
+/* "request" can name both an approval role and a principal. Requests do
+   not satisfy that role, and grants cannot themselves be granted. */
+static void test_m7_approval_request_key(void) {
+  Nat left = 0;
+  Failure failure = {0, {NULL, 0}, {NULL, 0}};
+  RuleLog storage;
+  rule_test_log(&storage, &left, &failure);
+  Value role = account_text("request");
+  storage.role_cells[0].head = &role;
+  storage.rule_fields[0].value = &role;
+  Tagged actor_storage, commands[2];
+  WriteTwo writes[3];
+  QueryTwo request_command, queries[2];
+  const Value *actor = tagged(&actor_storage, "actorAgent", "name", &role);
+  const Value *step, *result;
+  assert(write_step(1000, 5, 3, &storage.log,
+                    write_of(&writes[0], actor,
+                             query_two(&request_command, "commandRequestApproval", "commercial", &storage.c1_ref,
+                                       "stage", &storage.stage)),
+                    &step, &left, &failure));
+  const Value *requested = pipeline_field(step, "log");
+  assert(read_count(requested->items) == 5);
+  assert(read_step(1000, 20, 7, arrow_result(read_path_type()), requested,
+                   query_two(&queries[0], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &result, &left, &failure));
+  assert(read_count(result->items) == 3);
+  assert(missing_is(result->items->tail->tail->head, "missingApproval", "role", "request") == 1);
+
+  Text request_hash, grant_hash;
+  left = 100;
+  assert(entry_hash(1000, 1, 0, pipeline_at(requested, 4), &request_hash, &left, &failure));
+  Value kind_event = account_text("kindEvent");
+  Value request_key = {.kind = VALUE_TEXT, .text = request_hash};
+  Value request_ref, grant_ref;
+  Attrs request_fields[2], grant_fields[2];
+  assign_ref(request_fields, &request_ref, &kind_event, &request_key);
+  assert(write_step(1000, 5, 3, requested,
+                    write_of(&writes[1], actor,
+                             tagged(&commands[0], "commandGrantApproval", "request", &request_ref)),
+                    &step, &left, &failure));
+  const Value *granted = pipeline_field(step, "log");
+  assert(read_count(granted->items) == 6);
+  assert(read_step(1000, 20, 7, arrow_result(read_path_type()), granted,
+                   query_two(&queries[1], "queryDryRun", "commercial", &storage.c1_ref, "stage", &storage.stage),
+                   &result, &left, &failure));
+  assert(read_count(result->items) == 2);
+
+  left = 100;
+  assert(entry_hash(1000, 1, 0, pipeline_at(granted, 5), &grant_hash, &left, &failure));
+  Value grant_key = {.kind = VALUE_TEXT, .text = grant_hash};
+  assign_ref(grant_fields, &grant_ref, &kind_event, &grant_key);
+  assert(write_step(1000, 5, 3, granted,
+                    write_of(&writes[2], actor,
+                             tagged(&commands[1], "commandGrantApproval", "request", &grant_ref)),
+                    &step, &left, &failure));
+  const Value *outcome = pipeline_field(step, "outcome");
+  const Value *missing = pipeline_field(outcome, "missing");
+  assert(same_text(pipeline_field(outcome, "tag")->text, text("outcomeDenied")) == 1);
+  assert(read_count(pipeline_field(step, "log")->items) == 6);
+  assert(read_count(missing->items) == 1);
+  assert(missing_is(missing->items->head, "missingField", "field", "request") == 1);
+}
+
 int main(void) {
   test_runtime();
   test_lexer();
@@ -8268,6 +8435,8 @@ int main(void) {
   test_m7_commitment();
   test_m7_extract();
   test_m7_assignment();
+  test_m7_approval();
+  test_m7_approval_request_key();
   puts("C module tests passed");
   return 0;
 }

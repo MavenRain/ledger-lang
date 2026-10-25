@@ -327,8 +327,24 @@ Encoding rules:
   from the text of a `CommercialStatus` tag). Part C3 gives a Body to
   `commandAgree` (an `eventCommitmentSet` Event with the `status` text
   "commitmentAgreed"; the projection sets `status` of the Commitment
-  to `commitmentAgreed`). The certificate covers part A, part B1, part
-  B2a, part B2b and part C (docs/STATUS.md `## M7`).
+  to `commitmentAgreed`). Part D1 gives a Body to `commandExtract` (one
+  entry for each fact, in order; a fact Event with no artifact gets the
+  Artifact of the write, and a Policy fact denies the write), to
+  `commandReassign` and `commandBulkReassign` (an
+  `eventAssignmentChanged` Event with the assignees `before` and
+  `after`; the bulk write moves each current Assignment of the source),
+  to `commandRouteTerritory` (an `eventAssignmentChanged` Event with the
+  `territory` for each current Assignment of the Account) and to
+  `commandEndAssignment` (an `eventEnded` Event; the projection sets
+  `endedBy` to the Event). Part D2 gives a Body to
+  `commandRequestApproval` (an `eventApproval` Event with the `request`
+  stage) and to `commandGrantApproval` (an `eventApproval` Event with
+  the request as its parent and the principal as its key). A parentless
+  approval Event with the `request` key is a request, so it does not
+  satisfy an approval role. An Event with a parent is not a request,
+  including a grant whose principal is named `request`. After part
+  D2, each Command has a Body. The certificate covers part A, part B1,
+  part B2a, part B2b, part C and part D (docs/STATUS.md `## M7`).
 
 ## 7. Milestones
 

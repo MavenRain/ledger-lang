@@ -196,10 +196,11 @@ test('the builtin write is the body of a WritePath definition', () => {
   assert.deepEqual(instances('def w : WritePath := write'), []);
 });
 
-test('write of a Command with no Body gives outcomeDenied and the same log', () => {
+test('write of a grant whose request is not a record gives missingField request and the same log', () => {
   const grant = 'def request : Ref kindEvent := refTo (hashOf "event-request") ' +
     'def grant : Write := makeWrite (actorHuman acme) none (commandGrantApproval request) ';
-  assert.deepEqual(values(`${actors}${grant}def s : Step := write history grant`).at(-1), ['s', denied]);
+  assert.deepEqual(values(`${actors}${grant}def s : Step := write history grant`).at(-1),
+    ['s', { log: [], outcome: { tag: 'outcomeDenied', policy: null, missing: [{ tag: 'missingField', field: 'request' }] } }]);
 });
 
 test('write appends one entry and gives the hash of the entry', () => {
@@ -1539,6 +1540,51 @@ test('m7 commandRouteTerritory and commandEndAssignment project the territory an
 });
 
 // The kernel check of the program stays in `make certificate-check`.
+test('m7 commandRequestApproval writes eventApproval and commandGrantApproval grants it', () => {
+  const dealLog = 'def d1 : Commercial := makeCommercial commercialDeal "D" acme "q" (some 1000) "U" none statusOpen ' +
+    'attrsEnd none def e1 : Entry := makeEntry none (actorAgent "a") (createsCommercial d1) ';
+  const { e1 } = named(`${actors}${dealLog}`);
+  const ref = `(refTo (hashOf "${sha256(e1)}"))`;
+  const subject = { tag: 'subjectCommercial', commercial: { kind: 'kindCommercial', hash: sha256(e1) } };
+  const request = projected(`${actors}${dealLog}` +
+    m7Edit('(cons e1 nil)', `commandRequestApproval ${ref} "negotiation"`));
+  const re = request.s.log[1];
+  assert.deepEqual(request.s, appended([e1, re], re));
+  assert.deepEqual([re.prev, re.actor, re.body.event.type, re.body.event.subject, re.body.event.artifact,
+    re.body.event.parent, re.body.event.payload, re.body.event.policy],
+  [sha256(e1), human, 'eventApproval', subject, null, null, { request: 'negotiation' }, null]);
+  const requestEntry = `def re : Entry := makeEntry (some (hashOf "${sha256(e1)}")) (actorHuman acme) (createsEvent ` +
+    `(makeEvent eventApproval (subjectCommercial ${ref}) none none (attrsField "request" (valueText "negotiation") ` +
+    'attrsEnd) none)) ';
+  const noteEntry = `def ne : Entry := makeEntry (some (hashOf "${sha256(e1)}")) (actorHuman acme) (createsEvent ` +
+    `(makeEvent eventNoteAdded (subjectCommercial ${ref}) none none attrsEnd none)) `;
+  const grantOf = (entry, log, hash) => projected(`${actors}${dealLog}${entry}` +
+    m7Edit(log, `commandGrantApproval (refTo (hashOf "${hash}"))`));
+  const grant = grantOf(requestEntry, '(cons e1 (cons re nil))', sha256(re));
+  assert.deepEqual(grant.re, re);
+  const ge = grant.s.log[2];
+  assert.deepEqual(grant.s, appended([e1, re, ge], ge));
+  assert.deepEqual([ge.prev, ge.actor, ge.body.event.type, ge.body.event.subject, ge.body.event.parent,
+    ge.body.event.payload], [sha256(re), human, 'eventApproval', subject, { kind: 'kindEvent', hash: sha256(re) },
+    { 'party-acme': 'negotiation' }]);
+  const denied = log => ({ log, outcome: { tag: 'outcomeDenied', policy: null,
+    missing: [{ tag: 'missingField', field: 'request' }] } });
+  assert.deepEqual(grantOf(requestEntry, '(cons e1 (cons re nil))', sha256(e1)).s, denied([e1, re]));
+  const { ne } = named(`${actors}${dealLog}${noteEntry}`);
+  assert.deepEqual(grantOf(noteEntry, '(cons e1 (cons ne nil))', sha256(ne)).s, denied([e1, ne]));
+});
+
+test('m7 each Command has a Body', async () => {
+  const ops = await readFile(new URL('../core/ops.def', import.meta.url), 'utf8');
+  const certificate = await readFile(new URL('../core/certificate.def', import.meta.url), 'utf8');
+  const go = certificate.split('\n').find(line => line.startsWith('DEFINE(writeGo, '));
+  const arms = go.slice(go.indexOf(' with ') + 6).split(/\| (?=command\w+ )/).map(arm => arm.trim())
+    .filter(arm => arm !== '');
+  assert.deepEqual(arms.map(arm => arm.split(' ')[0]),
+    [...ops.matchAll(/CONSTRUCTOR\((command\w+), Command\)/g)].map(found => found[1]));
+  assert.deepEqual(arms.filter(arm => arm.includes('outcomeDenied none nil')), []);
+});
+
 test('m7 certificate of the extract write checks', () => {
   const program = fileURLToPath(new URL('../test/certificate-write-m7d.ledger', import.meta.url));
   const certified = spawnSync(fileURLToPath(new URL('../build/ledgerc', import.meta.url)), ['--certificate', program],

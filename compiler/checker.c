@@ -4092,13 +4092,24 @@ static Nat dry_agreed(const Values *records, Text commercial, Text kind) {
   return agreed == 1 || dry_agreed(records->tail, commercial, kind) == 1;
 }
 
+/* A request has no parent and the payload key "request". A grant has a
+   parent, even when the granting principal is named "request". */
+static Nat approval_request(const Value *record) {
+  if (record == NULL) return 0;
+  const Value *payload = commitment_field(record, "payload");
+  return record_is(record, "Event") == 1 &&
+         same_text(commitment_tag(commitment_field(record, "type")), text_of_cstring("eventApproval")) == 1 &&
+         commitment_field(record, "parent")->kind == VALUE_NULL &&
+         attrs_has(payload->kind == VALUE_ATTRS ? payload->attrs : NULL, text_of_cstring("request")) == 1;
+}
+
 /* Ruling Q-M6-23 (1): 1 when records hold an eventApproval Event record on
-   subject whose payload has the key role. */
+   subject whose payload has the key role. Approval requests do not count. */
 static Nat dry_approved(const Values *records, const Value *subject, Text role) {
   if (records == NULL) return 0;
   const Value *record = records->head;
   const Value *payload = commitment_field(record, "payload");
-  Nat approved = record_is(record, "Event") == 1 &&
+  Nat approved = approval_request(record) != 1 && record_is(record, "Event") == 1 &&
                  same_text(commitment_tag(commitment_field(record, "type")), text_of_cstring("eventApproval")) == 1 &&
                  subject_same(commitment_field(record, "subject"), subject) == 1 &&
                  attrs_has(payload->kind == VALUE_ATTRS ? payload->attrs : NULL, role) == 1;
@@ -4182,7 +4193,8 @@ static Text actor_text(const Value *actor) {
    ref. Delta MD-4: an Assignment ref. Delta MD-3: the current Assignments
    of a Party ref (ASK_MOVED, commandBulkReassign). Delta MD-4: the facts
    of commandExtract (ASK_FACTS: each fact by the ask form of the Command
-   whose Body is that fact). */
+   whose Body is that fact). Delta MD-4 (D2, D109): the subject of the
+   request Event record of commandGrantApproval (ASK_REQUEST). */
 typedef enum {
   ASK_NONE,
   ASK_PARTY,
@@ -4194,7 +4206,8 @@ typedef enum {
   ASK_COMMITMENT,
   ASK_ASSIGNMENT,
   ASK_MOVED,
-  ASK_FACTS
+  ASK_FACTS,
+  ASK_REQUEST
 } WriteAskForm;
 
 /* One row of the ask table: the Command, the Permission tag, the field of
@@ -4208,7 +4221,7 @@ typedef struct {
   WriteAskForm form;
 } WriteAsk;
 
-enum { WRITE_ASKS = 27 };
+enum { WRITE_ASKS = 29 };
 
 static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandResolveParty", "permissionWrite", "", "", ASK_NONE},
@@ -4237,7 +4250,9 @@ static const WriteAsk write_asks[WRITE_ASKS] = {
     {"commandEndAssignment", "permissionAssign", "assignment", "", ASK_ASSIGNMENT},
     {"commandRouteTerritory", "permissionAssign", "subject", "", ASK_ACCOUNT},
     {"commandBulkReassign", "permissionAssign", "source", "", ASK_MOVED},
-    {"commandExtract", "permissionWrite", "facts", "", ASK_FACTS}};
+    {"commandExtract", "permissionWrite", "facts", "", ASK_FACTS},
+    {"commandRequestApproval", "permissionWrite", "commercial", "", ASK_COMMERCIAL},
+    {"commandGrantApproval", "permissionWrite", "request", "", ASK_REQUEST}};
 
 /* The row of write_asks that names the Command tag, from at on; WRITE_ASKS
    when no row names it. */
@@ -4307,7 +4322,8 @@ static const Values *write_moved_assignments(const Values *ordered, const Value 
 
 /* Delta MD-4: write_fact_subjects is after write_values_join; write_ask_list
    uses it for ASK_FACTS. */
-static int write_fact_subjects(const Values *facts, const Values *ordered, const Values **subjects, Failure *failure);
+static int write_fact_subjects(const Values *facts, const Values *ordered, const Located *records,
+                               const Values **subjects, Failure *failure);
 
 /* Delta A-6: the subjects that the Command of row at asks for: one Subject,
    the Subjects of the Account list of commandIngest, or one null (no
@@ -4316,9 +4332,11 @@ static int write_fact_subjects(const Values *facts, const Values *ordered, const
    of each record of write_moved_assignments (ordered is the records in log
    order), or one null when there is none (Q-D-s4-1 (a)). Delta MD-4: for
    commandExtract (ASK_FACTS), the subjects of each fact in order
-   (write_fact_subjects), or one null when there is no fact. */
-static int write_ask_list(const Value *command, Nat at, const Values *ordered, const Values **subjects,
-                          Failure *failure) {
+   (write_fact_subjects), or one null when there is no fact. Delta MD-4 (D2,
+   D109): for commandGrantApproval (ASK_REQUEST), the subject of the Event
+   record of records that the Ref names (null for none). */
+static int write_ask_list(const Value *command, Nat at, const Values *ordered, const Located *records,
+                          const Values **subjects, Failure *failure) {
   WriteAskForm form = at < WRITE_ASKS ? write_asks[at].form : ASK_NONE;
   const Value *field = at < WRITE_ASKS ? write_field(text_of_cstring(write_asks[at].field), command) : &null_value;
   const Value *value = at < WRITE_ASKS && write_asks[at].inner[0] != '\0'
@@ -4333,7 +4351,12 @@ static int write_ask_list(const Value *command, Nat at, const Values *ordered, c
   }
   if (form == ASK_ACCOUNTS) return write_subjects(items_of(value), ASK_ACCOUNT, subjects, failure);
   if (form == ASK_MOVED) return write_subjects(moved, ASK_MOVED, subjects, failure);
-  if (form == ASK_FACTS) return write_fact_subjects(items_of(value), ordered, subjects, failure);
+  if (form == ASK_FACTS) return write_fact_subjects(items_of(value), ordered, records, subjects, failure);
+  if (form == ASK_REQUEST) {
+    const Value *named = record_named(records, write_field(kRefHash(), value)->text);
+    *subjects = values_item(named != NULL ? commitment_field(named, "subject") : &null_value, NULL);
+    return 1;
+  }
   if (!write_subject(value, form, &subject, failure)) return 0;
   *subjects = values_item(subject, NULL);
   return 1;
@@ -4359,15 +4382,16 @@ static Nat write_fact_ask(const Value *fact, Nat at) {
    each by the ask form of the Command whose Body is that fact
    (write_fact_ask; the Body field has the name of the Command field).
    ordered is the records in log order. */
-static int write_fact_subjects(const Values *facts, const Values *ordered, const Values **subjects, Failure *failure) {
+static int write_fact_subjects(const Values *facts, const Values *ordered, const Located *records,
+                               const Values **subjects, Failure *failure) {
   if (facts == NULL) {
     *subjects = NULL;
     return 1;
   }
   const Values *these;
   const Values *rest;
-  if (!write_ask_list(facts->head, write_fact_ask(facts->head, 0), ordered, &these, failure) ||
-      !write_fact_subjects(facts->tail, ordered, &rest, failure))
+  if (!write_ask_list(facts->head, write_fact_ask(facts->head, 0), ordered, records, &these, failure) ||
+      !write_fact_subjects(facts->tail, ordered, records, &rest, failure))
     return 0;
   *subjects = write_values_join(these, rest);
   return 1;
@@ -4376,18 +4400,18 @@ static int write_fact_subjects(const Values *facts, const Values *ordered, const
 /* Delta A-6 (MB-10): the subjects of row at and of each next row of
    write_asks that names the Command tag, in row order (commandMergeParties:
    keep, then drop). ordered (the records in log order) goes to
-   write_ask_list (delta MD-3). */
-static int write_ask_rows(const Value *command, Text tag, Nat at, const Values *ordered, const Values **subjects,
-                          Failure *failure) {
+   write_ask_list (delta MD-3), and records too (D109). */
+static int write_ask_rows(const Value *command, Text tag, Nat at, const Values *ordered, const Located *records,
+                          const Values **subjects, Failure *failure) {
   Nat next = at < WRITE_ASKS ? write_ask_at(tag, at + 1) : WRITE_ASKS;
   const Values *these;
   const Values *rest;
-  if (!write_ask_list(command, at, ordered, &these, failure)) return 0;
+  if (!write_ask_list(command, at, ordered, records, &these, failure)) return 0;
   if (next >= WRITE_ASKS) {
     *subjects = these;
     return 1;
   }
-  if (!write_ask_rows(command, tag, next, ordered, &rest, failure)) return 0;
+  if (!write_ask_rows(command, tag, next, ordered, records, &rest, failure)) return 0;
   *subjects = write_values_join(these, rest);
   return 1;
 }
@@ -4474,14 +4498,16 @@ static int write_transition_body(const Value *subject, const Value *current, con
 /* M7 delta MB-4 (A-2): the Commands that change a record: the Command, its
    Ref field, and the family of the record that the Ref names. Delta MD-3:
    commandExtract needs the Artifact record of its field "artifact" (R56:
-   record_is "Artifact"). */
+   record_is "Artifact"). D2: commandRequestApproval needs the Commercial
+   record of "commercial" and commandGrantApproval the Event record of
+   "request". */
 typedef struct {
   const char *command;
   const char *field;
   const char *family;
 } WriteRecord;
 
-enum { WRITE_RECORDS = 21 };
+enum { WRITE_RECORDS = 23 };
 
 static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandTransition", "commercial", "Commercial"}, {"commandAddIdentifier", "party", "Party"},
@@ -4497,7 +4523,9 @@ static const WriteRecord write_records[WRITE_RECORDS] = {
     {"commandEndAssignment", "assignment", "Assignment"},
     {"commandBulkReassign", "source", "Party"},
     {"commandBulkReassign", "target", "Party"},
-    {"commandExtract", "artifact", "Artifact"}};
+    {"commandExtract", "artifact", "Artifact"},
+    {"commandRequestApproval", "commercial", "Commercial"},
+    {"commandGrantApproval", "request", "Event"}};
 
 /* The row of write_records that names the Command tag, from at on;
    WRITE_RECORDS when no row names it. */
@@ -4528,6 +4556,31 @@ static int write_missing(const Value *log, Text field, const Value **value, Fail
   const Value *missing;
   return write_value("Missing", "missingField", values_item(text_value(field), NULL), &missing, failure) &&
          write_refused(log, &null_value, values_item(missing, NULL), value, failure);
+}
+
+/* Delta MD-2 (Q-M7-16 (a)): the Body of commandRequestApproval c stage on
+   the subject (subjectCommercial c): createsEvent of makeEvent
+   eventApproval subject none none [request = stage] policy. */
+static int write_request_body(const Value *command, const Value *subject, const Value *policy, const Value **body,
+                              Failure *failure) {
+  Attrs *request = arena_alloc(sizeof *request);
+  *request = (Attrs){text_of_cstring("request"), write_field(text_of_cstring("stage"), command), NULL};
+  return write_record_event("eventApproval", subject, request, policy, body, failure);
+}
+
+/* Delta MD-2 (Q-M7-16 (a)): the Body of commandGrantApproval r by the
+   principal key on the request Event record current: createsEvent of
+   makeEvent eventApproval (the subject of current) none (some r) [key = the
+   "request" value of the payload of current] policy. */
+static int write_grant_body(Text key, const Value *command, const Value *current, const Value *policy,
+                            const Value **body, Failure *failure) {
+  const Value *made;
+  Attrs *grant = arena_alloc(sizeof *grant);
+  *grant = (Attrs){key, write_field(text_of_cstring("request"), commitment_field(current, "payload")), NULL};
+  return write_value("EventType", "eventApproval", NULL, &made, failure) &&
+         write_event_body(made, commitment_field(current, "subject"), &null_value,
+                          write_field(text_of_cstring("request"), command),
+                          make_value((Value){.kind = VALUE_ATTRS, .attrs = grant}), policy, body, failure);
 }
 
 /* One payload key on rest. */
@@ -4974,6 +5027,9 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
   Nat bulk = same_text(tag, text_of_cstring("commandBulkReassign"));
   Nat extract = same_text(tag, text_of_cstring("commandExtract"));
   Nat list = same_text(tag, text_of_cstring("commandRouteTerritory")) == 1 || bulk == 1 || extract == 1;
+  Nat request = same_text(tag, text_of_cstring("commandRequestApproval"));
+  Nat grant = same_text(tag, text_of_cstring("commandGrantApproval"));
+  Nat approval = request == 1 || grant == 1;
   const Value *commercial = write_field(text_of_cstring("commercial"), command);
   const Value *current = write_record(records, command, row);
   const Value *resolved =
@@ -4982,18 +5038,20 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
   Text missed = none;
   Nat gap = write_record_gap(records, command, tag, 0);
   if (gap < WRITE_RECORDS) return write_missing(log, text_of_cstring(write_records[gap].field), value, failure);
+  if (grant == 1 && approval_request(current) != 1)
+    return write_missing(log, text_of_cstring("request"), value, failure);
   const Values *facts = extract == 1 ? items_of(write_field(text_of_cstring("facts"), command)) : NULL;
   if (write_facts_policy(facts) == 1) return write_missing(log, text_of_cstring("facts"), value, failure);
-  if (row < WRITE_RECORDS && transition != 1 && member != 1 && list != 1 &&
+  if (row < WRITE_RECORDS && transition != 1 && member != 1 && list != 1 && approval != 1 &&
       !write_party_change(command, tag, current, &body, &missed, failure))
     return 0;
   if (missed.size > 0) return write_missing(log, missed, value, failure);
   if (row == WRITE_RECORDS && resolved == NULL && list != 1 && !write_command_body(command, tag, 0, &body, failure))
     return 0;
-  if (transition != 1 && member != 1 && list != 1 && resolved == NULL && body == NULL)
+  if (transition != 1 && member != 1 && list != 1 && approval != 1 && resolved == NULL && body == NULL)
     return write_denied(log, value, failure);
   const Values *subjects;
-  if (!write_ask_rows(command, tag, at, ordered, &subjects, failure)) return 0;
+  if (!write_ask_rows(command, tag, at, ordered, records, &subjects, failure)) return 0;
   const Value *enrich = write_field(text_of_cstring("attrs"), command);
   PolicyAsk ask = {actor_text(write_field(text_of_cstring("actor"), write)),
                    text_of_cstring(at < WRITE_ASKS ? write_asks[at].action : "permissionWrite"), &null_value,
@@ -5018,6 +5076,8 @@ int write_step(Fuel hash_fuel, Nat budget, Nat position, const Value *log, const
     if (!write_transition_body(subjects->head, current, stage, allow, &body, failure)) return 0;
   }
   if (member == 1 && !write_record_change(tag, command, current, subjects->head, allow, &body, failure)) return 0;
+  if (request == 1 && !write_request_body(command, subjects->head, allow, &body, failure)) return 0;
+  if (grant == 1 && !write_grant_body(ask.principal, command, current, allow, &body, failure)) return 0;
   const Values *bodies = NULL;
   const Values *moved =
       bulk == 1 ? write_moved_assignments(ordered, write_field(text_of_cstring("source"), command)) : NULL;
